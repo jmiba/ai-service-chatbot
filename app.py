@@ -55,7 +55,7 @@ ASSISTANT_ID = st.secrets["ASSISTANT_ID"]
 
 # Set the current date and time in Berlin timezone for the custom instructions
 berlin_time = datetime.now(ZoneInfo("Europe/Berlin"))
-formatted_time = berlin_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+formatted_time = berlin_time.strftime("%A, %Y-%m-%d %H:%M:%S %Z")
 
 CUSTOM_INSTRUCTIONS=f"""
         You are a helpful library service assistant that answers questions based on the provided FAQ documents. If the text provides a link (URL) to additional information then add this link to your answer. 
