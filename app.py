@@ -99,7 +99,7 @@ for msg in st.session_state.messages:
         else:
             st.chat_message("assistant").markdown(msg["content"])
 
-user_input = st.chat_input("Ask me anything in any language ...")
+user_input = st.chat_input("Ask me library-related questions in any language ...")
 if user_input:
     st.chat_message("user").markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
