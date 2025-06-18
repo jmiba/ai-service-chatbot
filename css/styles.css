@@ -1,0 +1,44 @@
+.stChatInput textarea {
+        border-radius: 0px !important;
+        padding: 10px;
+    }
+    .stChatInput > div{
+        border-radius: 0px !important;
+        padding-left: 0px !important;
+    }
+
+    .user-message {
+        background-color: #e0f7fa;
+        border-radius: 0px;
+        padding: 10px;
+        margin: 5px 0;
+    }
+
+    .assistant-message {
+        background-color: #f1f8e9;
+        border-radius: 0px;
+        padding: 10px;
+        margin: 5px 0;
+    }
+
+    .stMarkdown h1 {
+        font-size: 2rem;
+        font-weight: 200;
+        margin-top: 66px;
+    }
+
+    .stMarkdown hr {
+        margin-top: -20px !important;
+    }
+
+    .stMarkdown ul > li {
+            margin: 0.2em 0px 0em 1.15em !important;
+    }
+
+    .stChatMessage, .stChatMessage > div {
+        border-radius: 0px !important;
+    }
+
+    .stExpander > details {
+        border-radius: 0px !important;
+    }
