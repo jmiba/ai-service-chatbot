@@ -3,6 +3,7 @@ import streamlit as st
 st.set_page_config(page_title="Admin Login", layout="wide")
 
 st.sidebar.page_link("app.py", label="💬 Chat Assistant")
+st.title("🔒 Admin Login")
 
 # Authentication check
 if "authenticated" not in st.session_state:
@@ -10,7 +11,6 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state.authenticated:
     st.sidebar.page_link("pages/admin.py", label="🔒 Admin")  
-    st.title("🔒 Admin Login")
     password = st.text_input("Admin Password", type="password")
     if password == st.secrets["ADMIN_PASSWORD"]:
         st.session_state.authenticated = True
