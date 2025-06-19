@@ -1,6 +1,7 @@
 import streamlit as st
 import openai
 import time
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -12,7 +13,7 @@ def load_css(file_path):
 
 load_css("css/styles.css")
 
-
+# Function to extract citations from text annotations
 def extract_citations_from_annotations(text_obj):
     citation_map = {}
     if not hasattr(text_obj, "annotations"):
@@ -35,6 +36,7 @@ def extract_citations_from_annotations(text_obj):
 
     return citation_map
 
+# Function to format text with citations
 def format_text_with_citations(text, citation_map):
     """
     Replace inline citation markers with human-readable superscripts,
@@ -48,7 +50,62 @@ def format_text_with_citations(text, citation_map):
         text = re.sub(marker, sup_tag, text)
     return text
 
+# Function to log user interactions
+def log_interaction(user_input, assistant_response, citation_map=None):
+    log_dir = Path("logs")
+    log_dir.mkdir(exist_ok=True)
 
+    # Extract error code if present
+    match = re.match(r"#(E\d{2})\s+", assistant_response)
+    error_code = match.group(1) if match else None
+
+    cleaned_response = re.sub(r"^#E\d{2}\s+", "", assistant_response)
+
+    log_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "user_input": user_input,
+        "assistant_response": cleaned_response,
+        "error_code": error_code,
+        "citation_count": len(citation_map) if citation_map else 0,
+        "citations": citation_map if citation_map else {},
+    }
+
+    log_path = log_dir / "interaction_log.jsonl"
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
+
+# This function handles the assistant's response, extracting text and citations      
+def handle_assistant_response(messages, user_input):
+    """
+    Process the assistant's latest message: extract text, format citations,
+    render to UI, update session state, and log the interaction.
+    """
+    for message in sorted(messages, key=lambda x: x.created_at, reverse=True):
+        if message.role == "assistant":
+            text_obj = message.content[0].text
+            raw_text = text_obj.value
+            citation_map = extract_citations_from_annotations(text_obj)
+            rendered_text = format_text_with_citations(raw_text, citation_map)
+
+            st.chat_message("assistant").markdown(rendered_text, unsafe_allow_html=True)
+            if citation_map:
+                with st.expander("Quellen anzeigen"):
+                    for info in citation_map.values():
+                        file_title = re.sub(r"\.(pdf|docx|txt|md|rtf|json)$", "", info["file_name"], flags=re.IGNORECASE)
+                        st.markdown(f"- [{info['number']}] {file_title}")
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "raw_text": raw_text,
+                "rendered": rendered_text,
+                "citation_map": citation_map
+            })
+
+            log_interaction(user_input, raw_text, citation_map)
+            break
+
+# Initialize OpenAI API client
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 ASSISTANT_ID = st.secrets["ASSISTANT_ID"]
 
@@ -57,6 +114,7 @@ ASSISTANT_ID = st.secrets["ASSISTANT_ID"]
 berlin_time = datetime.now(ZoneInfo("Europe/Berlin"))
 formatted_time = berlin_time.strftime("%A, %Y-%m-%d %H:%M:%S %Z")
 
+# Custom instructions for the assistant
 CUSTOM_INSTRUCTIONS=f"""
         You are a helpful library service assistant that answers questions based on the provided FAQ documents. If the text provides a link (URL) to additional information then add this link to your answer. 
 
@@ -72,6 +130,16 @@ CUSTOM_INSTRUCTIONS=f"""
 """
 
 # Prepare the page layout
+st.set_page_config(
+    page_title="Viadrina Library Assistant",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# Custom navigation menu using page_link
+st.sidebar.page_link("app.py", label="💬 Chat Assistant")
+st.sidebar.page_link("pages/view_logs.py", label="🔒 Admin")  
+
 col1, col2 = st.columns([3, 3])
 with col1:
     st.image("assets/viadrina-logo.png", width=420)
@@ -133,26 +201,4 @@ if user_input:
         thread_id=st.session_state.thread_id
     )
 
-    sorted_messages = sorted(messages.data, key=lambda x: x.created_at, reverse=True)
-
-    for message in sorted_messages:
-        if message.role == "assistant":
-            text_obj = message.content[0].text
-            raw_text = text_obj.value
-            citation_map = extract_citations_from_annotations(text_obj)
-            rendered_text = format_text_with_citations(raw_text, citation_map)
-
-            st.chat_message("assistant").markdown(rendered_text, unsafe_allow_html=True)
-            if citation_map:
-                with st.expander("Quellen anzeigen"):
-                    for info in citation_map.values():
-                        file_title = re.sub(r"\.(pdf|docx|txt|md|rtf|json)$", "", info["file_name"], flags=re.IGNORECASE)
-                        st.markdown(f"- [{info['number']}] {file_title}")
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "raw_text": raw_text,
-                "rendered": rendered_text,
-                "citation_map": citation_map
-            })
-            break
+    handle_assistant_response(messages.data, user_input)
