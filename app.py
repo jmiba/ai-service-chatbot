@@ -138,7 +138,7 @@ st.set_page_config(
 
 # Custom navigation menu using page_link
 st.sidebar.page_link("app.py", label="💬 Chat Assistant")
-st.sidebar.page_link("pages/view_logs.py", label="🔒 Admin")  
+st.sidebar.page_link("pages/admin.py", label="🔒 Admin")  
 
 col1, col2 = st.columns([3, 3])
 with col1:

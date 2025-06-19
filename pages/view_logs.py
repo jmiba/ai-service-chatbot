@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 st.set_page_config(page_title="Admin Logs", layout="wide")
-st.title("🔐 Admin Panel – Interaction Logs")
+st.title("📄 View Interaction Logs")
 
 # --- Simple Auth Function ---
 def authenticate():
@@ -13,23 +13,18 @@ def authenticate():
     if st.session_state["authenticated"]:
         return True
 
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login"):
-        correct_username = st.secrets["admin"]["username"]
-        correct_password = st.secrets["admin"]["password"]
-
-        if username == correct_username and password == correct_password:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        else:
-            st.error("Invalid credentials.")
-    return False
-
 # Custom navigation menu using page_link
 st.sidebar.page_link("app.py", label="💬 Chat Assistant")
-st.sidebar.page_link("pages/view_logs.py", label="🔒 Admin")  
+
+# --- If not authenticated, show login ---
+if not authenticate():
+    st.sidebar.page_link("pages/admin.py", label="🔒 Admin")
+    password = st.text_input("Admin Password", type="password")
+    if password == st.secrets["ADMIN_PASSWORD"]:
+        st.session_state.authenticated = True
+        st.rerun()
+    elif password:
+        st.error("Incorrect password.")
 
 # --- Only show content after auth ---
 if authenticate():
@@ -41,6 +36,9 @@ if authenticate():
 
         with log_path.open("r", encoding="utf-8") as f:
             return [json.loads(line) for line in f.readlines()[-limit:]]
+    st.sidebar.success("Authenticated as admin.")
+    st.sidebar.page_link("pages/view_logs.py", label="📄 View Logs")
+    #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
 
     logs = read_logs()
 
@@ -72,4 +70,4 @@ if authenticate():
 
     if st.button("🔓 Logout"):
         st.session_state["authenticated"] = False
-        st.experimental_rerun()
+        st.rerun()
