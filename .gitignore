@@ -183,5 +183,8 @@ cython_debug/
 # Secrets
 secrets.toml
 
+# Logs
+Logs/
+
 # MacOS
 .DS_Store
