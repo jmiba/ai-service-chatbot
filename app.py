@@ -90,7 +90,7 @@ def handle_assistant_response(messages, user_input):
 
             st.chat_message("assistant").markdown(rendered_text, unsafe_allow_html=True)
             if citation_map:
-                with st.expander("Quellen anzeigen"):
+                with st.expander("Show sources"):
                     for info in citation_map.values():
                         file_title = re.sub(r"\.(pdf|docx|txt|md|rtf|json)$", "", info["file_name"], flags=re.IGNORECASE)
                         st.markdown(f"- [{info['number']}] {file_title}")
