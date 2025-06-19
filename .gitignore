@@ -184,7 +184,7 @@ cython_debug/
 secrets.toml
 
 # Logs
-Logs/
+*.jsonl
 
 # MacOS
 .DS_Store
