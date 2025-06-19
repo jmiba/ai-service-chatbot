@@ -142,7 +142,7 @@ st.sidebar.page_link("pages/admin.py", label="🔒 Admin")
 
 col1, col2 = st.columns([3, 3])
 with col1:
-    st.image("assets/viadrina-logo.png", width=320)
+    st.image("assets/viadrina-logo.png", width=300)
 with col2:
     st.markdown("# Viadrina Library Assistant")
 st.markdown("---")
