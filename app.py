@@ -76,7 +76,7 @@ col1, col2 = st.columns([3, 3])
 with col1:
     st.image("assets/viadrina-logo.png", width=420)
 with col2:
-    st.markdown("# EUV Library Assistant")
+    st.markdown("# Viadrina Library Assistant")
 st.markdown("---")
 
 # Initialize session state for thread ID and messages
