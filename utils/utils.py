@@ -18,10 +18,18 @@ def create_database_if_not_exists():
     This connects to the 'postgres' system database to create the target database.
     """
     try:
+        # Check if postgres secrets are configured
+        if "postgres" not in st.secrets:
+            print("⚠️ PostgreSQL secrets not configured in Streamlit Cloud. Skipping database creation.")
+            return False
+            
         # First, try to connect to the target database
         get_connection()
         print(f"✅ Database '{st.secrets['postgres']['database']}' exists and is accessible.")
         return True
+    except KeyError as key_error:
+        print(f"⚠️ Missing PostgreSQL configuration key: {key_error}. Skipping database creation.")
+        return False
     except psycopg2.OperationalError as e:
         if "does not exist" in str(e):
             print(f"🔨 Database '{st.secrets['postgres']['database']}' does not exist. Creating...")

@@ -530,16 +530,20 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             st.error(f"Evaluation call unexpected error: {e}")
         # Silently continue with default values for production
 
-    log_interaction(
-        user_input=user_input,
-        assistant_response=cleaned,
-        citation_json=json.dumps(citation_map, ensure_ascii=False) if citation_map else None,
-        citation_count=len(citation_map),
-        confidence=confidence,
-        error_code=error_code,
-        request_classification=request_classification,
-        evaluation_notes=evaluation_notes
-    )
+    try:
+        log_interaction(
+            user_input=user_input,
+            assistant_response=cleaned,
+            citation_json=json.dumps(citation_map, ensure_ascii=False) if citation_map else None,
+            citation_count=len(citation_map),
+            confidence=confidence,
+            error_code=error_code,
+            request_classification=request_classification,
+            evaluation_notes=evaluation_notes
+        )
+    except Exception as log_error:
+        # Silently fail for logging - don't interrupt user experience
+        print(f"Warning: Failed to log interaction: {log_error}")
 
 # ---------- App init ----------
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
@@ -549,15 +553,24 @@ with PROMPT_PATH.open("r", encoding="utf-8") as f:
     DEFAULT_PROMPT = f.read()
 
 # Initialize database and tables
-create_database_if_not_exists()
-create_prompt_versions_table()
-initialize_default_prompt_if_empty(DEFAULT_PROMPT)
-create_log_table()
+try:
+    create_database_if_not_exists()
+    create_prompt_versions_table()
+    initialize_default_prompt_if_empty(DEFAULT_PROMPT)
+    create_log_table()
+except Exception as e:
+    st.error(f"Database initialization failed: {e}")
+    st.warning("The app may have limited functionality without database access.")
 
 berlin_time = datetime.now(ZoneInfo("Europe/Berlin"))
 formatted_time = berlin_time.strftime("%A, %Y-%m-%d %H:%M:%S %Z")
-current_prompt, current_note = get_latest_prompt()
-CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time)
+
+try:
+    current_prompt, current_note = get_latest_prompt()
+    CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time)
+except Exception as e:
+    st.warning("Using default prompt due to database connection issues.")
+    CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
 
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
 load_css("css/styles.css")
