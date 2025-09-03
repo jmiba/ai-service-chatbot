@@ -145,6 +145,16 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
 
     citation_map = {}
     placements = []
+    
+    # Debug: Show what annotations we're getting
+    if annotations:
+        print(f"🔍 Debug: Found {len(annotations)} annotations total")
+        for i, a in enumerate(annotations):
+            a_type = _ga(a, "type")
+            print(f"🔍 Debug: Annotation {i+1}: type='{a_type}', data={a}")
+    else:
+        print("🔍 Debug: No annotations found in text_part")
+    
     if not annotations:
         return citation_map, placements
 
@@ -152,55 +162,104 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
     norm = []
     for a in annotations:
         a_type = _ga(a, "type")
-        if a_type != "file_citation":
-            continue
+        
+        # Debug: Print annotation types we're seeing (only when not file_citation)
+        if a_type and a_type != "file_citation":
+            print(f"🔍 Debug: Found annotation type '{a_type}' with data: {a}")
+        
+        if a_type == "file_citation":
+            # file_id may be on the annotation or nested under .file_citation
+            file_id = _ga(a, "file_id")
+            if not file_id:
+                fc = _ga(a, "file_citation")
+                file_id = _ga(fc, "file_id") if fc is not None else None
+            if not file_id:
+                continue
 
-        # file_id may be on the annotation or nested under .file_citation
-        file_id = _ga(a, "file_id")
-        if not file_id:
-            fc = _ga(a, "file_citation")
-            file_id = _ga(fc, "file_id") if fc is not None else None
-        if not file_id:
-            continue
+            filename = _ga(a, "filename")
+            idx = _ga(a, "index")
+            try:
+                idx = int(idx) if idx is not None else len(full_text)
+            except Exception:
+                idx = len(full_text)
 
-        filename = _ga(a, "filename")
-        idx = _ga(a, "index")
-        try:
-            idx = int(idx) if idx is not None else len(full_text)
-        except Exception:
-            idx = len(full_text)
-
-        norm.append({"file_id": file_id, "filename": filename, "index": idx})
+            norm.append({"file_id": file_id, "filename": filename, "index": idx, "type": "file_citation"})
+        
+        # Handle web search citations - try multiple possible annotation types
+        elif a_type in ["url_citation", "web_search_citation", "web_citation"]:
+            # Web search results - try different possible field names
+            url = _ga(a, "url") or _ga(a, "link") or _ga(a, "href")
+            title = _ga(a, "title") or _ga(a, "name") or _ga(a, "text")
+            
+            # Web citations use start_index/end_index, not index
+            idx = _ga(a, "start_index") or _ga(a, "index")
+            
+            # Debug: Show what we found
+            print(f"🌐 Debug: Web citation - URL: {url}, Title: {title}, Type: {a_type}")
+            
+            try:
+                idx = int(idx) if idx is not None else len(full_text)
+            except Exception:
+                idx = len(full_text)
+            
+            if url:  # Only add if we have a URL
+                norm.append({
+                    "type": "url_citation",
+                    "url": url,
+                    "title": title or "Web Result",
+                    "index": idx
+                })
 
     if not norm:
         return citation_map, placements
 
-    # Deduplicate for DB lookup
-    file_ids = list({n["file_id"] for n in norm})
-    conn = get_connection()
-    file_data = get_urls_and_titles_by_file_ids(conn, file_ids)  # {file_id: (url, title, summary)}
+    # Separate file citations and web citations
+    file_citations = [n for n in norm if n.get("type") == "file_citation"]
+    web_citations = [n for n in norm if n.get("type") == "url_citation"]
+
+    # Handle file citations (existing logic)
+    file_data = {}
+    if file_citations:
+        file_ids = list({n["file_id"] for n in file_citations})
+        conn = get_connection()
+        file_data = get_urls_and_titles_by_file_ids(conn, file_ids)  # {file_id: (url, title, summary)}
 
     # Build map and placements in order of appearance
     for i, n in enumerate(norm, start=1):
-        file_id = n["file_id"]
-        filename = n["filename"] or _cached_filename(file_id)
         idx = max(0, min(len(full_text), n["index"]))  # clamp
+        
+        if n.get("type") == "file_citation":
+            # File citation processing
+            file_id = n["file_id"]
+            filename = n["filename"] or _cached_filename(file_id)
+            url, title, summary = file_data.get(file_id, (None, None, None))
+            if not title:
+                title = filename.rsplit(".", 1)[0]
 
-        url, title, summary = file_data.get(file_id, (None, None, None))
-        if not title:
-            title = filename.rsplit(".", 1)[0]
+            clean_title = html.escape(re.sub(r"^\d+_", "", title).replace("_", " "))
+            clean_summary = html.escape(summary or "")
 
-        clean_title = html.escape(re.sub(r"^\d+_", "", title).replace("_", " "))
-        clean_summary = html.escape(summary or "")
-
-        citation_map[i] = {
-            "number": i,
-            "file_name": filename,
-            "file_id": file_id,
-            "url": url,
-            "title": clean_title,
-            "summary": clean_summary,
-        }
+            citation_map[i] = {
+                "number": i,
+                "file_name": filename,
+                "file_id": file_id,
+                "url": url,
+                "title": clean_title,
+                "summary": clean_summary,
+                "source": "document"
+            }
+        elif n.get("type") == "url_citation":
+            # Web search citation processing
+            citation_map[i] = {
+                "number": i,
+                "file_name": "Web Search",
+                "file_id": "web_search",
+                "url": n["url"],
+                "title": html.escape(n["title"] or "Web Result"),
+                "summary": "",
+                "source": "web_search"
+            }
+        
         placements.append((idx, i))
 
     return citation_map, placements
@@ -228,6 +287,14 @@ def render_sources_list(citation_map):
         title = c["title"] or "Untitled"
         summary = html.escape(c["summary"] or "")
         badge = f"[{c['number']}]"
+        source_type = c.get("source", "document")
+        
+        # Add source type indicator
+        if source_type == "web_search":
+            badge = f"🌐 {badge}"
+        else:
+            badge = f"📄 {badge}"
+            
         if c["url"]:
             # Always escape the title too (already escaped earlier, but harmless to do again)
             safe_title = html.escape(title)
@@ -289,6 +356,171 @@ def coerce_text_part(part):
     annotations = _get_attr(part, "annotations", []) or []
     return {"text": text_str, "annotations": annotations}
 
+def determine_search_context_size(user_input):
+    """Determine appropriate search context size based on query complexity"""
+    complex_indicators = [
+        "research", "analysis", "comprehensive", "detailed", "thorough",
+        "compare", "contrast", "evaluate", "assess", "review",
+        "multiple", "various", "different", "several"
+    ]
+    
+    simple_indicators = [
+        "when", "where", "what time", "how much", "phone", "address",
+        "quick", "simple", "just need", "opening hours"
+    ]
+    
+    query_lower = user_input.lower()
+    
+    if any(indicator in query_lower for indicator in complex_indicators):
+        return "high"
+    elif any(indicator in query_lower for indicator in simple_indicators):
+        return "low" 
+    else:
+        return "medium"  # default
+
+def get_specialized_domains(user_input):
+    """Get specialized search domains based on query content (max 20 domains for OpenAI API)"""
+    query_lower = user_input.lower()
+    
+    # Start with core domains (always included) - enhanced academic focus
+    domains = [
+        "europa-uni.de",  # Primary institutional domain
+        "scholar.google.com",
+        "arxiv.org",
+        "researchgate.net",
+        "worldcat.org",
+        "jstor.org",  # Major academic database
+        "springer.com",  # Academic publisher
+        "cambridge.org",  # Cambridge University Press
+        "oxford.org",  # Oxford University Press
+        "sciencedirect.com",  # Elsevier academic database
+        "wiley.com",  # Academic publisher
+        "taylor-francis.com"  # Academic publisher
+    ]
+    
+    # Add specialized domains based on query type (limit total to 20)
+    remaining_slots = 20 - len(domains)  # Calculate how many more we can add
+    
+    # Medical/Health research - enhanced with more academic medical sources
+    if any(term in query_lower for term in ["medical", "health", "medicine", "clinical", "patient"]):
+        medical_domains = [
+            "pubmed.ncbi.nlm.nih.gov",
+            "nih.gov",
+            "who.int",
+            "cochrane.org",
+            "nejm.org",
+            "bmj.com",
+            "thelancet.com",  # The Lancet
+            "jama.jamanetwork.com"  # JAMA Network
+        ]
+        domains.extend(medical_domains[:remaining_slots])
+    
+    # Legal research - enhanced with more academic legal sources
+    elif any(term in query_lower for term in ["law", "legal", "court", "legislation", "regulation"]):
+        legal_domains = [
+            "gesetze-im-internet.de",
+            "bundesverfassungsgericht.de",
+            "curia.europa.eu",
+            "hudoc.echr.coe.int",
+            "yale.edu",  # Yale Law School
+            "harvard.edu",  # Harvard Law School
+            "westlaw.com",  # Legal database
+            "heinonline.org"  # Legal academic database
+        ]
+        domains.extend(legal_domains[:remaining_slots])
+    
+    # Technology and computer science
+    elif any(term in query_lower for term in ["programming", "software", "computer", "technology", "AI"]):
+        tech_domains = [
+            "acm.org",
+            "ieee.org",
+            "stackoverflow.com",
+            "github.com"
+        ]
+        domains.extend(tech_domains[:remaining_slots])
+    
+    # General academic for other queries - enhanced with more academic sources
+    else:
+        general_domains = [
+            "nature.com",
+            "science.org", 
+            "pnas.org",  # Proceedings of the National Academy of Sciences
+            "cell.com",  # Cell Press journals
+            "mit.edu",  # MIT institutional domain
+            "stanford.edu",  # Stanford institutional domain
+            "harvard.edu",  # Harvard institutional domain
+            "wikipedia.org"  # Moved here as supplementary source
+        ]
+        domains.extend(general_domains[:remaining_slots])
+    
+    # Ensure we never exceed 20 domains
+    return domains[:20]
+
+def get_search_engine_preferences(user_input):
+    """Suggest specific search engines and strategies based on query type"""
+    query_lower = user_input.lower()
+    preferences = {
+        "primary_engines": [],
+        "search_strategies": [],
+        "specialized_databases": []
+    }
+    
+    # Academic research queries
+    if any(term in query_lower for term in ["research", "study", "academic", "scholarly", "peer-reviewed", "citation"]):
+        preferences["primary_engines"].extend([
+            "Google Scholar",
+            "Semantic Scholar", 
+            "JSTOR",
+            "ArXiv"
+        ])
+        preferences["search_strategies"].extend([
+            "Use academic keywords and terminology",
+            "Include author names and publication years",
+            "Search for recent publications (last 5 years)"
+        ])
+    
+    # Library and catalog searches
+    if any(term in query_lower for term in ["book", "library", "catalog", "bibliography"]):
+        preferences["specialized_databases"].extend([
+            "WorldCat",
+            "ViaCat/KOBV",
+            "German National Library (DNB)",
+            "Library of Congress"
+        ])
+    
+    # Medical/Health queries
+    if any(term in query_lower for term in ["medical", "health", "clinical", "patient"]):
+        preferences["primary_engines"].extend([
+            "PubMed",
+            "Cochrane Library",
+            "WHO Global Health Library"
+        ])
+        preferences["search_strategies"].extend([
+            "Use MeSH terms for medical concepts",
+            "Include systematic reviews and meta-analyses",
+            "Focus on evidence-based sources"
+        ])
+    
+    # Legal research
+    if any(term in query_lower for term in ["law", "legal", "court", "legislation"]):
+        preferences["specialized_databases"].extend([
+            "German Legal Information System",
+            "EUR-Lex (EU Law)",
+            "HUDOC (European Court of Human Rights)",
+            "Beck Online"
+        ])
+    
+    # Historical research
+    if any(term in query_lower for term in ["history", "historical", "archive"]):
+        preferences["specialized_databases"].extend([
+            "Europeana",
+            "Internet Archive",
+            "German Federal Archives",
+            "Digital Collections"
+        ])
+    
+    return preferences
+
 # ---------- Streamed handling ----------
 def handle_stream_and_render(user_input, system_instructions, client, retrieval_filters=None, debug_one=False):
     """
@@ -310,6 +542,42 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     }
     if retrieval_filters:
         tool_cfg["filters"] = retrieval_filters
+
+    # Web search tool (native OpenAI Responses API) with specialized domain targeting
+    # This should be secondary to file search for a proper RAG system
+    search_context_size = determine_search_context_size(user_input)
+    specialized_domains = get_specialized_domains(user_input)
+    search_preferences = get_search_engine_preferences(user_input)
+    
+    web_search_tool = {
+        "type": "web_search",
+        "search_context_size": search_context_size,
+        "filters": {
+            "allowed_domains": specialized_domains
+        },
+        "user_location": {
+            "type": "approximate",
+            "country": "DE",
+            "city": "Frankfurt (Oder)",
+            "region": "Brandenburg"
+        }
+    }
+    
+    # RAG-first approach: file search first, web search as supplement
+    tools = [tool_cfg, web_search_tool]
+    
+    # Show search configuration in debug mode
+    if debug_one:
+        st.info(f"🔧 Search Configuration:")
+        st.write(f"**Context size**: {search_context_size}")
+        st.write(f"**Specialized domains**: {len(specialized_domains)}/20 domains")
+        if search_preferences["primary_engines"]:
+            st.write(f"**Recommended engines**: {', '.join(search_preferences['primary_engines'])}")
+        if search_preferences["specialized_databases"]:
+            st.write(f"**Specialized databases**: {', '.join(search_preferences['specialized_databases'])}")
+        
+        with st.expander("View all domains"):
+            st.write(specialized_domains)
 
     # Build conversation context (last 10 exchanges to stay within limits)
     def build_conversation_context():
@@ -355,7 +623,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             with client.responses.stream(
                 model=st.secrets.get("MODEL", "gpt-5-mini"),
                 input=conversation_input,
-                tools=[tool_cfg],
+                tools=tools,
             ) as stream:
                 for event in stream:
                     if event.type == "response.output_text.delta":
@@ -386,7 +654,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     final = client.responses.create(
                         model=st.secrets.get("MODEL", "gpt-5-mini"),
                         input=conversation_input,
-                        tools=[tool_cfg],
+                        tools=tools,
                     )
                     buf = _get_attr(final, "output_text", "") or ""
                     content_placeholder.markdown(buf, unsafe_allow_html=True)
@@ -413,11 +681,50 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
         # Find and normalize the first text-bearing content part (dict or object)
         normalized_part = None
+        print(f"🔍 Debug: Processing final response, looking for content parts...")
         for item in _iter_content_items(final):
-            if _get_attr(item, "type") == "message":
+            item_type = _get_attr(item, "type")
+            print(f"🔍 Debug: Found content item with type: {item_type}")
+            
+            # Debug: Show all attributes of each item to understand structure
+            if hasattr(item, '__dict__'):
+                attrs = [k for k in dir(item) if not k.startswith('_')]
+                print(f"🔍 Debug: Item attributes: {attrs}")
+            
+            # Debug: Check file_search_call for web search results
+            if item_type == "file_search_call":
+                results = _get_attr(item, "results", []) or []
+                print(f"🔍 Debug: file_search_call has {len(results)} results")
+                for i, result in enumerate(results):
+                    result_type = _get_attr(result, "type", "unknown")
+                    content = _get_attr(result, "content", "")
+                    url = _get_attr(result, "url", None)
+                    print(f"🔍 Debug: Result {i+1}: type={result_type}, url={url}, content_length={len(str(content))}")
+            
+            # Debug: Check web_search_call for web search results
+            elif item_type == "web_search_call":
+                results = _get_attr(item, "results", []) or []
+                print(f"🔍 Debug: web_search_call has {len(results)} results")
+                for i, result in enumerate(results):
+                    result_type = _get_attr(result, "type", "unknown")
+                    content = _get_attr(result, "content", "")
+                    url = _get_attr(result, "url", None)
+                    title = _get_attr(result, "title", None)
+                    print(f"🔍 Debug: Web Result {i+1}: type={result_type}, url={url}, title={title}")
+            
+            # Debug: Check reasoning for web search mentions
+            elif item_type == "reasoning":
+                content = _get_attr(item, "content", "")
+                if "search" in str(content).lower() or "web" in str(content).lower():
+                    print(f"🔍 Debug: Reasoning mentions web/search: {str(content)[:200]}...")
+            
+            if item_type == "message":
                 for part in _iter_content_parts(item):
+                    part_type = _get_attr(part, "type")
+                    print(f"🔍 Debug: Found content part with type: {part_type}")
                     maybe = coerce_text_part(part)  # -> {"text": "...", "annotations": [...]}
                     if maybe:
+                        print(f"🔍 Debug: Successfully coerced text part: {len(maybe.get('annotations', []))} annotations")
                         normalized_part = maybe
                         break
             if normalized_part:
@@ -425,8 +732,10 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
         # Build citations (index-based) and re-render with superscripts
         if normalized_part:
+            print(f"🔍 Debug: Calling citation extraction with normalized_part")
             citation_map, placements = extract_citations_from_annotations_response_dict(normalized_part)
         else:
+            print(f"🔍 Debug: No normalized_part found, no citations to extract")
             citation_map, placements = ({}, [])
 
         cleaned = response_text.strip()
@@ -448,6 +757,26 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 except Exception:
                     # Fallback if model_dump isn't available
                     st.code(_redact_ids(repr(final)), language="json")
+                    
+            # Additional debug: show what tools were actually called
+            with st.expander("🔎 Debug: Tool calls analysis", expanded=False):
+                st.write("**Content items found:**")
+                for i, item in enumerate(_iter_content_items(final)):
+                    item_type = _get_attr(item, "type")
+                    st.write(f"- {i+1}. {item_type}")
+                    
+                st.write("**Looking for web search evidence...**")
+                web_search_evidence = []
+                for item in _iter_content_items(final):
+                    item_type = _get_attr(item, "type")
+                    if "search" in item_type or "web" in item_type:
+                        web_search_evidence.append(f"{item_type}: {item}")
+                
+                if web_search_evidence:
+                    for evidence in web_search_evidence:
+                        st.code(evidence)
+                else:
+                    st.write("❌ No explicit web search calls found in response structure")
 
     # Persist chat history and log
     st.session_state.messages.append({
@@ -474,6 +803,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         You are an expert evaluator for a library assistant chatbot. Your task is to:
         1. Classify the user's request type
         2. Evaluate the assistant's response quality and accuracy
+        3. CRITICALLY assess if the response violates RAG constraints
         
         Consider these factors in your evaluation:
         - How well the user's question was answered
@@ -481,16 +811,25 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         - Completeness of the response
         - Any potential inaccuracies or gaps
         - Whether the response format is appropriate for the request type
+        - CRITICAL: Does the response contain information that appears to come from general knowledge/training data rather than cited sources?
+        - CRITICAL: Are all facts, claims, and statements properly traceable to the provided sources?
+        
+        RED FLAGS indicating training data usage (should increase error_code):
+        - Information provided without corresponding citations
+        - General knowledge statements not backed by search results
+        - Historical facts, dates, or events not found in the sources
+        - Technical explanations not derived from the documents
+        - Any content that seems to come from memory rather than search results
         
         IMPORTANT: Return ONLY a valid JSON object with this exact structure:
         {{
-            "request_classification": "one of: library_hours, book_search, research_help, account_info, facility_info, policy_question, technical_support, other",
+            "request_classification": "one of: library_hours, book_search, research_help, account_info, facility_info, policy_question, technical_support, literature search, citation search, other",
             "confidence": 0.0-1.0,
             "error_code": 0-3,
-            "evaluation_notes": "brief explanation"
+            "evaluation_notes": "brief explanation including any RAG constraint violations"
         }}
         
-        Error codes: 0=perfect response, 1=minor issues, 2=significant gaps, 3=unable to answer properly
+        Error codes: 0=perfect response with proper sourcing, 1=minor issues/uncertainty, 2=significant gaps or possible unsourced content, 3=clear violation of RAG constraints or unable to answer properly
         """.format(citation_count=len(citation_map))
 
         structured = client.responses.create(
