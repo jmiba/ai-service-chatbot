@@ -553,11 +553,16 @@ with PROMPT_PATH.open("r", encoding="utf-8") as f:
     DEFAULT_PROMPT = f.read()
 
 # Initialize database and tables
+database_available = False
 try:
-    create_database_if_not_exists()
-    create_prompt_versions_table()
-    initialize_default_prompt_if_empty(DEFAULT_PROMPT)
-    create_log_table()
+    database_available = create_database_if_not_exists()
+    if database_available:
+        create_prompt_versions_table()
+        initialize_default_prompt_if_empty(DEFAULT_PROMPT)
+        create_log_table()
+        print("✅ Database initialization completed successfully.")
+    else:
+        print("⚠️ Database not available. Continuing without database functionality.")
 except Exception as e:
     error_str = str(e)
     # Check for localhost/missing database OR missing postgres configuration entirely
@@ -589,11 +594,15 @@ except Exception as e:
 berlin_time = datetime.now(ZoneInfo("Europe/Berlin"))
 formatted_time = berlin_time.strftime("%A, %Y-%m-%d %H:%M:%S %Z")
 
-try:
-    current_prompt, current_note = get_latest_prompt()
-    CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time)
-except Exception as e:
-    st.warning("Using default prompt due to database connection issues.")
+if database_available:
+    try:
+        current_prompt, current_note = get_latest_prompt()
+        CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time)
+    except Exception as e:
+        st.warning("Using default prompt due to database connection issues.")
+        CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
+else:
+    # Use default prompt when database is not available
     CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
 
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
