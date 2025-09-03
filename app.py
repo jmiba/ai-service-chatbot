@@ -559,7 +559,11 @@ try:
     initialize_default_prompt_if_empty(DEFAULT_PROMPT)
     create_log_table()
 except Exception as e:
-    if "localhost" in str(e) or "127.0.0.1" in str(e):
+    error_str = str(e)
+    # Check for localhost/missing database OR missing postgres configuration entirely
+    if ("localhost" in error_str or "127.0.0.1" in error_str or 
+        "postgres" in error_str or "Missing PostgreSQL" in error_str or
+        "KeyError" in error_str):
         st.warning("🔧 **Database Configuration Needed**")
         st.info("""
         To enable full functionality, please configure a PostgreSQL database:
