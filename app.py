@@ -559,8 +559,28 @@ try:
     initialize_default_prompt_if_empty(DEFAULT_PROMPT)
     create_log_table()
 except Exception as e:
-    st.error(f"Database initialization failed: {e}")
-    st.warning("The app may have limited functionality without database access.")
+    if "localhost" in str(e) or "127.0.0.1" in str(e):
+        st.warning("🔧 **Database Configuration Needed**")
+        st.info("""
+        To enable full functionality, please configure a PostgreSQL database:
+        
+        1. **Create a cloud PostgreSQL database** (e.g., Neon.tech, Supabase, or ElephantSQL)
+        2. **Add database secrets** in Streamlit Cloud settings:
+           ```
+           [postgres]
+           host = "your-postgres-host"
+           port = "5432"
+           database = "your-database-name"
+           user = "your-username"
+           password = "your-password"
+           ```
+        3. **Redeploy the app**
+        
+        The chat functionality will work without database, but logging and admin features will be disabled.
+        """)
+    else:
+        st.error(f"Database initialization failed: {e}")
+        st.warning("The app may have limited functionality without database access.")
 
 berlin_time = datetime.now(ZoneInfo("Europe/Berlin"))
 formatted_time = berlin_time.strftime("%A, %Y-%m-%d %H:%M:%S %Z")

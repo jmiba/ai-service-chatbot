@@ -4,13 +4,18 @@ import hashlib
 
 # Function to get a connection to the Postgres database
 def get_connection():
-    return psycopg2.connect(
-        host=st.secrets["postgres"]["host"],
-        port=st.secrets["postgres"]["port"],
-        user=st.secrets["postgres"]["user"],
-        password=st.secrets["postgres"]["password"],
-        dbname=st.secrets["postgres"]["database"]
-    )
+    try:
+        return psycopg2.connect(
+            host=st.secrets["postgres"]["host"],
+            port=st.secrets["postgres"]["port"],
+            user=st.secrets["postgres"]["user"],
+            password=st.secrets["postgres"]["password"],
+            dbname=st.secrets["postgres"]["database"]
+        )
+    except KeyError as e:
+        raise ConnectionError(f"Missing PostgreSQL configuration: {e}")
+    except psycopg2.OperationalError as e:
+        raise ConnectionError(f"Cannot connect to PostgreSQL database: {e}")
 
 def create_database_if_not_exists():
     """
