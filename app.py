@@ -586,7 +586,13 @@ try:
         st.info("""
         To enable full functionality, please configure a PostgreSQL database:
         
-        1. **Create a cloud PostgreSQL database** (e.g., Neon.tech, Supabase, or ElephantSQL)
+        1. **Create a cloud PostgreSQL database**
+            Free Cloud PostgreSQL Options:
+            - [Neon.tech](https://neon.tech) - 500MB free, serverless PostgreSQL
+            - [Supabase](https://supabase.com) - 500MB free, includes real-time features
+            - [ElephantSQL](https://elephantsql.com) - 20MB free "Tiny Turtle" plan
+            - [Railway](https://railway.app) - PostgreSQL with free tier
+            - [PlanetScale](https://planetscale.com) - MySQL alternative with free tier
         2. **Add database secrets** in Streamlit Cloud settings:
            ```
            [postgres]
