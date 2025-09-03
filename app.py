@@ -581,6 +581,25 @@ try:
         create_log_table()
         print("✅ Database initialization completed successfully.")
     else:
+        # Show database configuration instructions when no database is available
+        st.warning("🔧 **Database Configuration Needed**")
+        st.info("""
+        To enable full functionality, please configure a PostgreSQL database:
+        
+        1. **Create a cloud PostgreSQL database** (e.g., Neon.tech, Supabase, or ElephantSQL)
+        2. **Add database secrets** in Streamlit Cloud settings:
+           ```
+           [postgres]
+           host = "your-postgres-host"
+           port = "5432"
+           database = "your-database-name"
+           user = "your-username"
+           password = "your-password"
+           ```
+        3. **Redeploy the app**
+        
+        The chat functionality will work without database, but logging and admin features will be disabled.
+        """)
         print("⚠️ Database not available. Continuing without database functionality.")
 except Exception as e:
     error_str = str(e)
