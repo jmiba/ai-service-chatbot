@@ -1,26 +1,58 @@
 import streamlit as st
+from utils import get_connection, get_latest_prompt, admin_authentication, render_sidebar
 
+def backup_prompt_to_db(current_prompt, edited_by=None, note=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO prompt_versions (prompt, edited_by, note)
+        VALUES (%s, %s, %s)
+    """, (current_prompt, edited_by, note))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_prompt_history(limit=10):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT timestamp, prompt, edited_by, note
+        FROM prompt_versions
+        ORDER BY timestamp DESC
+        LIMIT %s
+    """, (limit,))
+    history = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return history
+
+# --- Streamlit page setup ---
 st.set_page_config(page_title="Admin Login", layout="wide")
 
-st.sidebar.page_link("app.py", label="💬 Chat Assistant")
+# --- Authentication ---
+authenticated = admin_authentication()
 
-# Authentication check
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
+# --- Sidebar ---
+render_sidebar(authenticated)
 
-if not st.session_state.authenticated:
-    st.title("🔒 Admin Login")
-    st.sidebar.page_link("pages/admin.py", label="🔒 Admin")  
-    password = st.text_input("Admin Password", type="password")
-    if password == st.secrets["ADMIN_PASSWORD"]:
-        st.session_state.authenticated = True
-        st.rerun()
-    elif password:
-        st.error("Incorrect password.")
-else:
-    st.title("🔒 Admin Logout")
-    st.sidebar.success("Authenticated as admin.")
-    st.sidebar.page_link("pages/view_logs.py", label="📄 View Logs")
-    #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
+# --- Admin content ---
+if authenticated:
+    st.set_page_config(page_title="System Prompt", layout="wide")
+    st.title("Edit System Prompt")
 
-    st.button("🔓 Logout", on_click=lambda: st.session_state.update({"authenticated": False}))
+    current_prompt, current_note = get_latest_prompt()
+
+    new_prompt = st.text_area("**Edit the system prompt:**", value=current_prompt, height=400)
+    new_note = st.text_input("**Edit note (optional):**", value="")
+
+    if st.button("💾 Save Prompt"):
+        backup_prompt_to_db(new_prompt, edited_by="admin@viadrina.de", note=new_note)
+        st.success("System prompt updated successfully.")
+
+    st.caption(f"Length: {len(new_prompt)} characters")
+
+    with st.expander("🕒 Prompt history"):
+        for ts, prompt, author, note in get_prompt_history():
+            st.markdown(f"🕒 **{ts.strftime('%Y-%m-%d %H:%M:%S')}** by `{author or 'unknown'}` – {note or ''}")
+            st.info(prompt)
+
