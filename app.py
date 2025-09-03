@@ -546,7 +546,26 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         print(f"Warning: Failed to log interaction: {log_error}")
 
 # ---------- App init ----------
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# Check for required OpenAI API key
+try:
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+except KeyError:
+    st.error("🔑 **OpenAI API Key Required**")
+    st.info("""
+    Please add your OpenAI API key to Streamlit Cloud settings:
+    
+    1. **Go to your app settings** in Streamlit Cloud
+    2. **Add this secret**:
+       ```
+       OPENAI_API_KEY = "your-openai-api-key-here"
+       ```
+    3. **Get an API key** from [OpenAI Platform](https://platform.openai.com/api-keys)
+    4. **Redeploy the app**
+    
+    The app cannot function without an OpenAI API key.
+    """)
+    st.stop()
+
 PROMPT_PATH = BASE_DIR / ".streamlit/system_prompt.txt"
 
 with PROMPT_PATH.open("r", encoding="utf-8") as f:
@@ -568,7 +587,7 @@ except Exception as e:
     # Check for localhost/missing database OR missing postgres configuration entirely
     if ("localhost" in error_str or "127.0.0.1" in error_str or 
         "postgres" in error_str or "Missing PostgreSQL" in error_str or
-        "KeyError" in error_str):
+        ("KeyError" in error_str and "postgres" in error_str.lower())):
         st.warning("🔧 **Database Configuration Needed**")
         st.info("""
         To enable full functionality, please configure a PostgreSQL database:
