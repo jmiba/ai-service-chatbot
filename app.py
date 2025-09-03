@@ -384,7 +384,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 # Fallback: non-streaming request rendered inside same bubble
                 with st.spinner("Thinking…"):
                     final = client.responses.create(
-                        model=st.secrets.get("MODEL", "gpt-4o-mini"),
+                        model=st.secrets.get("MODEL", "gpt-5-mini"),
                         input=conversation_input,
                         tools=[tool_cfg],
                     )
@@ -494,7 +494,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         """.format(citation_count=len(citation_map))
 
         structured = client.responses.create(
-            model=st.secrets.get("MODEL", "gpt-4o-mini"),
+            model=st.secrets.get("MODEL", "gpt-5-mini"),
             input=[
                 {"role": "system", "content": evaluation_system_prompt},
                 {"role": "user", "content": f"Original user request: {user_input}"},

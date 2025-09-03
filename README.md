@@ -104,8 +104,7 @@ ai-service-chatbot/
 - `ADMIN_PASSWORD`: Password for admin features
 
 ### Optional Configuration
-- `MODEL`: OpenAI model to use (default: gpt-4o-mini)
-- `ASSISTANT_ID`: OpenAI assistant ID (legacy support)
+- `MODEL`: OpenAI model to use (default: gpt-5-mini)
 - PostgreSQL connection details for full functionality
 
 ### Database Setup (Optional)
