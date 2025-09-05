@@ -638,13 +638,15 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         if normalized_part:
             cleaned = normalized_part.get("text", "").strip()
             rendered = render_with_citations_by_index(cleaned, citation_map, placements)
-            # Replace any leftover inline filecite markers using the real annotations (preferred)
-            rendered = replace_filecite_markers_with_sup(rendered, citation_map, placements, annotations=normalized_part.get("annotations"))
+            # No need to process filecite markers when we have normalized text with proper annotations
         else:
             # Fallback: we only have output_text which may contain inline filecite markers.
             # Replace markers in-order with supers based on placements (best-effort).
             cleaned = response_text.strip()
             rendered = replace_filecite_markers_with_sup(cleaned, citation_map, placements, annotations=None)
+
+        # Safety cleanup: remove any remaining filecite markers that might have been missed
+        rendered = re.sub(r'filecite[^]*', '', rendered)
 
         sources_md = render_sources_list(citation_map)
 
