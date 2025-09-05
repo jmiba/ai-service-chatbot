@@ -5,7 +5,6 @@ from openai import OpenAI
 from io import BytesIO
 import streamlit as st
 
-ASSISTANT_ID = st.secrets["ASSISTANT_ID"]
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 VECTOR_STORE_ID = st.secrets["VECTOR_STORE_ID"]
 

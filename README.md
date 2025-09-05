@@ -1,211 +1,257 @@
 # Viadrina Library Assistant 🤖📚
 
-An intelligent AI-powered library chatbot built with Streamlit and OpenAI that provides research assistance through RAG (Retrieval-Augmented Generation) with domain-restricted web search and comprehensive source citations.
+An intelligent AI-powered chatbot built with Streamlit and OpenAI that helps users with library-related questions. The assistant provides contextual answers with source citations using RAG (Retrieval-Augmented Generation) and includes comprehensive logging and evaluation capabilities.
 
 ![Viadrina Library Assistant](assets/viadrina-logo.png)
 
 ## ✨ Features
 
-### 🎯 Core Intelligence
-- **Hybrid RAG System**: Combines local document search with domain-restricted web search
-- **Smart Domain Selection**: Automatically selects from 20 specialized academic domains per query
-- **Source Citations**: Real-time citation extraction with proper academic referencing
-- **Multi-language Support**: Responds in user's language (German, English, Polish, etc.)
-- **Streaming Responses**: Live AI response generation with immediate feedback
+### 🎯 Core Functionality
+- **Intelligent Q&A**: Natural language processing for library-related queries
+- **Source Citations**: Automatic citation generation with hover tooltips showing summaries
+- **Multi-language Support**: Ask questions in any language
+- **Real-time Streaming**: Live response generation with immediate feedback
+- **Conversation Context**: Maintains conversation history for better context understanding
 
-### 🔍 Advanced Search Capabilities
-- **Academic Databases**: Google Scholar, ArXiv, JSTOR, PubMed, Nature, Science
-- **Institutional Sources**: University domains, legal databases, medical journals
-- **Query-Adaptive Domains**: Medical queries → PubMed/NIH, Legal → EUR-Lex/court records
-- **Local Resource Integration**: Direct links to ViaCat for locally available materials
+### 📊 Advanced Capabilities
+- **Knowledge Base Management**: Web scraping and document ingestion pipeline
+- **Response Evaluation**: Automatic classification and quality assessment of responses
+- **Admin Dashboard**: Authentication-protected admin features for system management
+- **Comprehensive Logging**: Database logging with evaluation metrics and analytics
+- **Citation Management**: Smart citation extraction with database-backed metadata
 
-### Enterprise Features  
-- **Admin Dashboard**: Authentication-protected system management
-- **Response Evaluation**: Automated quality assessment and RAG constraint validation
-- **Comprehensive Logging**: PostgreSQL-based analytics with evaluation metrics (required)
-- **Prompt Management**: Database-stored system prompts with versioning (required)
-- **Knowledge Base Tools**: Web scraping and document vectorization interfaces
+### 🔧 Technical Features
+- **RAG Implementation**: Vector search with OpenAI's file search capabilities
+- **Database Integration**: PostgreSQL with automatic schema migration
+- **Error Handling**: Graceful degradation when services are unavailable
+- **Cloud-Ready**: Deployment support for Streamlit Cloud with external databases
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 - Python 3.8+
-- **PostgreSQL database** (required for all core functionality)
-- OpenAI API key with Responses API access
-- Vector Store ID (OpenAI file search)
+- PostgreSQL (optional, app works without database)
+- OpenAI API key
 
 ### Installation
 
-1. **Clone and setup**
+1. **Clone the repository**
 ```bash
 git clone https://github.com/yourusername/ai-service-chatbot.git
 cd ai-service-chatbot
+```
+
+2. **Install dependencies**
+```bash
 pip install -r requirements.txt
 ```
 
-2. **Configure secrets** (`.streamlit/secrets.toml`):
+3. **Configure secrets**
+Create `.streamlit/secrets.toml`:
 ```toml
 OPENAI_API_KEY = "your-openai-api-key"
-VECTOR_STORE_ID = "your-vector-store-id" 
+VECTOR_STORE_ID = "your-vector-store-id"
 ADMIN_PASSWORD = "your-admin-password"
 MODEL = "gpt-4o-mini"
 
-# Required: PostgreSQL database configuration
+# Optional: PostgreSQL configuration
 [postgres]
 host = "localhost"
 port = 5432
-user = "your-username" 
+user = "your-username"
 password = "your-password"
 database = "chatbot_db"
 ```
 
-3. **Run**
+4. **Run the application**
 ```bash
 streamlit run app.py
 ```
-
-## 🧠 RAG Architecture
-
-### Smart Domain Selection
-The system automatically selects from **20 specialized domains** per query:
-
-**Core Academic Domains (always included):**
-- europa-uni.de, scholar.google.com, arxiv.org
-- jstor.org, springer.com, cambridge.org, oxford.org
-- sciencedirect.com, wiley.com, taylor-francis.com
-
-**Query-Adaptive Specialization:**
-- **Medical**: PubMed, NIH, WHO, Cochrane, NEJM, BMJ, Lancet, JAMA
-- **Legal**: EUR-Lex, German legal databases, Yale/Harvard Law, Westlaw
-- **Technology**: ACM, IEEE, Stack Overflow, GitHub
-- **General Academic**: Nature, Science, PNAS, MIT, Stanford, Harvard
-
-### RAG Workflow
-1. **File Search First**: Query local document vector store
-2. **Web Search Supplement**: Automatic domain-restricted web search
-3. **Citation Extraction**: Process both file_citation and url_citation annotations
-4. **Response Synthesis**: Combine sources with proper attribution
-5. **Quality Evaluation**: Automated assessment of RAG constraint compliance
-
-## 🔧 Key Configurations
-
-### Domain Specialization
-```python
-# Automatically detected query types
-Medical: "medical", "health", "medicine", "clinical"
-Legal: "law", "legal", "court", "legislation" 
-Technology: "programming", "software", "AI"
-```
-
-### Language Support
-- **Universal**: Responds in user's question language
-- **Supported**: German, English, Polish, and others
-- **Consistent**: No language mixing in responses
-
-### RAG Constraints
-- **Source-Only Responses**: No training data or general knowledge
-- **Traceable Facts**: Every claim must link to specific sources
-- **Transparent Limitations**: Clear statements when information unavailable
 
 ## 📁 Project Structure
 
 ```
 ai-service-chatbot/
-├── app.py                    # Main application with RAG pipeline
-├── requirements.txt          # Dependencies
+├── app.py                 # Main Streamlit application
+├── requirements.txt       # Python dependencies
+├── README.md             # Project documentation
+├── LICENSE               # License file
 ├── .streamlit/
-│   ├── secrets.toml         # Configuration
-│   └── system_prompt.txt    # Fallback system prompt
+│   ├── secrets.toml      # Configuration secrets
+│   └── system_prompt.txt # System prompt template
+├── assets/
+│   └── viadrina-logo.png # University logo
+├── css/
+│   └── styles.css        # Custom styling
 ├── utils/
-│   └── utils.py            # Database & utility functions
+│   ├── __init__.py      # Package initialization
+│   └── utils.py         # Database and utility functions
 ├── pages/
-│   ├── admin.py            # System administration
-│   ├── scrape.py           # Web scraping tools
-│   ├── vectorize.py        # Document processing
-│   └── view_logs.py        # Analytics dashboard
-└── assets/css/             # UI components
+│   ├── admin.py         # Admin dashboard
+│   ├── scrape.py        # Web scraping interface
+│   ├── vectorize.py     # Document processing
+│   └── view_logs.py     # Analytics dashboard
+├── exported_markdown/    # Scraped content storage
+└── logs/
+    └── interaction_log.jsonl # Local logging fallback
 ```
 
-## 🚀 Deployment
+## 🔧 Configuration
 
-### Streamlit Cloud
-1. Push to GitHub
-2. Connect to Streamlit Cloud  
-3. Add secrets from `.streamlit/secrets.toml`
-4. **Setup external PostgreSQL** (required - see options below)
+### Required Environment Variables
+- `OPENAI_API_KEY`: Your OpenAI API key
+- `VECTOR_STORE_ID`: OpenAI vector store ID for file search
+- `ADMIN_PASSWORD`: Password for admin features
 
-### Database Setup (Required)
+### Optional Configuration
+- `MODEL`: OpenAI model to use (default: gpt-5-mini)
+- PostgreSQL connection details for full functionality
+
+### Database Setup (Optional)
+
+The application works without a database but provides enhanced features with PostgreSQL:
 
 **Local Development:**
 ```bash
-# Install and setup PostgreSQL
+# Install PostgreSQL
 createdb chatbot_db
 ```
 
-**Cloud Deployment Options:**
-- [Neon.tech](https://neon.tech) - 500MB free tier
-- [Supabase](https://supabase.com) - 500MB free tier  
-- [ElephantSQL](https://elephantsql.com) - 20MB free tier
-- [Railway](https://railway.app) - PostgreSQL hosting
+**Cloud Deployment:**
+- [Neon.tech](https://neon.tech) - 500MB free
+- [Supabase](https://supabase.com) - 500MB free
+- [ElephantSQL](https://elephantsql.com) - 20MB free
+
+## 🌐 Deployment
+
+### Streamlit Cloud
+
+1. **Push to GitHub**
+2. **Connect to Streamlit Cloud**
+3. **Add secrets in app settings:**
+   - Copy your `.streamlit/secrets.toml` content
+   - Configure external PostgreSQL if needed
+4. **Deploy**
 
 ### Database Migration
-```bash
-# Backup local knowledge base
-pg_dump chatbot_db > backup.sql
 
-# Restore to cloud
+To migrate your local knowledge base to cloud:
+
+1. **Backup local database:**
+```bash
+pg_dump -h localhost -U username chatbot_db > backup.sql
+```
+
+2. **Restore to cloud database:**
+```bash
 psql "postgresql://user:pass@host/db" < backup.sql
 ```
 
-## 📊 Analytics & Monitoring
+## 📊 Features Overview
 
-### Response Evaluation
-- **Classification**: library_hours, book_search, research_help, etc.
-- **Quality Metrics**: Confidence scoring (0.0-1.0)
-- **Error Detection**: RAG constraint violations, unsourced content
-- **Performance Tracking**: Citation counts, response completeness
+### 🤖 Chat Interface
+- Clean, responsive design
+- Real-time message streaming
+- Source citation with hover details
+- Conversation history
 
-### Admin Features (`/admin`)
-- **Prompt Management**: Database-stored system prompts with versioning
-- **System Configuration**: Debug modes, search parameters
-- **User Analytics**: Usage patterns, error analysis
-- **Knowledge Base Status**: Document counts, vector store health
+### 🔍 Knowledge Base Management
+- Web scraping interface (`/scrape`)
+- Document vectorization (`/vectorize`)
+- Automatic content processing
+- Metadata extraction and storage
 
-## 🔍 Research Integration
+### 📈 Analytics & Monitoring
+- Response evaluation and classification
+- Confidence scoring
+- Error tracking
+- Interaction logging (`/view_logs`)
 
-### Academic Workflow
-1. **Query Processing**: Natural language understanding
-2. **Source Selection**: Academic databases + institutional sources  
-3. **Information Synthesis**: Multi-source knowledge integration
-4. **Citation Generation**: Proper academic referencing
-5. **Local Resource Linking**: ViaCat integration for material access
+### 🛠 Admin Features
+- System configuration (`/admin`)
+- Prompt management
+- Authentication-protected features
+- Debug tools and monitoring
 
-### Supported Research Types
-- **Literature Reviews**: Multi-database academic search
-- **Current Research**: Recent publications and developments  
-- **Institutional Resources**: University-specific information
-- **Legal Research**: Court records, legislation, legal databases
-- **Medical Research**: Peer-reviewed journals, clinical guidelines
+## 🔗 API Integration
+
+### OpenAI Integration
+- **Responses API**: Primary chat completion
+- **File Search**: RAG implementation with vector stores
+- **Streaming**: Real-time response generation
+- **Evaluation**: Automated response quality assessment
+
+### Database Schema
+```sql
+-- Main interaction logging
+CREATE TABLE log_table (
+    id SERIAL PRIMARY KEY,
+    timestamp TIMESTAMP,
+    user_input TEXT,
+    assistant_response TEXT,
+    confidence DECIMAL(3,2),
+    error_code VARCHAR(10),
+    request_classification VARCHAR(50),
+    evaluation_notes TEXT,
+    citation_count INTEGER,
+    citations JSONB
+);
+
+-- Knowledge base documents
+CREATE TABLE documents (
+    id SERIAL PRIMARY KEY,
+    url TEXT UNIQUE,
+    title TEXT,
+    summary TEXT,
+    vector_file_id TEXT,
+    content_hash VARCHAR(64),
+    last_updated TIMESTAMP
+);
+```
+
+## 🧪 Development
+
+### Running Tests
+```bash
+# Install development dependencies
+pip install -e .
+
+# Run tests (if available)
+pytest
+```
+
+### Code Structure
+- **app.py**: Main application with streaming chat interface
+- **utils/utils.py**: Database operations and utility functions
+- **pages/**: Streamlit multipage components
+- **Response evaluation**: Automated quality assessment system
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create feature branch (`git checkout -b feature/amazing-feature`)
-3. Test with different query types and languages
-4. Ensure RAG constraints maintained
-5. Submit Pull Request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## 📝 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🏛️ Acknowledgments
+## 🙏 Acknowledgments
 
-- **Viadrina University** for the academic use case
-- **OpenAI** for Responses API and vector search capabilities
-- **Academic Publishers** for accessible research databases
-- **Streamlit** for the excellent web framework
+- [Streamlit](https://streamlit.io/) for the amazing web framework
+- [OpenAI](https://openai.com/) for the powerful AI models
+- [Viadrina University](https://www.europa-uni.de/) for the use case and inspiration
+- PostgreSQL community for the robust database system
+
+## 📞 Support
+
+For questions and support:
+- Open an issue on GitHub
+- Check the [Streamlit documentation](https://docs.streamlit.io/)
+- Review [OpenAI API documentation](https://platform.openai.com/docs/)
 
 ---
 
-**RAG-Powered Research Assistant • Built for Academic Excellence**
+**Built with ❤️ for the Viadrina University Library**
