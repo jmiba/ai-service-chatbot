@@ -686,10 +686,16 @@ def main():
     keep_query_keys = set([x.strip() for x in keep_query_str.split(",") if x.strip()]) if keep_query_str else None
 
     st.markdown("---")
+    st.subheader("📋 URL Configurations")
+    
+    # Show number of configurations
+    if st.session_state.url_configs:
+        st.info(f"📊 **{len(st.session_state.url_configs)} configuration(s)** ready for indexing")
+    else:
+        st.info("➕ **No configurations yet** - Add your first URL configuration below")
 
     # Buttons to add/remove URL config blocks
-    st.info("💡 **Auto-save**: Configurations are automatically saved when you add/remove entries. Use the Save button after making changes to existing configurations.")
-    
+    st.markdown("##### Configuration Management")
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("➕ Add URL Configuration for Web Scraping"):
@@ -723,60 +729,91 @@ def main():
                 st.success("✅ All configurations saved to database!")
             except Exception as e:
                 st.error(f"Failed to save configurations: {e}")
+    
+    st.info("💡 **Auto-save**: Configurations are automatically saved when you add/remove entries. Use the Save button after making changes to existing configurations.")
 
-        # Render each URL config
-        for i, config in enumerate(st.session_state.url_configs):
-            st.markdown(f"### 🔗 URL Configuration {i+1}")
-            st.session_state.url_configs[i]["url"] = st.text_input(
-                f"Start URL {i+1}", 
-                value=config["url"], 
-                key=f"start_url_{i}",
-                help="The scraper will only follow links within the same path as this starting URL"
-            )
+    # Render each URL config with improved layout
+    if st.session_state.url_configs:
+        st.markdown("##### ⚙️ Configuration Details")
+    for i, config in enumerate(st.session_state.url_configs):
+        # Create a container for each configuration with better visual separation
+        with st.expander(f"🔗 URL Configuration {i+1}" + (f" - {config.get('url', 'No URL set')[:50]}..." if config.get('url') else ""), expanded=True):
+            # Use columns for better layout
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.session_state.url_configs[i]["url"] = st.text_input(
+                    f"Start URL", 
+                    value=config["url"], 
+                    key=f"start_url_{i}",
+                    help="The scraper will only follow links within the same path as this starting URL",
+                    placeholder="https://example.com/path/to/start"
+                )
+            
+            with col2:
+                st.session_state.url_configs[i]["depth"] = st.number_input(
+                    f"Max Scraping Depth", 
+                    min_value=0, max_value=20, 
+                    value=config["depth"], 
+                    step=1, 
+                    key=f"depth_{i}",
+                    help="How many levels deep to follow links"
+                )
 
-            # Fetch entries for filters
+            # Recordset selection
             entries = sorted(get_kb_entries(), key=lambda entry: len(entry[1]))
             recordsets = sorted(set(entry[9] for entry in entries))
-            page_types = sorted(set(entry[11] for entry in entries))
-
+            
             recordset_options = [r for r in recordsets if r]
-        recordset_options.append("Create a new one...")
-        selected_recordset = st.selectbox(
-            f"Available Recordsets {i+1}",
-            options=recordset_options,
-            index=recordset_options.index(config["recordset"]) if config["recordset"] in recordset_options else (len(recordset_options)-1 if config["recordset"] and config["recordset"] not in recordset_options else 0),
-            key=f"recordset_select_{i}"
-        )
-
-        if selected_recordset == "Create a new one...":
-            custom_recordset = st.text_input(
-                f"New Recordset {i+1}",
-                value=config["recordset"] if config["recordset"] not in recordset_options else "",
-                key=f"recordset_custom_{i}"
+            recordset_options.append("Create a new one...")
+            
+            selected_recordset = st.selectbox(
+                f"Available Recordsets",
+                options=recordset_options,
+                index=recordset_options.index(config["recordset"]) if config["recordset"] in recordset_options else (len(recordset_options)-1 if config["recordset"] and config["recordset"] not in recordset_options else 0),
+                key=f"recordset_select_{i}",
+                help="Choose an existing recordset or create a new one to group your scraped content"
             )
-            st.session_state.url_configs[i]["recordset"] = custom_recordset
-        else:
-            st.session_state.url_configs[i]["recordset"] = selected_recordset
 
-        st.session_state.url_configs[i]["depth"] = st.number_input(
-            f"Max Scraping Depth {i+1}", min_value=0, max_value=20, value=config["depth"], step=1, key=f"depth_{i}"
-        )
+            if selected_recordset == "Create a new one...":
+                custom_recordset = st.text_input(
+                    f"New Recordset Name",
+                    value=config["recordset"] if config["recordset"] not in recordset_options else "",
+                    key=f"recordset_custom_{i}",
+                    placeholder="Enter a descriptive name for this content group"
+                )
+                st.session_state.url_configs[i]["recordset"] = custom_recordset
+            else:
+                st.session_state.url_configs[i]["recordset"] = selected_recordset
 
-        st.session_state.url_configs[i]["exclude_paths"] = st.text_area(
-            f"Exclude Paths {i+1} (comma-separated)", 
-            value=", ".join(config.get("exclude_paths", [])), 
-            key=f"exclude_paths_{i}"
-        ).split(", ")
+            # Path filters with better layout
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                exclude_paths_str = st.text_area(
+                    f"🚫 Exclude Paths (comma-separated)", 
+                    value=", ".join(config.get("exclude_paths", [])), 
+                    key=f"exclude_paths_{i}",
+                    height=100,
+                    help="Paths to exclude from scraping (e.g., /en/, /admin/, /old/)",
+                    placeholder="/en/, /pl/, /_ablage-alte-www/"
+                )
+                st.session_state.url_configs[i]["exclude_paths"] = [path.strip() for path in exclude_paths_str.split(",") if path.strip()]
 
-        st.session_state.url_configs[i]["include_lang_prefixes"] = st.text_area(
-            f"Include Language Prefixes {i+1} (comma-separated)", 
-            value=", ".join(config.get("include_lang_prefixes", [])), 
-            key=f"include_lang_prefixes_{i}"
-        ).split(", ")
+            with col2:
+                include_prefixes_str = st.text_area(
+                    f"✅ Include Language Prefixes (comma-separated)", 
+                    value=", ".join(config.get("include_lang_prefixes", [])), 
+                    key=f"include_lang_prefixes_{i}",
+                    height=100,
+                    help="Only include paths starting with these prefixes (e.g., /de/, /fr/)",
+                    placeholder="/de/, /fr/"
+                )
+                st.session_state.url_configs[i]["include_lang_prefixes"] = [prefix.strip() for prefix in include_prefixes_str.split(",") if prefix.strip()]
 
-        st.markdown("---")
-
-    # Index button
+    # Index button section
+    st.markdown("---")
+    st.markdown("##### 🚀 Start Indexing")
     if st.button("📥 Index All URLs"):
         # reset per-run state
         print("[DEBUG] Clearing visited sets before scraping")
