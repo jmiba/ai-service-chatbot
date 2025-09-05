@@ -698,8 +698,8 @@ def main():
     st.markdown("## Indexing Tool")
     
     st.info("**Path-Based Scraping**: The scraper will only follow links that are within the same path as the starting URL. "
-            "For example, if you start with `/de/suche/fachinformationen/index.html`, it will only scrape pages under `/de/suche/fachinformationen/` "
-            "and its subdirectories, preventing it from wandering to unrelated sections of the website.")
+            "For example, if you start with `/suche/index.html`, it will only scrape pages under `/suche/` "
+            "and its subdirectories.")
 
     # Initialize database table for URL configs
     try:
@@ -768,146 +768,13 @@ def main():
 
     # Crawl settings (global for a run)
     st.markdown("---")
-    st.subheader("🔧 Crawler Settings")
-    colA, colB, colC = st.columns(3)
-    with colA:
-        max_urls_per_run = st.number_input("Max URLs per run (crawl budget)",
-                                           min_value=100, max_value=100000, value=5000, step=100)
-    with colB:
-        keep_query_str = st.text_input("Whitelist query keys (comma-separated)",
-                                       value="", help="Leave empty to drop ALL query params. Example: page,lang")
-    with colC:
-        dry_run = st.checkbox("Dry run (no DB writes, no LLM calls)", value=True,
-                              help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.")
-    keep_query_keys = set([x.strip() for x in keep_query_str.split(",") if x.strip()]) if keep_query_str else None
+    st.subheader("⚙️  URL Configurations")
 
-    st.markdown("---")
-    st.subheader("📋 URL Configurations")
-    
-    # Show number of configurations
-    if st.session_state.url_configs:
-        st.info(f"📊 **{len(st.session_state.url_configs)} configuration(s)** ready for indexing")
-    else:
-        st.info("➕ **No configurations yet** - Add your first URL configuration below")
-
-    # Quick Add Single URL - Simple interface for basic use cases
-    with st.expander("⚡ Quick Add Single URL", expanded=True):
-        st.markdown("**Simple setup** - Perfect for trying out the scraper or adding a single website")
-        
-        col1, col2, col3 = st.columns([3, 1, 1])
-        with col1:
-            quick_url = st.text_input(
-                "URL to scrape", 
-                placeholder="https://example.com/path/to/content",
-                help="Enter any URL - the scraper will only follow links within the same path",
-                key="quick_url_input"
-            )
-        with col2:
-            quick_template = st.selectbox(
-                "Template",
-                ["Default", "Blog", "Documentation", "News Site"],
-                help="Choose a pre-configured template for common website types"
-            )
-        with col3:
-            st.markdown("<br>", unsafe_allow_html=True)  # Align button with input
-            if st.button("🚀 Quick Start", disabled=not quick_url, type="primary"):
-                # Create configuration based on template
-                template_configs = {
-                    "Default": {
-                        "depth": 2,
-                        "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
-                        "include_lang_prefixes": ["/de/"]
-                    },
-                    "Blog": {
-                        "depth": 2,
-                        "exclude_paths": ["/tag/", "/category/", "/author/", "/page/"],
-                        "include_lang_prefixes": []
-                    },
-                    "Documentation": {
-                        "depth": 4,
-                        "exclude_paths": ["/api/", "/_internal/", "/admin/"],
-                        "include_lang_prefixes": []
-                    },
-                    "News Site": {
-                        "depth": 2,
-                        "exclude_paths": ["/archive/", "/tag/", "/category/"],
-                        "include_lang_prefixes": []
-                    }
-                }
-                
-                config = template_configs[quick_template]
-                st.session_state.url_configs.append({
-                    "url": quick_url,
-                    "recordset": f"Quick_{quick_template}_{len(st.session_state.url_configs)+1}",
-                    "depth": config["depth"],
-                    "exclude_paths": config["exclude_paths"],
-                    "include_lang_prefixes": config["include_lang_prefixes"]
-                })
-                
-                try:
-                    save_url_configs(st.session_state.url_configs)
-                    st.success(f"✅ Quick configuration added! Using {quick_template} template.")
-                    st.info("💡 **Next step**: Scroll down to the 'Start Indexing' section to begin scraping!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to save quick configuration: {e}")
-
-    # Buttons to add/remove URL config blocks
-    st.markdown("##### Advanced Configuration Management")
-    st.info("💡 **Auto-save**: Configurations are automatically saved when you add/remove entries. Use the Save button after making changes to existing configurations.")
-    
     # Create a placeholder for status messages
     message_placeholder = st.empty()
-    
-    # Debug section to help diagnose save issues
-    with st.expander("🔍 Debug Information", expanded=False):
-        st.write("**Session State Configurations:**", len(st.session_state.url_configs))
-        try:
-            db_configs = load_url_configs()
-            st.write("**Database Configurations:**", len(db_configs))
-            if len(st.session_state.url_configs) != len(db_configs):
-                st.warning("⚠️ Session state and database are out of sync!")
-                if st.button("🔄 Sync Session from Database"):
-                    st.session_state.url_configs = db_configs
-                    st.rerun()
-        except Exception as e:
-            st.error(f"Database connection error: {e}")
-    
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        if st.button("➕ Add URL Configuration for Web Scraping"):
-            st.session_state.url_configs.append({
-                "url": "",
-                "recordset": "",
-                "depth": 2,
-                "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
-                "include_lang_prefixes": ["/de/"]
-            })
-            try:
-                save_url_configs(st.session_state.url_configs)
-                message_placeholder.success("✅ Configuration added and saved!")
-            except Exception as e:
-                message_placeholder.error(f"Failed to save configuration: {e}")
-            st.rerun()
-    with col2:
-        if st.button("💾 Save All Configurations"):
-            try:
-                save_url_configs(st.session_state.url_configs)
-                message_placeholder.success("✅ All configurations saved to database!")
-            except Exception as e:
-                message_placeholder.error(f"Failed to save configurations: {e}")
-    with col3:
-        if st.button("🔄 Reload from Database"):
-            try:
-                st.session_state.url_configs = load_url_configs()
-                message_placeholder.success(f"✅ Reloaded {len(st.session_state.url_configs)} configurations from database!")
-                st.rerun()
-            except Exception as e:
-                message_placeholder.error(f"Failed to reload configurations: {e}")
+
 
     # Render each URL config with improved layout
-    if st.session_state.url_configs:
-        st.markdown("##### ⚙️ Configuration Details")
     for i, config in enumerate(st.session_state.url_configs):
         # Create a container for each configuration with better visual separation
         with st.expander(f"🔗 URL Configuration {i+1}" + (f" - {config.get('url', 'No URL set')[:50]}..." if config.get('url') else ""), expanded=False):
@@ -997,8 +864,103 @@ def main():
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to save after deletion: {e}")
+     # Show number of configurations
+    # Quick Add Single URL - Simple interface for basic use cases
+    with st.expander("**⚙️ Add URL Configuration**", expanded=True):
+        col1, col2, col3 = st.columns([3, 1, 1])
+        with col1:
+            quick_url = st.text_input(
+                "URL to scrape", 
+                placeholder="https://example.com/path/to/content",
+                help="Enter any URL - the scraper will only follow links within the same path",
+                key="quick_url_input"
+            )
+        with col2:
+            quick_template = st.selectbox(
+                "Template",
+                ["Default", "Blog", "Documentation", "News Site"],
+                help="Choose a pre-configured template for common website types"
+            )
+        with col3:
+            st.markdown("<br>", unsafe_allow_html=True)  # Align button with input
+            if st.button("⚡ Add URL", disabled=not quick_url, type="primary"):
+                # Create configuration based on template
+                template_configs = {
+                    "Default": {
+                        "depth": 2,
+                        "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
+                        "include_lang_prefixes": ["/de/"]
+                    },
+                    "Blog": {
+                        "depth": 2,
+                        "exclude_paths": ["/tag/", "/category/", "/author/", "/page/"],
+                        "include_lang_prefixes": []
+                    },
+                    "Documentation": {
+                        "depth": 4,
+                        "exclude_paths": ["/api/", "/_internal/", "/admin/"],
+                        "include_lang_prefixes": []
+                    },
+                    "News Site": {
+                        "depth": 2,
+                        "exclude_paths": ["/archive/", "/tag/", "/category/"],
+                        "include_lang_prefixes": []
+                    }
+                }
+                
+                config = template_configs[quick_template]
+                st.session_state.url_configs.append({
+                    "url": quick_url,
+                    "recordset": f"Quick_{quick_template}_{len(st.session_state.url_configs)+1}",
+                    "depth": config["depth"],
+                    "exclude_paths": config["exclude_paths"],
+                    "include_lang_prefixes": config["include_lang_prefixes"]
+                })
+                
+                try:
+                    save_url_configs(st.session_state.url_configs)
+                    st.success(f"✅ Quick configuration added! Using {quick_template} template.")
+                    st.info("💡 **Next step**: Scroll down to the 'Start Indexing' section to begin scraping!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to save quick configuration: {e}")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("💾 Save All Configurations"):
+            try:
+                save_url_configs(st.session_state.url_configs)
+                message_placeholder.success("✅ All configurations saved to database!")
+            except Exception as e:
+                message_placeholder.error(f"Failed to save configurations: {e}")
+    with col2:
+        if st.button("🔄 Reload from Database"):
+            try:
+                st.session_state.url_configs = load_url_configs()
+                message_placeholder.success(f"✅ Reloaded {len(st.session_state.url_configs)} configurations from database!")
+                st.rerun()
+            except Exception as e:
+                message_placeholder.error(f"Failed to reload configurations: {e}")
+    if st.session_state.url_configs:
+        st.info(f"📊 **{len(st.session_state.url_configs)} configuration(s)** ready for indexing")
+    else:
+        st.info("➕ **No configurations yet** - Add your first URL configuration below")
+
 
     # Index button section
+    st.markdown("---")
+    st.subheader("🔧 Crawler Settings")
+    colA, colB, colC = st.columns(3)
+    with colA:
+        max_urls_per_run = st.number_input("Max URLs per run (crawl budget)",
+                                           min_value=100, max_value=100000, value=5000, step=100)
+    with colB:
+        keep_query_str = st.text_input("Whitelist query keys (comma-separated)",
+                                       value="", help="Leave empty to drop ALL query params. Example: page,lang")
+    with colC:
+        dry_run = st.checkbox("Dry run (no DB writes, no LLM calls)", value=True,
+                              help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.")
+    keep_query_keys = set([x.strip() for x in keep_query_str.split(",") if x.strip()]) if keep_query_str else None
+
     st.markdown("---")
     st.markdown("## 🚀 Start Indexing")
     
@@ -1009,243 +971,227 @@ def main():
     
     # Show what will be processed
     total_configs = len(st.session_state.url_configs)
-    configured_urls = [config.get('url', 'No URL') for config in st.session_state.url_configs if config.get('url')]
-    
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.info(f"� **Ready to process {total_configs} configuration(s)**")
-        if configured_urls:
-            st.write("**URLs to be processed:**")
-            for i, url in enumerate(configured_urls, 1):
-                st.write(f"{i}. `{url}`")
-    
-    with col2:
-        st.markdown("**Indexing will:**")
-        st.write("• 🔍 Discover and crawl pages")
-        st.write("• 🤖 Process content with LLM")
-        st.write("• 💾 Save to knowledge base")
-        st.write("• 📊 Show real-time progress")
+    configured_urls = [config.get('url', 'No URL') for config in st.session_state.url_configs if config.get('url')] 
+
+    st.markdown("**Indexing will:** Discover  and crawl pages, process content with LLM, save to knowledge base, show real-time progress")
     
     # Main action button - more prominent
-    st.markdown("### Ready to start?")
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if st.button("🚀 **START INDEXING ALL URLS**", type="primary", use_container_width=True):
-            if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
-                st.error("❌ No valid URLs found in configurations. Please add at least one URL.")
-                st.stop()
-            
-            # Initialize log system
-            if 'scrape_log' not in st.session_state:
-                st.session_state.scrape_log = []
-            
-            def add_log(message, level="INFO"):
-                """Add a message to the scrape log with timestamp"""
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                log_entry = f"[{timestamp}] [{level}] {message}"
-                st.session_state.scrape_log.append(log_entry)
-                # Keep only last 100 log entries to prevent memory issues
-                if len(st.session_state.scrape_log) > 100:
-                    st.session_state.scrape_log = st.session_state.scrape_log[-100:]
-            
-            # Create terminal-like log display
-            st.markdown("##### 📟 Processing Log")
-            log_container = st.container()
-            with log_container:
-                # Create a fixed-height terminal-style log display
-                log_display = st.empty()
-                
-                def update_log_display():
-                    """Update the terminal display with current log"""
-                    if st.session_state.scrape_log:
-                        log_text = "\n".join(st.session_state.scrape_log[-20:])  # Show last 20 entries
-                    else:
-                        log_text = "Waiting for processing to start..."
-                    
-                    # Use text_area with fixed height for consistent layout
-                    # Clear the container and recreate to avoid key conflicts
-                    log_display.empty()
-                    with log_display.container():
-                        st.text_area(
-                            label="",
-                            value=log_text,
-                            height=300,  # Fixed height prevents layout jumping
-                            disabled=True,  # Read-only
-                            label_visibility="collapsed"  # Hide the label
-                        )
-            
-            # Clear log and start fresh
+    if st.button("🚀 **START INDEXING ALL URLS**", type="primary", use_container_width=True):
+        if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
+            st.error("❌ No valid URLs found in configurations. Please add at least one URL.")
+            st.stop()
+        
+        # Initialize log system
+        if 'scrape_log' not in st.session_state:
             st.session_state.scrape_log = []
-            add_log("🚀 Starting indexing process...")
+        
+        def add_log(message, level="INFO"):
+            """Add a message to the scrape log with timestamp"""
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] [{level}] {message}"
+            st.session_state.scrape_log.append(log_entry)
+            # Keep only last 100 log entries to prevent memory issues
+            if len(st.session_state.scrape_log) > 100:
+                st.session_state.scrape_log = st.session_state.scrape_log[-100:]
+        
+        # Create terminal-like log display
+        st.markdown("##### 📟 Processing Log")
+        log_container = st.container()
+        with log_container:
+            # Create a fixed-height terminal-style log display
+            log_display = st.empty()
+            
+            def update_log_display():
+                """Update the terminal display with current log"""
+                if st.session_state.scrape_log:
+                    log_text = "\n".join(st.session_state.scrape_log[-20:])  # Show last 20 entries
+                else:
+                    log_text = "Waiting for processing to start..."
+                
+                # Use text_area with fixed height for consistent layout
+                # Clear the container and recreate to avoid key conflicts
+                log_display.empty()
+                with log_display.container():
+                    st.text_area(
+                        label="",
+                        value=log_text,
+                        height=300,  # Fixed height prevents layout jumping
+                        disabled=True,  # Read-only
+                        label_visibility="collapsed"  # Hide the label
+                    )
+        
+        # Clear log and start fresh
+        st.session_state.scrape_log = []
+        add_log("🚀 Starting indexing process...")
+        update_log_display()
+        
+        # reset per-run state
+        add_log("🧹 Clearing visited sets before scraping")
+        add_log(f"📊 Before clear - visited_norm has {len(visited_norm)} URLs")
+        visited_raw.clear()
+        visited_norm.clear()
+        frontier_seen.clear()
+        global base_path, processed_pages_count
+        base_path = None  # Reset base path for new session
+        processed_pages_count = 0  # Reset processed pages counter
+        add_log("✅ Visited sets, base path, and processed pages counter cleared")
+        update_log_display()
+
+        try:
+            conn = None if dry_run else get_connection()
+            add_log(f"🔌 Database connection: {'DRY RUN (no writes)' if dry_run else 'CONNECTED'}")
             update_log_display()
             
-            # reset per-run state
-            add_log("🧹 Clearing visited sets before scraping")
-            add_log(f"📊 Before clear - visited_norm has {len(visited_norm)} URLs")
-            visited_raw.clear()
-            visited_norm.clear()
-            frontier_seen.clear()
-            global base_path, processed_pages_count
-            base_path = None  # Reset base path for new session
-            processed_pages_count = 0  # Reset processed pages counter
-            add_log("✅ Visited sets, base path, and processed pages counter cleared")
+            # Create progress indicators for real-time updates
+            progress_container = st.container()
+            with progress_container:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Create fixed metric placeholders to prevent duplication
+                metrics_cols = st.columns(3)
+                with metrics_cols[0]:
+                    metric_urls = st.empty()
+                with metrics_cols[1]:
+                    metric_llm = st.empty()
+                with metrics_cols[2]:
+                    metric_config = st.empty()
+                
+            def update_metrics():
+                """Update metrics without creating new containers"""
+                metric_urls.metric("URLs Visited", len(visited_norm))
+                metric_llm.metric("LLM Processed", processed_pages_count)
+                metric_config.metric("Current Config", f"{current_config}/{total_configs}")
+            
+            # Count total configurations to estimate progress
+            total_configs = len([c for c in st.session_state.url_configs if c["url"].strip()])
+            current_config = 0
+            add_log(f"📋 Found {total_configs} URL configuration(s) to process")
             update_log_display()
-
-            try:
-                conn = None if dry_run else get_connection()
-                add_log(f"🔌 Database connection: {'DRY RUN (no writes)' if dry_run else 'CONNECTED'}")
-                update_log_display()
-                
-                # Create progress indicators for real-time updates
-                progress_container = st.container()
-                with progress_container:
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
+            
+            for config in st.session_state.url_configs:
+                url = config["url"].strip()
+                recordset = config["recordset"].strip()
+                depth = config["depth"]
+                exclude_paths = config["exclude_paths"]
+                include_lang_prefixes = config["include_lang_prefixes"]
+                if url:
+                    current_config += 1
                     
-                    # Create fixed metric placeholders to prevent duplication
-                    metrics_cols = st.columns(3)
-                    with metrics_cols[0]:
-                        metric_urls = st.empty()
-                    with metrics_cols[1]:
-                        metric_llm = st.empty()
-                    with metrics_cols[2]:
-                        metric_config = st.empty()
-                    
-                def update_metrics():
-                    """Update metrics without creating new containers"""
-                    metric_urls.metric("URLs Visited", len(visited_norm))
-                    metric_llm.metric("LLM Processed", processed_pages_count)
-                    metric_config.metric("Current Config", f"{current_config}/{total_configs}")
-                
-                # Count total configurations to estimate progress
-                total_configs = len([c for c in st.session_state.url_configs if c["url"].strip()])
-                current_config = 0
-                add_log(f"📋 Found {total_configs} URL configuration(s) to process")
-                update_log_display()
-                
-                for config in st.session_state.url_configs:
-                    url = config["url"].strip()
-                    recordset = config["recordset"].strip()
-                    depth = config["depth"]
-                    exclude_paths = config["exclude_paths"]
-                    include_lang_prefixes = config["include_lang_prefixes"]
-                    if url:
-                        current_config += 1
-                        
-                        add_log(f"🔍 Starting config {current_config}/{total_configs}: {url}")
-                        add_log(f"   📂 Recordset: {recordset}")
-                        add_log(f"   🔢 Max depth: {depth}")
-                        add_log(f"   🚫 Exclude paths: {exclude_paths}")
-                        add_log(f"   ✅ Include prefixes: {include_lang_prefixes}")
-                        update_log_display()
-                        
-                        # Update status
-                        status_text.write(f"🔄 **Processing URL {current_config}/{total_configs}:** {url}")
-                        
-                        # Update progress bar
-                        progress_bar.progress((current_config - 1) / total_configs)
-                        
-                        # Initialize metrics display
-                        update_metrics()
-                        
-                        # Create a progress callback closure with logging
-                        def update_progress():
-                            try:
-                                # Update status text immediately  
-                                status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | LLM Processed: {processed_pages_count}")
-                                
-                                # Add log entry for significant progress
-                                if len(visited_norm) % 10 == 0:  # Log every 10 URLs
-                                    add_log(f"📈 Progress: {len(visited_norm)} URLs visited, {processed_pages_count} LLM processed")
-                                    update_log_display()
-                                
-                                # Update metrics using the dedicated function
-                                update_metrics()
-                            except Exception as e:
-                                print(f"[UI UPDATE ERROR] {e}")  # Debug UI errors
-                        
-                        scrape(
-                            url, depth=0, max_depth=depth, recordset=recordset,
-                            conn=conn, exclude_paths=exclude_paths, include_lang_prefixes=include_lang_prefixes,
-                            keep_query_keys=keep_query_keys, max_urls_per_run=max_urls_per_run, dry_run=dry_run,
-                            progress_callback=update_progress,
-                            log_callback=add_log
-                        )
-                        
-                        add_log(f"✅ Completed config {current_config}/{total_configs}: {url}")
-                        add_log(f"   📊 URLs visited: {len(visited_norm)}, LLM processed: {processed_pages_count}")
-                        update_log_display()
-                
-                # Final progress update
-                progress_bar.progress(1.0)
-                status_text.write("✅ **Completed all URL configurations**")
-                add_log("🎉 All URL configurations completed!")
-                add_log(f"📈 Final stats: {len(visited_norm)} URLs visited, {processed_pages_count} pages processed by LLM")
-                update_log_display()
-                
-                if not dry_run:
-                    st.success("Indexing completed.")
-                    add_log("💾 Indexing completed - data saved to database")
-                else:
-                    st.success("Dry run completed. No DB writes or LLM calls were performed.")
-                    add_log("🧪 Dry run completed - no database writes performed")
-                update_log_display()
-            except Exception as e:
-                st.error(f"Error during crawl: {e}")
-                add_log(f"❌ ERROR during crawl: {e}", "ERROR")
-                update_log_display()
-                print(f"[CRAWL ERROR] {e}")
-            finally:
-                if not dry_run and conn:
-                    conn.close()
-                    add_log("🔌 Database connection closed")
+                    add_log(f"🔍 Starting config {current_config}/{total_configs}: {url}")
+                    add_log(f"   📂 Recordset: {recordset}")
+                    add_log(f"   🔢 Max depth: {depth}")
+                    add_log(f"   🚫 Exclude paths: {exclude_paths}")
+                    add_log(f"   ✅ Include prefixes: {include_lang_prefixes}")
                     update_log_display()
-
-            # Show frontier results in the UI (Dry Run visibility; also useful for normal runs)
-            st.markdown("### 📊 Crawl Summary")
+                    
+                    # Update status
+                    status_text.write(f"🔄 **Processing URL {current_config}/{total_configs}:** {url}")
+                    
+                    # Update progress bar
+                    progress_bar.progress((current_config - 1) / total_configs)
+                    
+                    # Initialize metrics display
+                    update_metrics()
+                    
+                    # Create a progress callback closure with logging
+                    def update_progress():
+                        try:
+                            # Update status text immediately  
+                            status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | LLM Processed: {processed_pages_count}")
+                            
+                            # Add log entry for significant progress
+                            if len(visited_norm) % 10 == 0:  # Log every 10 URLs
+                                add_log(f"📈 Progress: {len(visited_norm)} URLs visited, {processed_pages_count} LLM processed")
+                                update_log_display()
+                            
+                            # Update metrics using the dedicated function
+                            update_metrics()
+                        except Exception as e:
+                            print(f"[UI UPDATE ERROR] {e}")  # Debug UI errors
+                    
+                    scrape(
+                        url, depth=0, max_depth=depth, recordset=recordset,
+                        conn=conn, exclude_paths=exclude_paths, include_lang_prefixes=include_lang_prefixes,
+                        keep_query_keys=keep_query_keys, max_urls_per_run=max_urls_per_run, dry_run=dry_run,
+                        progress_callback=update_progress,
+                        log_callback=add_log
+                    )
+                    
+                    add_log(f"✅ Completed config {current_config}/{total_configs}: {url}")
+                    add_log(f"   📊 URLs visited: {len(visited_norm)}, LLM processed: {processed_pages_count}")
+                    update_log_display()
             
-            # Create metrics columns for better display
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("URLs Visited", f"{len(visited_norm)}", help="Total number of URLs that were visited and processed")
-            with col2:
-                st.metric("Crawl Budget", f"{max_urls_per_run}", help="Maximum number of URLs allowed per crawl session")
-            with col3:
-                if not dry_run:
-                    st.metric("Pages Processed by LLM", f"{processed_pages_count}", 
-                             help="Number of pages that were processed by LLM and saved to database (waiting for vector sync)")
-                else:
-                    st.metric("Dry Run Mode", "Active", help="No LLM processing or database writes performed")
+            # Final progress update
+            progress_bar.progress(1.0)
+            status_text.write("✅ **Completed all URL configurations**")
+            add_log("🎉 All URL configurations completed!")
+            add_log(f"📈 Final stats: {len(visited_norm)} URLs visited, {processed_pages_count} pages processed by LLM")
+            update_log_display()
             
             if not dry_run:
-                if processed_pages_count > 0:
-                    st.success(f"✅ {processed_pages_count} pages are ready for vector store synchronization")
-                else:
-                    st.info("ℹ️ No new pages were processed (all pages may have been skipped or already exist)")
-            
-            # Improved frontier display
-            if frontier_seen:
-                with st.expander(f"📋 View Processed URLs ({len(frontier_seen)} total)", expanded=False):
-                    # Group URLs by domain for better readability
-                    from collections import defaultdict
-                    url_groups = defaultdict(list)
-                    for url in frontier_seen[:1000]:  # Limit to prevent performance issues
-                        domain = urlparse(url).netloc
-                        url_groups[domain].append(url)
-                    
-                    for domain, urls in url_groups.items():
-                        st.markdown(f"**{domain}** ({len(urls)} URLs)")
-                        # Show first 10 URLs for each domain
-                        display_urls = urls[:10]
-                    for url in display_urls:
-                        st.text(f"  • {url}")
-                    if len(urls) > 10:
-                        st.text(f"  ... and {len(urls) - 10} more URLs")
-                    st.markdown("---")
+                st.success("Indexing completed.")
+                add_log("💾 Indexing completed - data saved to database")
+            else:
+                st.success("Dry run completed. No DB writes or LLM calls were performed.")
+                add_log("🧪 Dry run completed - no database writes performed")
+            update_log_display()
+        except Exception as e:
+            st.error(f"Error during crawl: {e}")
+            add_log(f"❌ ERROR during crawl: {e}", "ERROR")
+            update_log_display()
+            print(f"[CRAWL ERROR] {e}")
+        finally:
+            if not dry_run and conn:
+                conn.close()
+                add_log("🔌 Database connection closed")
+                update_log_display()
+
+        # Show frontier results in the UI (Dry Run visibility; also useful for normal runs)
+        st.markdown("### 📊 Crawl Summary")
+        
+        # Create metrics columns for better display
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("URLs Visited", f"{len(visited_norm)}", help="Total number of URLs that were visited and processed")
+        with col2:
+            st.metric("Crawl Budget", f"{max_urls_per_run}", help="Maximum number of URLs allowed per crawl session")
+        with col3:
+            if not dry_run:
+                st.metric("Pages Processed by LLM", f"{processed_pages_count}", 
+                            help="Number of pages that were processed by LLM and saved to database (waiting for vector sync)")
+            else:
+                st.metric("Dry Run Mode", "Active", help="No LLM processing or database writes performed")
+        
+        if not dry_run:
+            if processed_pages_count > 0:
+                st.success(f"✅ {processed_pages_count} pages are ready for vector store synchronization")
+            else:
+                st.info("ℹ️ No new pages were processed (all pages may have been skipped or already exist)")
+        
+        # Improved frontier display
+        if frontier_seen:
+            with st.expander(f"📋 View Processed URLs ({len(frontier_seen)} total)", expanded=False):
+                # Group URLs by domain for better readability
+                from collections import defaultdict
+                url_groups = defaultdict(list)
+                for url in frontier_seen[:1000]:  # Limit to prevent performance issues
+                    domain = urlparse(url).netloc
+                    url_groups[domain].append(url)
                 
-                if len(frontier_seen) > 1000:
-                    st.info(f"Showing first 1000 URLs. Total processed: {len(frontier_seen)}")
+                for domain, urls in url_groups.items():
+                    st.markdown(f"**{domain}** ({len(urls)} URLs)")
+                    # Show first 10 URLs for each domain
+                    display_urls = urls[:10]
+                for url in display_urls:
+                    st.text(f"  • {url}")
+                if len(urls) > 10:
+                    st.text(f"  ... and {len(urls) - 10} more URLs")
+                st.markdown("---")
+            
+            if len(frontier_seen) > 1000:
+                st.info(f"Showing first 1000 URLs. Total processed: {len(frontier_seen)}")
 
     # --- Show current knowledge base entries ---
     # Fetch entries for filters and display
