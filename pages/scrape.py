@@ -24,6 +24,7 @@ frontier_seen = []    # for Dry Run reporting in the UI
 base_path = None      # base path to restrict scraping to
 processed_pages_count = 0  # count of pages processed by LLM and saved to DB
 dry_run_llm_eligible_count = 0  # count of pages that would be LLM processed in dry run mode
+llm_analysis_results = []  # collect LLM analysis summaries for display in info box
 
 # -----------------------------
 # URL Normalization Utilities
@@ -171,7 +172,7 @@ def check_content_hash_exists(conn, content_hash):
         result = cur.fetchone()
         return result[0] if result else None
 
-def summarize_and_tag_tooluse(markdown_content):
+def summarize_and_tag_tooluse(markdown_content, log_callback=None, depth=0):
     """
     Summarize and tag markdown content using OpenAI API from secrets.
     Falls back to local model if secrets are not available.
@@ -185,21 +186,24 @@ def summarize_and_tag_tooluse(markdown_content):
     for attempt, input_size in enumerate(input_sizes):
         truncated_content = markdown_content[:input_size]
         if attempt > 0:
-            print(f"[RETRY] Attempting with reduced input size: {input_size} chars")
+            if log_callback:
+                log_callback(f"{'  ' * depth}🔄 LLM retry with reduced input: {input_size} chars")
             
-        result = _attempt_summarize_and_tag(truncated_content)
+        result = _attempt_summarize_and_tag(truncated_content, log_callback, depth)
         if result is not None:
-            if attempt > 0:
-                print(f"[SUCCESS] LLM processing succeeded with {input_size} characters (attempt {attempt + 1})")
+            if attempt > 0 and log_callback:
+                log_callback(f"{'  ' * depth}✅ LLM processing succeeded with {input_size} characters (attempt {attempt + 1})")
             return result
         elif attempt < len(input_sizes) - 1:
-            print(f"[RETRY] Failed with {input_size} chars, trying smaller input...")
+            if log_callback:
+                log_callback(f"{'  ' * depth}⚠️ LLM failed with {input_size} chars, trying smaller input...")
             continue
         else:
-            print("[ERROR] All retry attempts failed")
+            if log_callback:
+                log_callback(f"{'  ' * depth}❌ LLM: All retry attempts failed")
             return None
 
-def _attempt_summarize_and_tag(markdown_content):
+def _attempt_summarize_and_tag(markdown_content, log_callback=None, depth=0):
     """
     Single attempt at summarizing and tagging content.
     Returns None if token limit is hit, allowing for retry with smaller input.
@@ -260,16 +264,15 @@ def _attempt_summarize_and_tag(markdown_content):
         }
     ]
     
-    print(f"[DEBUG] Tool schema: {json.dumps(tools, indent=2)}")
-    print(f"[DEBUG] Messages being sent: {json.dumps(messages, indent=2)[:500]}...")
+    print(f"[LLM] Starting analysis with {len(markdown_content)} characters...")
     
     try:
         if use_openai:
             # Use OpenAI client
             client = OpenAI(api_key=api_key)
             
-            print(f"[DEBUG] Calling OpenAI API with model: {model}")
-            print(f"[DEBUG] Message length: {len(messages[1]['content'])}")
+            if log_callback:
+                log_callback(f"{'  ' * depth}🤖 Calling OpenAI API ({model})...")
             
             response = client.chat.completions.create(
                 model=model,
@@ -280,49 +283,46 @@ def _attempt_summarize_and_tag(markdown_content):
                 max_completion_tokens=2048  # Increased from 512 to handle longer content
             )
             
-            print(f"[DEBUG] OpenAI Response received")
-            print(f"[DEBUG] Response object type: {type(response)}")
+            if log_callback:
+                log_callback(f"{'  ' * depth}📡 Response received from OpenAI")
             
             # Add proper null checks for response structure
             if not response or not response.choices or len(response.choices) == 0:
-                print("[ERROR] Invalid or empty response from OpenAI API")
-                print(f"[DEBUG] Response: {response}")
+                if log_callback:
+                    log_callback(f"{'  ' * depth}❌ Invalid response from OpenAI API")
                 return None
                 
             choice = response.choices[0]
-            print(f"[DEBUG] Choice object: {type(choice)}")
-            print(f"[DEBUG] Finish reason: {getattr(choice, 'finish_reason', 'Unknown')}")
             
             if not choice or not choice.message:
-                print("[ERROR] Invalid choice or message in OpenAI response")
+                if log_callback:
+                    log_callback(f"{'  ' * depth}❌ Invalid message in OpenAI response")
                 return None
                 
             message = choice.message
-            print(f"[DEBUG] Message content: {getattr(message, 'content', 'None')}")
-            print(f"[DEBUG] Message tool_calls: {getattr(message, 'tool_calls', 'None')}")
-            
             tool_calls = message.tool_calls
             if tool_calls and len(tool_calls) > 0 and tool_calls[0].function:
-                print(f"[DEBUG] Found {len(tool_calls)} tool calls")
                 arguments_json = tool_calls[0].function.arguments
-                print(f"[DEBUG] Function arguments: {arguments_json}")
                 try:
                     result = json.loads(arguments_json)
-                    print(f"[DEBUG] Successfully parsed JSON: {result}")
+                    if log_callback:
+                        summary = result.get('summary', '')
+                        tags = result.get('tags', [])
+                        lang = result.get('detected_language', 'unknown')
+                        log_callback(f"{'  ' * depth}✅ LLM analysis complete - Summary: {len(summary)} chars, Tags: {len(tags)}, Language: {lang}")
                     return result
                 except json.JSONDecodeError as e:
-                    print(f"[ERROR] Failed to decode tool function arguments as JSON: {e}")
-                    print(f"[DEBUG] Arguments content: {arguments_json}")
+                    if log_callback:
+                        log_callback(f"{'  ' * depth}❌ Failed to parse LLM response JSON")
                     return None
             else:
-                print("[ERROR] No valid tool_calls in OpenAI response")
-                print(f"[DEBUG] Response structure: choices={len(response.choices) if response.choices else 0}")
-                if choice.message:
-                    print(f"[DEBUG] Message content: {getattr(choice.message, 'content', 'No content')}")
-                    print(f"[DEBUG] Tool calls: {getattr(choice.message, 'tool_calls', 'No tool calls')}")
+                if log_callback:
+                    log_callback(f"{'  ' * depth}❌ No valid tool_calls in OpenAI response")
                 return None
         else:
             # Fall back to local model using requests
+            if log_callback:
+                log_callback(f"{'  ' * depth}🤖 Using local model: {model}")
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
             data = {
                 "model": model,
@@ -340,22 +340,28 @@ def _attempt_summarize_and_tag(markdown_content):
             if tool_calls and 'function' in tool_calls[0] and 'arguments' in tool_calls[0]['function']:
                 arguments_json = tool_calls[0]['function']['arguments']
                 try:
-                    return json.loads(arguments_json)
+                    result = json.loads(arguments_json)
+                    if log_callback:
+                        log_callback(f"{'  ' * depth}✅ Local model analysis complete")
+                    return result
                 except json.JSONDecodeError as e:
-                    print(f"Failed to decode tool function arguments as JSON: {e}")
-                    print("Arguments content:", arguments_json)
+                    if log_callback:
+                        log_callback(f"{'  ' * depth}❌ Failed to decode local model response")
                     return None
             else:
-                print("No valid tool_calls in local model response.")
+                if log_callback:
+                    log_callback(f"{'  ' * depth}❌ No valid tool_calls in local model response")
                 return None
                 
     except Exception as e:
         error_message = str(e)
-        print(f"Error calling {'OpenAI' if use_openai else 'local'} API: {e}")
+        if log_callback:
+            log_callback(f"{'  ' * depth}❌ LLM API error: {str(e)[:100]}")
         
         # Check if this is a token limit error - return None to trigger retry with smaller input
         if use_openai and ("max_tokens" in error_message or "output limit" in error_message or "token" in error_message.lower()):
-            print("[TOKEN_LIMIT] Detected token limit error, returning None for retry with smaller input")
+            if log_callback:
+                log_callback(f"{'  ' * depth}⚠️ Token limit detected, will retry with smaller input")
             return None
         
         # For other errors, raise to stop processing
@@ -648,6 +654,13 @@ def scrape(url,
                     log_callback(f"{'  ' * depth}🤖 [DRY RUN] CHANGED page - would process with LLM: {norm_url}")
             if log_callback:
                 log_callback(f"{'  ' * depth}📊 Pages that would be LLM processed so far: {dry_run_llm_eligible_count}")
+            
+            # Update UI progress to show real-time dry run metrics
+            if progress_callback:
+                try:
+                    progress_callback()
+                except Exception:
+                    pass  # Don't let UI errors break scraping
         elif dry_run and skip_summary_and_db:
             if log_callback:
                 log_callback(f"{'  ' * depth}⏭️ [DRY RUN] UNCHANGED page - would skip LLM: {norm_url}")
@@ -656,7 +669,7 @@ def scrape(url,
             try:
                 if log_callback:
                     log_callback(f"{'  ' * depth}🤖 Processing with LLM: {norm_url}")
-                llm_output = summarize_and_tag_tooluse(markdown)
+                llm_output = summarize_and_tag_tooluse(markdown, log_callback, depth)
                 if llm_output is None:
                     if log_callback:
                         log_callback(f"{'  ' * depth}❌ Failed to get LLM output for {norm_url}, skipping save")
@@ -673,6 +686,25 @@ def scrape(url,
                         tags = json.loads(tags)
                     except Exception:
                         tags = [t.strip().strip("'\" ") for t in tags.strip("[]").split(",")]
+
+                # Display LLM output in the log
+                if log_callback:
+                    log_callback(f"{'  ' * depth}✨ LLM Analysis Complete:")
+                    log_callback(f"{'  ' * (depth+1)}📝 Summary: {summary[:100]}{'...' if len(summary) > 100 else ''}")
+                    log_callback(f"{'  ' * (depth+1)}🌍 Language: {lang}")
+                    log_callback(f"{'  ' * (depth+1)}🏷️ Tags: {', '.join(tags[:5])}{'...' if len(tags) > 5 else ''}")
+                    log_callback(f"{'  ' * (depth+1)}📄 Type: {page_type}")
+
+                # Collect LLM results for info box display
+                global llm_analysis_results
+                llm_analysis_results.append({
+                    'url': norm_url,
+                    'title': title,
+                    'summary': summary,
+                    'language': lang,
+                    'tags': tags,
+                    'page_type': page_type
+                })
 
                 title = soup.title.string.strip() if soup.title else 'Untitled'
                 safe_title = re.sub(r'_+', '_', "".join(c if c.isalnum() else "_" for c in (title or "untitled")))[:64]
@@ -939,11 +971,20 @@ def main():
                 )
                 st.session_state.url_configs[i]["include_lang_prefixes"] = [prefix.strip() for prefix in include_prefixes_str.split(",") if prefix.strip()]
 
-            # Add delete button for this configuration
+            # Save and Delete buttons for this configuration
             st.markdown("---")
-            col_delete1, col_delete2, col_delete3 = st.columns([1, 1, 1])
-            with col_delete2:
-                if st.button(f"🗑️ Delete Configuration {i+1}", key=f"delete_config_{i}", type="secondary"):
+            col_save, col_delete, col_spacer = st.columns([1, 1, 2])
+            
+            with col_save:
+                if st.button(f"💾 Save Config {i+1}", key=f"save_config_{i}", type="primary"):
+                    try:
+                        save_url_configs(st.session_state.url_configs)
+                        st.success(f"✅ Configuration {i+1} saved!")
+                    except Exception as e:
+                        st.error(f"Failed to save configuration {i+1}: {e}")
+                        
+            with col_delete:
+                if st.button(f"🗑️ Delete Config {i+1}", key=f"delete_config_{i}", type="secondary"):
                     # Remove this specific configuration
                     st.session_state.url_configs.pop(i)
                     try:
@@ -1012,26 +1053,38 @@ def main():
                     st.rerun()
                 except Exception as e:
                     st.error(f"Failed to save quick configuration: {e}")
+    
+    # Global configuration management
+    st.markdown("---")
+    st.markdown("### 💾 Configuration Management")
+    st.info("💡 **Tip**: Individual configurations auto-save when you use their save buttons. Use the buttons below for bulk operations.")
+    
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💾 Save All Configurations"):
+        st.markdown("**💾 Save All Changes**")
+        st.caption("Save all configuration changes to the database")
+        if st.button("💾 Save All Configurations", type="primary"):
             try:
                 save_url_configs(st.session_state.url_configs)
                 message_placeholder.success("✅ All configurations saved to database!")
             except Exception as e:
                 message_placeholder.error(f"Failed to save configurations: {e}")
+    
     with col2:
-        if st.button("🔄 Reload from Database"):
+        st.markdown("**🔄 Reset to Database**")
+        st.caption("Discard unsaved changes and reload from database")
+        if st.button("🔄 Reset to Saved", type="secondary"):
             try:
                 st.session_state.url_configs = load_url_configs()
-                message_placeholder.success(f"✅ Reloaded {len(st.session_state.url_configs)} configurations from database!")
+                message_placeholder.success(f"✅ Reset to saved state: {len(st.session_state.url_configs)} configurations loaded!")
                 st.rerun()
             except Exception as e:
                 message_placeholder.error(f"Failed to reload configurations: {e}")
+                
     if st.session_state.url_configs:
-        st.info(f"📊 **{len(st.session_state.url_configs)} configuration(s)** ready for indexing")
+        st.success(f"📊 **{len(st.session_state.url_configs)} configuration(s)** ready for indexing")
     else:
-        st.info("➕ **No configurations yet** - Add your first URL configuration below")
+        st.info("➕ **No configurations yet** - Add your first URL configuration above")
 
 
     # Index button section
@@ -1120,10 +1173,11 @@ def main():
         visited_raw.clear()
         visited_norm.clear()
         frontier_seen.clear()
-        global base_path, processed_pages_count, dry_run_llm_eligible_count
+        global base_path, processed_pages_count, dry_run_llm_eligible_count, llm_analysis_results
         base_path = None  # Reset base path for new session
         processed_pages_count = 0  # Reset processed pages counter
         dry_run_llm_eligible_count = 0  # Reset dry run LLM counter
+        llm_analysis_results = []  # Reset LLM analysis results
         add_log("✅ Visited sets, base path, and all counters cleared")
         update_log_display()
 
@@ -1278,7 +1332,20 @@ def main():
             if dry_run_llm_eligible_count > 0:
                 st.info(f"🧪 **Dry Run Results**: {dry_run_llm_eligible_count} pages would be processed by LLM in a real run")
             else:
-                st.info("🧪 **Dry Run Results**: No pages would be processed by LLM (all may be duplicates or filtered out)")        # Improved frontier display
+                st.info("🧪 **Dry Run Results**: No pages would be processed by LLM (all may be duplicates or filtered out)")
+        
+        # Display LLM Analysis Results
+        if llm_analysis_results and not dry_run:
+            with st.expander(f"🤖 LLM Analysis Results ({len(llm_analysis_results)} pages)", expanded=True):
+                for i, result in enumerate(llm_analysis_results, 1):
+                    st.markdown(f"**{i}. {result['title']}**")
+                    st.markdown(f"🔗 *{result['url']}*")
+                    st.markdown(f"📝 **Summary:** {result['summary']}")
+                    st.markdown(f"🌍 **Language:** {result['language']}")
+                    st.markdown(f"🏷️ **Tags:** {', '.join(result['tags'])}")
+                    st.markdown(f"📄 **Type:** {result['page_type']}")
+                    if i < len(llm_analysis_results):
+                        st.divider()        # Improved frontier display
         if frontier_seen:
             with st.expander(f"📋 View Processed URLs ({len(frontier_seen)} total)", expanded=False):
                 # Group URLs by domain for better readability

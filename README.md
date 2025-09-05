@@ -4,6 +4,12 @@ An intelligent AI-powered chatbot built with Streamlit and OpenAI that helps use
 
 ![Viadrina Library Assistant](assets/viadrina-logo.png)
 
+## 🌐 Live Demo
+
+**Try the live application:** [viadrina.streamlit.app](https://viadrina.streamlit.app)
+
+Experience the Viadrina Library Assistant in action! The live demo includes the full chat interface with knowledge base search, web search capabilities, and real-time response streaming.
+
 ## ✨ Features
 
 ### 🎯 Core Functionality
