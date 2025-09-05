@@ -470,7 +470,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # Create status row first (spinner + status text on same line)
         status_row = st.container()
         with status_row:
-            col_spinner, col_status = st.columns([0.02, 0.98])
+            col_spinner, col_status = st.columns([0.03, 0.97])
             with col_spinner:
                 spinner_ctx = st.spinner("")  # minimal spinner, no text
                 spinner_ctx.__enter__()
@@ -646,7 +646,12 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             rendered = replace_filecite_markers_with_sup(cleaned, citation_map, placements, annotations=None)
 
         # Safety cleanup: remove any remaining filecite markers that might have been missed
-        rendered = re.sub(r'filecite[^]*', '', rendered)
+        # Match the full marker like: filecite... (non-greedy, DOTALL so newlines are covered)
+        rendered = re.sub(r'filecite.*?', '', rendered, flags=re.DOTALL)
+        # Fallback: remove any leftover ascii-ish remnants ("filecite..." or orphan tokens)
+        rendered = re.sub(r'filecite[^\s]*', '', rendered)
+        # Also remove any orphaned citation tokens that might be left behind
+        rendered = re.sub(r'\bturn\d+file\d+(?:turn\d+file\d+)*\b', '', rendered)
 
         sources_md = render_sources_list(citation_map)
 
