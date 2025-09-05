@@ -6,7 +6,8 @@ import requests
 from markdownify import markdownify as md
 import streamlit as st
 import json
-from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256
+from openai import OpenAI
+from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs
 
 # -----------------------------
 # Auth / sidebar
@@ -20,6 +21,8 @@ render_sidebar(authenticated)
 visited_raw = set()   # legacy tracking of the exact strings encountered (optional)
 visited_norm = set()  # authoritative dedupe on normalized URLs
 frontier_seen = []    # for Dry Run reporting in the UI
+base_path = None      # base path to restrict scraping to
+processed_pages_count = 0  # count of pages processed by LLM and saved to DB
 
 # -----------------------------
 # URL Normalization Utilities
@@ -160,13 +163,51 @@ def get_existing_markdown_hash(conn, url):
         result = cur.fetchone()
         return result[0] if result else None
 
-def summarize_and_tag_tooluse(
-    markdown_content,
-    model="openai/gpt-oss-20b", 
-    api_url="http://localhost:1234/v1/chat/completions",
-    api_key=None
-    ):
-    MAX_INPUT_CHARS = 4000  # conservative for Llama-3 8B
+def summarize_and_tag_tooluse(markdown_content):
+    """
+    Summarize and tag markdown content using OpenAI API from secrets.
+    Falls back to local model if secrets are not available.
+    Includes retry logic for token limit errors.
+    """
+    MAX_INPUT_CHARS = 3000  # Reduced from 4000 to give more room for output tokens
+    
+    # Try with progressively smaller inputs if we hit token limits
+    input_sizes = [MAX_INPUT_CHARS, 2000, 1500, 1000]
+    
+    for attempt, input_size in enumerate(input_sizes):
+        truncated_content = markdown_content[:input_size]
+        if attempt > 0:
+            print(f"[RETRY] Attempting with reduced input size: {input_size} chars")
+            
+        result = _attempt_summarize_and_tag(truncated_content)
+        if result is not None:
+            if attempt > 0:
+                print(f"[SUCCESS] LLM processing succeeded with {input_size} characters (attempt {attempt + 1})")
+            return result
+        elif attempt < len(input_sizes) - 1:
+            print(f"[RETRY] Failed with {input_size} chars, trying smaller input...")
+            continue
+        else:
+            print("[ERROR] All retry attempts failed")
+            return None
+
+def _attempt_summarize_and_tag(markdown_content):
+    """
+    Single attempt at summarizing and tagging content.
+    Returns None if token limit is hit, allowing for retry with smaller input.
+    """
+    
+    # Try to get OpenAI credentials from secrets
+    try:
+        api_key = st.secrets["OPENAI_API_KEY"]
+        model = st.secrets.get("MODEL", "gpt-4o-mini")
+        use_openai = True
+    except KeyError:
+        # Fall back to local model
+        api_key = "1234"
+        model = "openai/gpt-oss-20b"
+        api_url = "http://localhost:1234/v1/chat/completions"
+        use_openai = False
     
     tools = [
         {
@@ -196,6 +237,7 @@ def summarize_and_tag_tooluse(
             }
         }
     ]
+    
     messages = [
         {"role": "system", "content":
             "You summarize academic/institutional markdown, add tags, and detect language. "
@@ -206,44 +248,110 @@ def summarize_and_tag_tooluse(
         {"role": "user", "content":
             "Summarize the following markdown in two to three English sentences, suggest 3–7 relevant English tags, and detect the main language of the content. "
             "IMPORTANT: Return 'detected_language' as a two-letter ISO 639-1 code based ONLY on the markdown content.\n\n"
-            f"{markdown_content[:MAX_INPUT_CHARS]}"
+            f"{markdown_content}"  # Content is already truncated when passed to this function
         }
     ]
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-    data = {
-        "model": model,
-        "messages": messages,
-        "tools": tools,
-        "tool_choice": "required",
-        "temperature": 0.7,
-        "max_tokens": 512
-    }
-    try:
-        response = requests.post(api_url, json=data, headers=headers)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        print("API responded with:", getattr(e.response, "text", str(e)))
-        raise
     
-    resp_json = response.json()
+    print(f"[DEBUG] Tool schema: {json.dumps(tools, indent=2)}")
+    print(f"[DEBUG] Messages being sent: {json.dumps(messages, indent=2)[:500]}...")
+    
     try:
-        tool_calls = resp_json['choices'][0]['message'].get('tool_calls', [])
-        if tool_calls and 'function' in tool_calls[0] and 'arguments' in tool_calls[0]['function']:
-            arguments_json = tool_calls[0]['function']['arguments']
-            try:
-                return json.loads(arguments_json)
-            except json.JSONDecodeError as e:
-                print(f"Failed to decode tool function arguments as JSON: {e}")
-                print("Arguments content:", arguments_json)
+        if use_openai:
+            # Use OpenAI client
+            client = OpenAI(api_key=api_key)
+            
+            print(f"[DEBUG] Calling OpenAI API with model: {model}")
+            print(f"[DEBUG] Message length: {len(messages[1]['content'])}")
+            
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                tool_choice="required",
+                # temperature removed - model only supports default value (1)
+                max_completion_tokens=2048  # Increased from 512 to handle longer content
+            )
+            
+            print(f"[DEBUG] OpenAI Response received")
+            print(f"[DEBUG] Response object type: {type(response)}")
+            
+            # Add proper null checks for response structure
+            if not response or not response.choices or len(response.choices) == 0:
+                print("[ERROR] Invalid or empty response from OpenAI API")
+                print(f"[DEBUG] Response: {response}")
+                return None
+                
+            choice = response.choices[0]
+            print(f"[DEBUG] Choice object: {type(choice)}")
+            print(f"[DEBUG] Finish reason: {getattr(choice, 'finish_reason', 'Unknown')}")
+            
+            if not choice or not choice.message:
+                print("[ERROR] Invalid choice or message in OpenAI response")
+                return None
+                
+            message = choice.message
+            print(f"[DEBUG] Message content: {getattr(message, 'content', 'None')}")
+            print(f"[DEBUG] Message tool_calls: {getattr(message, 'tool_calls', 'None')}")
+            
+            tool_calls = message.tool_calls
+            if tool_calls and len(tool_calls) > 0 and tool_calls[0].function:
+                print(f"[DEBUG] Found {len(tool_calls)} tool calls")
+                arguments_json = tool_calls[0].function.arguments
+                print(f"[DEBUG] Function arguments: {arguments_json}")
+                try:
+                    result = json.loads(arguments_json)
+                    print(f"[DEBUG] Successfully parsed JSON: {result}")
+                    return result
+                except json.JSONDecodeError as e:
+                    print(f"[ERROR] Failed to decode tool function arguments as JSON: {e}")
+                    print(f"[DEBUG] Arguments content: {arguments_json}")
+                    return None
+            else:
+                print("[ERROR] No valid tool_calls in OpenAI response")
+                print(f"[DEBUG] Response structure: choices={len(response.choices) if response.choices else 0}")
+                if choice.message:
+                    print(f"[DEBUG] Message content: {getattr(choice.message, 'content', 'No content')}")
+                    print(f"[DEBUG] Tool calls: {getattr(choice.message, 'tool_calls', 'No tool calls')}")
                 return None
         else:
-            print("No valid tool_calls or arguments in response.")
-            print(json.dumps(resp_json, indent=2))
+            # Fall back to local model using requests
+            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
+            data = {
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": "required",
+                "temperature": 0.7,
+                "max_tokens": 512  # Local models typically still use max_tokens
+            }
+            response = requests.post(api_url, json=data, headers=headers)
+            response.raise_for_status()
+            
+            resp_json = response.json()
+            tool_calls = resp_json['choices'][0]['message'].get('tool_calls', [])
+            if tool_calls and 'function' in tool_calls[0] and 'arguments' in tool_calls[0]['function']:
+                arguments_json = tool_calls[0]['function']['arguments']
+                try:
+                    return json.loads(arguments_json)
+                except json.JSONDecodeError as e:
+                    print(f"Failed to decode tool function arguments as JSON: {e}")
+                    print("Arguments content:", arguments_json)
+                    return None
+            else:
+                print("No valid tool_calls in local model response.")
+                return None
+                
+    except Exception as e:
+        error_message = str(e)
+        print(f"Error calling {'OpenAI' if use_openai else 'local'} API: {e}")
+        
+        # Check if this is a token limit error - return None to trigger retry with smaller input
+        if use_openai and ("max_tokens" in error_message or "output limit" in error_message or "token" in error_message.lower()):
+            print("[TOKEN_LIMIT] Detected token limit error, returning None for retry with smaller input")
             return None
-    except (KeyError, IndexError, TypeError) as e:
-        print(f"Malformed API response structure: {e}")
-        print(json.dumps(resp_json, indent=2))
-        return None
+        
+        # For other errors, raise to stop processing
+        raise
 
 def is_link_page(markdown_content, min_links=4, max_text_blocks=2):
     links = re.findall(r'\[([^\]]+)\]\([^)]+\)', markdown_content)
@@ -318,7 +426,8 @@ def scrape(url,
            include_lang_prefixes=None,
            keep_query_keys: set[str] | None = None,
            max_urls_per_run: int = 5000,
-           dry_run: bool = False):
+           dry_run: bool = False,
+           progress_callback=None):
     """
     Recursively scrape a URL, process its content, and save it to the database.
     Normalizes URLs (drops fragments, strips default ports, lowercases host, removes unwanted query params),
@@ -328,12 +437,35 @@ def scrape(url,
     """
     # Normalize the start URL immediately (drop fragments, normalize query, etc.)
     norm_url = normalize_url(url, "", keep_query=keep_query_keys)
+    print(f"{'  ' * depth}[DEBUG] Original URL: {url}")
+    print(f"{'  ' * depth}[DEBUG] Normalized URL: {norm_url}")
+    
+    # Set base path for path-restricted scraping (only on first call, depth 0)
+    global base_path
+    if depth == 0:
+        parsed_start = urlparse(norm_url)
+        # Extract directory path (remove filename if present)
+        path_parts = parsed_start.path.rstrip('/').split('/')
+        if path_parts[-1] and '.' in path_parts[-1]:  # Remove filename
+            base_path = '/'.join(path_parts[:-1])
+        else:
+            base_path = '/'.join(path_parts)
+        if not base_path.endswith('/'):
+            base_path += '/'
+        print(f"{'  ' * depth}[DEBUG] Set base path for session: {base_path}")
 
     # Stop recursion if max depth, already visited, or crawl budget exceeded
-    if depth > max_depth or len(visited_norm) >= max_urls_per_run:
+    if depth > max_depth:
+        print(f"{'  ' * depth}[DEBUG] Skipping - depth {depth} > max_depth {max_depth}")
+        return
+    if len(visited_norm) >= max_urls_per_run:
+        print(f"{'  ' * depth}[DEBUG] Skipping - crawl budget exceeded: {len(visited_norm)} >= {max_urls_per_run}")
         return
     if norm_url in visited_norm:
+        print(f"{'  ' * depth}[DEBUG] Skipping - URL already visited: {norm_url}")
         return
+
+    print(f"{'  ' * depth}[DEBUG] URL passed all checks, proceeding with scraping")
 
     # Track visited
     visited_raw.add(url)
@@ -412,11 +544,15 @@ def scrape(url,
 
         if not (skip_summary_and_db or dry_run):
             try:
-                llm_output = summarize_and_tag_tooluse(markdown, api_key="1234")
-                summary = llm_output["summary"]
+                llm_output = summarize_and_tag_tooluse(markdown)
+                if llm_output is None:
+                    print(f"{'  ' * depth}[!] Failed to get LLM output for {norm_url}, skipping save")
+                    return
+                    
+                summary = llm_output.get("summary", "No summary available")
                 lang_from_html = get_html_lang(soup)
-                lang = (lang_from_html.lower() if lang_from_html else llm_output["detected_language"])
-                tags = llm_output["tags"]
+                lang = (lang_from_html.lower() if lang_from_html else llm_output.get("detected_language", "unknown"))
+                tags = llm_output.get("tags", [])
                 page_type = "links" if is_link_page(markdown) else "text"
 
                 if isinstance(tags, str):
@@ -433,6 +569,18 @@ def scrape(url,
                     # IMPORTANT: we save by the normalized URL
                     save_document_to_db(conn, norm_url, title, safe_title, crawl_date, lang, summary, tags, markdown, current_hash, recordset, page_type, deleted=False)
                     print(f"{'  ' * depth}Saved {norm_url} to database with recordset '{recordset}'")
+                    
+                    # Increment counter for successfully processed pages
+                    global processed_pages_count
+                    processed_pages_count += 1
+                    print(f"{'  ' * depth}[INFO] Pages processed by LLM so far: {processed_pages_count}")
+                    
+                    # Update UI progress if callback provided
+                    if progress_callback:
+                        try:
+                            progress_callback()
+                        except Exception:
+                            pass  # Don't let UI errors break scraping
             except Exception as e:
                 print("[LLM ERROR]", norm_url)
                 st.error(f"Failed to summarize or save {norm_url}: {e}")
@@ -464,6 +612,11 @@ def scrape(url,
                 continue
             if include_lang_prefixes and not any(normalized_path.startswith(prefix) for prefix in include_lang_prefixes):
                 continue
+            
+            # Restrict to base path only (stay within the starting URL's path)
+            if base_path and not normalized_path.startswith(base_path):
+                print(f"{'  ' * (depth+1)}[DEBUG] Skipping {next_url} - outside base path {base_path}")
+                continue
 
             # Skip non-HTML resources by extension
             if re.search(r'\.(pdf|docx?|xlsx?|pptx?|zip|rar|tar\.gz|7z|jpg|jpeg|png|gif|svg|mp4|webm)$', parsed_link.path, re.IGNORECASE):
@@ -482,7 +635,8 @@ def scrape(url,
                    exclude_paths, include_lang_prefixes,
                    keep_query_keys=keep_query_keys,
                    max_urls_per_run=max_urls_per_run,
-                   dry_run=dry_run)
+                   dry_run=dry_run,
+                   progress_callback=progress_callback)
 
 # -----------------------------
 # Streamlit UI
@@ -494,58 +648,98 @@ def main():
     st.set_page_config(page_title="Knowledge Base", layout="wide")
     st.title("🌐 Knowledge Base")
     st.markdown("## Indexing Tool")
+    
+    st.info("**Path-Based Scraping**: The scraper will only follow links that are within the same path as the starting URL. "
+            "For example, if you start with `/de/suche/fachinformationen/index.html`, it will only scrape pages under `/de/suche/fachinformationen/` "
+            "and its subdirectories, preventing it from wandering to unrelated sections of the website.")
 
-    # Initialize URL configs in session state
+    # Initialize database table for URL configs
+    try:
+        create_url_configs_table()
+        initialize_default_url_configs()
+    except Exception as e:
+        st.error(f"Failed to initialize URL configurations table: {e}")
+
+    # Initialize URL configs in session state from database
     if "url_configs" not in st.session_state:
-        st.session_state.url_configs = []
+        try:
+            st.session_state.url_configs = load_url_configs()
+            if not st.session_state.url_configs:
+                # If no configs in DB, start with empty list
+                st.session_state.url_configs = []
+        except Exception as e:
+            st.error(f"Failed to load URL configurations: {e}")
+            st.session_state.url_configs = []
 
     # Crawl settings (global for a run)
     st.subheader("Crawler Settings")
     colA, colB, colC = st.columns(3)
     with colA:
-        dry_run = st.checkbox("Dry run (no DB writes, no LLM calls)", value=True,
-                              help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.")
-    with colB:
         max_urls_per_run = st.number_input("Max URLs per run (crawl budget)",
                                            min_value=100, max_value=100000, value=5000, step=100)
-    with colC:
+    with colB:
         keep_query_str = st.text_input("Whitelist query keys (comma-separated)",
                                        value="", help="Leave empty to drop ALL query params. Example: page,lang")
+    with colC:
+        dry_run = st.checkbox("Dry run (no DB writes, no LLM calls)", value=True,
+                              help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.")
     keep_query_keys = set([x.strip() for x in keep_query_str.split(",") if x.strip()]) if keep_query_str else None
 
     st.markdown("---")
 
     # Buttons to add/remove URL config blocks
-    col1, col2 = st.columns(2)
+    st.info("💡 **Auto-save**: Configurations are automatically saved when you add/remove entries. Use the Save button after making changes to existing configurations.")
+    
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("➕ Add URL Configuration for Web Scraping"):
             st.session_state.url_configs.append({
                 "url": "",
                 "recordset": "",
-                "depth": 0,
+                "depth": 2,
                 "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
                 "include_lang_prefixes": ["/de/"]
             })
+            try:
+                save_url_configs(st.session_state.url_configs)
+                st.success("✅ Configuration added and saved!")
+            except Exception as e:
+                st.error(f"Failed to save configuration: {e}")
             st.rerun()
     with col2:
         if st.button("➖ Remove Last URL Configuration from List"):
             if st.session_state.url_configs:
                 st.session_state.url_configs.pop()
+                try:
+                    save_url_configs(st.session_state.url_configs)
+                    st.success("✅ Configuration removed and saved!")
+                except Exception as e:
+                    st.error(f"Failed to save configuration: {e}")
                 st.rerun()
+    with col3:
+        if st.button("💾 Save All Configurations"):
+            try:
+                save_url_configs(st.session_state.url_configs)
+                st.success("✅ All configurations saved to database!")
+            except Exception as e:
+                st.error(f"Failed to save configurations: {e}")
 
-    # Fetch entries for filters
-    entries = sorted(get_kb_entries(), key=lambda entry: len(entry[1]))
-    recordsets = sorted(set(entry[9] for entry in entries))
-    page_types = sorted(set(entry[11] for entry in entries))
+        # Render each URL config
+        for i, config in enumerate(st.session_state.url_configs):
+            st.markdown(f"### 🔗 URL Configuration {i+1}")
+            st.session_state.url_configs[i]["url"] = st.text_input(
+                f"Start URL {i+1}", 
+                value=config["url"], 
+                key=f"start_url_{i}",
+                help="The scraper will only follow links within the same path as this starting URL"
+            )
 
-    # Render each URL config
-    for i, config in enumerate(st.session_state.url_configs):
-        st.markdown(f"### 🔗 URL Configuration {i+1}")
-        st.session_state.url_configs[i]["url"] = st.text_input(
-            f"Start URL {i+1}", value=config["url"], key=f"start_url_{i}"
-        )
+            # Fetch entries for filters
+            entries = sorted(get_kb_entries(), key=lambda entry: len(entry[1]))
+            recordsets = sorted(set(entry[9] for entry in entries))
+            page_types = sorted(set(entry[11] for entry in entries))
 
-        recordset_options = [r for r in recordsets if r]
+            recordset_options = [r for r in recordsets if r]
         recordset_options.append("Create a new one...")
         selected_recordset = st.selectbox(
             f"Available Recordsets {i+1}",
@@ -585,12 +779,30 @@ def main():
     # Index button
     if st.button("📥 Index All URLs"):
         # reset per-run state
+        print("[DEBUG] Clearing visited sets before scraping")
+        print(f"[DEBUG] Before clear - visited_norm has {len(visited_norm)} URLs")
         visited_raw.clear()
         visited_norm.clear()
         frontier_seen.clear()
+        global base_path, processed_pages_count
+        base_path = None  # Reset base path for new session
+        processed_pages_count = 0  # Reset processed pages counter
+        print("[DEBUG] Visited sets, base path, and processed pages counter cleared")
 
         try:
             conn = None if dry_run else get_connection()
+            
+            # Create progress indicators for real-time updates
+            progress_container = st.container()
+            with progress_container:
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                metrics_container = st.container()
+                
+            # Count total configurations to estimate progress
+            total_configs = len([c for c in st.session_state.url_configs if c["url"].strip()])
+            current_config = 0
+            
             for config in st.session_state.url_configs:
                 url = config["url"].strip()
                 recordset = config["recordset"].strip()
@@ -598,11 +810,54 @@ def main():
                 exclude_paths = config["exclude_paths"]
                 include_lang_prefixes = config["include_lang_prefixes"]
                 if url:
+                    current_config += 1
+                    
+                    # Update status
+                    status_text.write(f"🔄 **Processing URL {current_config}/{total_configs}:** {url}")
+                    
+                    # Update progress bar
+                    progress_bar.progress((current_config - 1) / total_configs)
+                    
+                    # Update metrics
+                    with metrics_container:
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("URLs Visited", len(visited_norm))
+                        with col2:
+                            st.metric("LLM Processed", processed_pages_count)
+                        with col3:
+                            st.metric("Current Config", f"{current_config}/{total_configs}")
+                    
+                    # Create a progress callback closure
+                    def update_progress():
+                        try:
+                            # Update status text immediately  
+                            status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | LLM Processed: {processed_pages_count}")
+                            
+                            # Update metrics container
+                            metrics_container.empty()
+                            with metrics_container.container():
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("URLs Visited", len(visited_norm))
+                                with col2:
+                                    st.metric("LLM Processed", processed_pages_count)
+                                with col3:
+                                    st.metric("Current Config", f"{current_config}/{total_configs}")
+                        except Exception as e:
+                            print(f"[UI UPDATE ERROR] {e}")  # Debug UI errors
+                    
                     scrape(
                         url, depth=0, max_depth=depth, recordset=recordset,
                         conn=conn, exclude_paths=exclude_paths, include_lang_prefixes=include_lang_prefixes,
-                        keep_query_keys=keep_query_keys, max_urls_per_run=max_urls_per_run, dry_run=dry_run
+                        keep_query_keys=keep_query_keys, max_urls_per_run=max_urls_per_run, dry_run=dry_run,
+                        progress_callback=update_progress
                     )
+            
+            # Final progress update
+            progress_bar.progress(1.0)
+            status_text.write("✅ **Completed all URL configurations**")
+            
             if not dry_run:
                 st.success("Indexing completed.")
             else:
@@ -616,7 +871,26 @@ def main():
 
         # Show frontier results in the UI (Dry Run visibility; also useful for normal runs)
         st.markdown("### Crawl Results (this run)")
-        st.write(f"Visited (normalized) URLs: {len(visited_norm)} / budget {max_urls_per_run}")
+        
+        # Create metrics columns for better display
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("URLs Visited", f"{len(visited_norm)}", help="Total number of URLs that were visited and processed")
+        with col2:
+            st.metric("Crawl Budget", f"{max_urls_per_run}", help="Maximum number of URLs allowed per crawl session")
+        with col3:
+            if not dry_run:
+                st.metric("Pages Processed by LLM", f"{processed_pages_count}", 
+                         help="Number of pages that were processed by LLM and saved to database (waiting for vector sync)")
+            else:
+                st.metric("Dry Run Mode", "Active", help="No LLM processing or database writes performed")
+        
+        st.write(f"**Progress:** {len(visited_norm)} / {max_urls_per_run} URLs visited")
+        if not dry_run:
+            st.write(f"**LLM Processing:** {processed_pages_count} pages successfully processed and saved to database")
+            if processed_pages_count > 0:
+                st.info(f"✅ {processed_pages_count} pages are ready for vector store synchronization")
+        
         if frontier_seen:
             # Show a compact list (avoid overwhelming the app)
             max_show = min(len(frontier_seen), 1000)
@@ -625,7 +899,29 @@ def main():
                 st.info(f"...and {len(frontier_seen) - max_show} more.")
 
     # --- Show current knowledge base entries ---
+    # Fetch entries for filters and display
+    entries = sorted(get_kb_entries(), key=lambda entry: len(entry[1]))
+    recordsets = sorted(set(entry[9] for entry in entries))
+    page_types = sorted(set(entry[11] for entry in entries))
+
     st.markdown("## Knowledge Base Entries")
+
+    # Add summary of pages waiting for vector sync
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM documents WHERE vector_file_id IS NULL")
+            pending_vector_sync = cur.fetchone()[0]
+        conn.close()
+            
+        if pending_vector_sync > 0:
+            st.warning(f"⏳ **{pending_vector_sync} pages** are waiting for vector store synchronization. "
+                      f"These pages have been processed by LLM but haven't been vectorized yet.")
+        else:
+            st.info("✅ All pages in the database are synchronized with the vector store.")
+    except Exception as e:
+        st.error(f"Could not check vector sync status: {e}")
+
     selected_recordset = st.selectbox(
         "Filter by recordset",
         options=["All"] + recordsets,
@@ -636,19 +932,54 @@ def main():
         options=["All"] + page_types,
         index=0
     )
+    selected_vector_status = st.selectbox(
+        "Filter by vectorization status",
+        options=["All", "Non-vectorized (waiting for sync)", "Vectorized (synced)"],
+        index=0,
+        help="Filter entries based on whether they have been vectorized and synced to the vector store"
+    )
 
     filtered = entries
     if selected_recordset != "All":
         filtered = [entry for entry in filtered if entry[9] == selected_recordset]
     if selected_page_type != "All":
         filtered = [entry for entry in filtered if entry[11] == selected_page_type]
+    if selected_vector_status != "All":
+        if selected_vector_status == "Non-vectorized (waiting for sync)":
+            filtered = [entry for entry in filtered if entry[10] is None]  # vector_file_id is None
+        elif selected_vector_status == "Vectorized (synced)":
+            filtered = [entry for entry in filtered if entry[10] is not None]  # vector_file_id is not None
 
     try:
         if not filtered:
             st.info("No entries found in the knowledge base.")
+        else:
+            # Show count summary
+            total_entries = len(entries)
+            filtered_entries = len(filtered)
+            non_vectorized_total = len([entry for entry in entries if entry[10] is None])
+            vectorized_total = len([entry for entry in entries if entry[10] is not None])
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Entries", total_entries)
+            with col2:
+                st.metric("Filtered Results", filtered_entries)
+            with col3:
+                st.metric("⏳ Non-vectorized", non_vectorized_total)
+            with col4:
+                st.metric("✅ Vectorized", vectorized_total)
+            
+            st.markdown("---")
+        
         for id, url, title, safe_title, crawl_date, lang, summary, tags, markdown, recordset, vector_file_id, page_type in filtered:
             tags_str = " ".join(f"#{tag}" for tag in tags)
-            st.markdown(f"**{title or '(no title)'}** (ID {id}) - [{url}]({url}) - `{vector_file_id}` - **Page Type:** {page_type}")
+            
+            # Create status indicators
+            vector_status = "✅ Vectorized" if vector_file_id else "⏳ Waiting for sync"
+            vector_id_display = f"`{vector_file_id}`" if vector_file_id else "`None`"
+            
+            st.markdown(f"**{title or '(no title)'}** (ID {id}) - [{url}]({url}) - {vector_status} {vector_id_display} - **Page Type:** {page_type}")
             with st.expander(f"**{safe_title}.md** - {recordset} ({crawl_date}) (`{tags_str}`)\n\n**Summary:** {summary or '(no summary)'} (**Language:** {lang})"): 
                 st.info(markdown or "(no content)")
                 
@@ -658,13 +989,15 @@ def main():
                     with conn.cursor() as cur:
                         cur.execute("DELETE FROM documents WHERE id = %s", (id,))
                         conn.commit()
+                    conn.close()
                     st.success(f"Record {id} deleted successfully.")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Failed to delete record {id}: {e}")
+
     except Exception as e:
         st.error(f"Failed to load entries: {e}")
-
+    
     # --- Delete all entries button ---
     st.markdown("### Delete All Records")
     if selected_recordset != "All":
@@ -690,5 +1023,4 @@ def main():
                 st.error(f"Failed to delete documents: {e}")
 
 if authenticated:
-    if __name__ == "__main__":
-        main()
+    main()

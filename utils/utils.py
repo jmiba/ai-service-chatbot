@@ -198,6 +198,25 @@ def create_prompt_versions_table():
     cursor.close()
     conn.close()
 
+def create_url_configs_table():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS url_configs (
+            id SERIAL PRIMARY KEY,
+            url TEXT NOT NULL,
+            recordset TEXT NOT NULL DEFAULT '',
+            depth INTEGER NOT NULL DEFAULT 2,
+            exclude_paths TEXT[] DEFAULT ARRAY['/en/', '/pl/', '/_ablage-alte-www/', '/site-euv/', '/site-zwe-ikm/'],
+            include_lang_prefixes TEXT[] DEFAULT ARRAY['/de/'],
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    """)
+    conn.commit()
+    cursor.close()
+    conn.close()
+
 # Function to create an initial system prompt
 def initialize_default_prompt_if_empty(default_prompt, edited_by="system"):
     conn = get_connection()
@@ -280,3 +299,107 @@ def render_sidebar(authenticated=False):
 # Functions to save a document to the knowledge base
 def compute_sha256(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+# URL Configuration Management Functions
+def save_url_configs(url_configs):
+    """Save URL configurations to the database, replacing existing ones."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Clear existing configurations
+        cursor.execute("DELETE FROM url_configs")
+        
+        # Insert new configurations
+        for config in url_configs:
+            if config["url"].strip():  # Only save non-empty URLs
+                cursor.execute("""
+                    INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    config["url"],
+                    config["recordset"],
+                    config["depth"],
+                    config["exclude_paths"],
+                    config["include_lang_prefixes"]
+                ))
+        
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        cursor.close()
+        conn.close()
+
+def load_url_configs():
+    """Load URL configurations from the database."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT url, recordset, depth, exclude_paths, include_lang_prefixes
+            FROM url_configs
+            ORDER BY id
+        """)
+        
+        configs = []
+        for row in cursor.fetchall():
+            url, recordset, depth, exclude_paths, include_lang_prefixes = row
+            configs.append({
+                "url": url,
+                "recordset": recordset,
+                "depth": depth,
+                "exclude_paths": exclude_paths or [],
+                "include_lang_prefixes": include_lang_prefixes or []
+            })
+        
+        return configs
+    except Exception as e:
+        # If table doesn't exist or other error, return empty list
+        return []
+    finally:
+        cursor.close()
+        conn.close()
+
+def initialize_default_url_configs():
+    """Initialize default URL configurations if none exist."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT COUNT(*) FROM url_configs")
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            # Add some default configurations
+            default_configs = [
+                {
+                    "url": "https://www.europa-uni.de",
+                    "recordset": "university_main",
+                    "depth": 2,
+                    "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
+                    "include_lang_prefixes": ["/de/"]
+                }
+            ]
+            
+            for config in default_configs:
+                cursor.execute("""
+                    INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    config["url"],
+                    config["recordset"],
+                    config["depth"],
+                    config["exclude_paths"],
+                    config["include_lang_prefixes"]
+                ))
+            
+            conn.commit()
+    except Exception:
+        # Ignore errors during initialization
+        pass
+    finally:
+        cursor.close()
+        conn.close()

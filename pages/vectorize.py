@@ -444,29 +444,165 @@ if authenticated:
     os.makedirs(output_dir, exist_ok=True)
     
     st.title("Vector Store Sync Tool")
-    # --- Sync status banner for newly scraped docs (never synced) ---
+    
+    # --- Enhanced Status Dashboard ---
     try:
-        new_unsynced_count = count_new_unsynced_docs()
-        last_vs_sync = read_last_vector_sync_timestamp()
-
+        # Get comprehensive counts with single optimized query
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        # Single query to get all counts at once (much faster than 5 separate queries)
+        cur.execute("""
+            SELECT 
+                COUNT(*) as total_docs,
+                COUNT(CASE WHEN vector_file_id IS NOT NULL THEN 1 END) as vectorized_docs,
+                COUNT(CASE WHEN vector_file_id IS NULL THEN 1 END) as non_vectorized_docs,
+                COUNT(CASE WHEN vector_file_id IS NULL AND old_file_id IS NULL THEN 1 END) as new_unsynced_count,
+                COUNT(CASE WHEN vector_file_id IS NULL AND old_file_id IS NOT NULL THEN 1 END) as pending_resync_count
+            FROM documents
+        """)
+        
+        result = cur.fetchone()
+        total_docs, vectorized_docs, non_vectorized_docs, new_unsynced_count, pending_resync_count = result
+        
+        cur.close()
+        conn.close()
+        
+        # Display basic metrics dashboard (fast loading)
+        st.markdown("### 📊 Document Status")
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("📄 Total Documents", total_docs)
+        with col2:
+            st.metric("✅ Vectorized", vectorized_docs)
+        with col3:
+            st.metric("⏳ Non-vectorized", non_vectorized_docs)
+        with col4:
+            st.metric("📝 New (unsynced)", new_unsynced_count)
+        with col5:
+            st.metric("🔄 Need re-sync", pending_resync_count)
+        
+        # Status messages
         if new_unsynced_count > 0:
-            st.warning(
-                f"🟡 {new_unsynced_count} newly scraped document(s) have **not** been added to the vector store yet.",
-                icon="⚠️"
-            )
-            # (Optional) Preview a few
-            rows_preview = list_new_unsynced_docs(limit=10)
-            if rows_preview:
-                st.write("Newest unsynced docs:")
-                for _id, _title, _updated_at in rows_preview:
-                    st.write(f"- `{_id}` · **{_title or '(untitled)'}** · updated: {str(_updated_at) if _updated_at else 'n/a'}")
+            st.warning(f"🟡 **{new_unsynced_count} newly scraped documents** need to be added to the vector store.")
+        
+        if pending_resync_count > 0:
+            st.info(f"🔄 **{pending_resync_count} documents** need re-vectorization due to content changes.")
+            
+        if new_unsynced_count == 0 and pending_resync_count == 0:
+            try:
+                last_vs_sync = read_last_vector_sync_timestamp()
+                if last_vs_sync:
+                    st.success(f"✅ **All documents are synchronized!** Last sync: {last_vs_sync.isoformat(timespec='seconds')}")
+                else:
+                    st.success("✅ **All documents are synchronized!**")
+            except:
+                st.success("✅ **All documents are synchronized!**")
+        
+        st.markdown("---")
+        
+        # Expensive vector store operations - only load when needed
+        if st.checkbox("🔧 Show vector store management", help="Load detailed vector store statistics (may take a moment)"):
+            with st.spinner("Loading vector store details..."):
+                try:
+                    # Vector store stats (expensive operations)
+                    vs_files = list_all_files_in_vector_store(VECTOR_STORE_ID)
+                    vs_file_count = len(vs_files)
+                    current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(VECTOR_STORE_ID)
+                    
+                    st.markdown("### 🗂️ Vector Store Details")
+                    col6, col7, col8, col9 = st.columns(4)
+                    with col6:
+                        st.metric("📚 VS Files", vs_file_count)
+                    with col7:
+                        st.metric("🔗 Live Files", len(current_ids))
+                    with col8:
+                        st.metric("♻️ Pending Cleanup", len(pending_replacement_ids))
+                    with col9:
+                        st.metric("🧹 Orphans", len(true_orphan_ids))
+                    
+                    # Vector store status messages
+                    if len(true_orphan_ids) > 0:
+                        st.warning(f"🧹 **{len(true_orphan_ids)} orphaned files** in vector store are no longer in the database.")
+                        
+                    if len(pending_replacement_ids) > 0:
+                        st.info(f"♻️ **{len(pending_replacement_ids)} old files** can be cleaned up after successful replacements.")
+                        
+                except Exception as e:
+                    st.error(f"❌ Failed to load vector store details: {e}")
+                    vs_file_count = 0
+                    current_ids = set()
+                    pending_replacement_ids = set()
+                    true_orphan_ids = set()
         else:
-            if last_vs_sync:
-                st.success(f"✅ Vector store is up to date for newly scraped docs. Last sync: {last_vs_sync.isoformat(timespec='seconds')}")
-            else:
-                st.info("ℹ️ No previous vector store sync timestamp found.")
+            # Set defaults when not loading vector store details
+            vs_file_count = 0
+            current_ids = set()
+            pending_replacement_ids = set()
+            true_orphan_ids = set()
+
+        # Display metrics dashboard
+        st.markdown("### 📊 Synchronization Status")
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("📄 Total Documents", total_docs)
+        with col2:
+            st.metric("✅ Vectorized", vectorized_docs)
+        with col3:
+            st.metric("⏳ Non-vectorized", non_vectorized_docs)
+        with col4:
+            st.metric("📝 New (unsynced)", new_unsynced_count)
+        with col5:
+            st.metric("🔄 Need re-sync", pending_resync_count)
+            
+        true_orphan_ids = set()
+
     except Exception as e:
         st.error(f"❌ Failed to compute sync status: {e}")
+        # Set defaults on error
+        new_unsynced_count = 0
+        pending_resync_count = 0
+        vs_file_count = 0
+        current_ids = set()
+        pending_replacement_ids = set()
+        true_orphan_ids = set()
+        
+        st.markdown("---")
+        
+        # Status messages based on counts
+        if new_unsynced_count > 0:
+            st.warning(f"🟡 **{new_unsynced_count} newly scraped documents** need to be added to the vector store.")
+        
+        if pending_resync_count > 0:
+            st.info(f"🔄 **{pending_resync_count} documents** need re-vectorization due to content changes.")
+            
+        if len(true_orphan_ids) > 0:
+            st.warning(f"🧹 **{len(true_orphan_ids)} orphaned files** in vector store are no longer in the database.")
+            
+        if len(pending_replacement_ids) > 0:
+            st.info(f"♻️ **{len(pending_replacement_ids)} old files** can be cleaned up after successful replacements.")
+            
+        if new_unsynced_count == 0 and pending_resync_count == 0:
+            last_vs_sync = read_last_vector_sync_timestamp()
+            if last_vs_sync:
+                st.success(f"✅ **All documents are synchronized!** Last sync: {last_vs_sync.isoformat(timespec='seconds')}")
+            else:
+                st.success("✅ **All documents are synchronized!**")
+                
+    except Exception as e:
+        st.error(f"❌ Failed to compute sync status: {e}")
+
+    # --- Detailed preview of unsynced docs ---
+    if new_unsynced_count > 0:
+        with st.expander(f"📋 Preview of {min(10, new_unsynced_count)} newest unsynced documents"):
+            try:
+                rows_preview = list_new_unsynced_docs(limit=10)
+                for _id, _title, _updated_at in rows_preview:
+                    st.write(f"- **ID {_id}**: {_title or '(untitled)'} · Updated: {str(_updated_at) if _updated_at else 'n/a'}")
+            except Exception as e:
+                st.error(f"Failed to load preview: {e}")
 
     missing_file_ids = find_missing_file_ids(VECTOR_STORE_ID)
     if missing_file_ids:
@@ -474,7 +610,14 @@ if authenticated:
     else:
         print("✅ No missing file IDs found.")
 
-    if st.button("Sync Documents with OpenAI Vector Store"):
+    st.markdown("### 🔧 Vector Store Management")
+
+    # Sync button with better context
+    sync_button_text = "🔄 Sync Documents with Vector Store"
+    if new_unsynced_count > 0 or pending_resync_count > 0:
+        sync_button_text += f" ({new_unsynced_count + pending_resync_count} pending)"
+    
+    if st.button(sync_button_text):
         with st.spinner("Synchronizing documents..."):
             try:
                 result = sync_vector_store()
@@ -493,26 +636,75 @@ if authenticated:
             except Exception as e:
                 st.error(f"❌ Upload failed: {e}")
 
-    st.markdown("#### Vector Store Management")
+    st.markdown("---")
+    st.markdown("### 🗂️ Vector Store File Management")
 
-    # Use set classification to show accurate buckets
-    try:
-        vs_files = list_all_files_in_vector_store(VECTOR_STORE_ID)
-        file_count = len(vs_files)
+    # Show file management options only if there are files to manage
+    if vs_file_count > 0:
+        st.info(f"📁 **Vector Store contains {vs_file_count} files** ({len(current_ids)} live, {len(pending_replacement_ids)} pending cleanup, {len(true_orphan_ids)} orphans)")
+        
+        # Cleanup options - organized by priority and safety
+        st.markdown("#### Safe Cleanup Operations")
+        
+        # Row 1: Safe cleanup operations
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if len(true_orphan_ids) > 0:
+                st.markdown("**🧹 Clean Up Orphaned Files**")
+                st.write(f"Remove {len(true_orphan_ids)} files that are no longer referenced in the database")
+                if st.button("🧹 Delete Orphans", key="delete_orphans"):
+                    with st.spinner("Deleting orphans..."):
+                        try:
+                            delete_file_ids(VECTOR_STORE_ID, true_orphan_ids, label="orphan")
+                            st.success("✅ Deleted all orphans from the vector store.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Failed to delete orphans: {e}")
+            else:
+                st.markdown("**🧹 Clean Up Orphaned Files**")
+                st.write("✅ No orphaned files found")
+        
+        with col2:
+            if len(pending_replacement_ids) > 0:
+                st.markdown("**♻️ Finalize Replacements**")
+                st.write(f"Clean up {len(pending_replacement_ids)} old files after successful content updates")
+                if st.button("♻️ Finalize Replacements", key="finalize_replacements"):
+                    with st.spinner("Finalizing replacements..."):
+                        try:
+                            delete_file_ids(VECTOR_STORE_ID, pending_replacement_ids, label="pending replacement")
+                            clear_old_file_ids(pending_replacement_ids)
+                            st.success("✅ Finalized replacements and cleared DB pointers.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Failed to finalize replacements: {e}")
+            else:
+                st.markdown("**♻️ Finalize Replacements**")
+                st.write("✅ No pending replacements")
+        
+        # Dangerous operation separated and clearly marked
+        st.markdown("---")
+        st.markdown("#### ⚠️ Destructive Operation")
+        st.warning("**Danger Zone**: This will delete ALL files in the vector store!")
+        
+        col_danger1, col_danger2, col_danger3 = st.columns([1, 1, 2])
+        with col_danger2:
+            if st.button("🗑️ Delete ALL Vector Store Files", 
+                        type="secondary", 
+                        help="⚠️ This will permanently delete all files in the vector store"):
+                with st.spinner("Deleting all files..."):
+                    try:
+                        delete_all_files_in_vector_store(VECTOR_STORE_ID)
+                        st.success("✅ All files deleted from the vector store.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Failed to delete files: {e}")
+    else:
+        st.info("📭 Vector store is empty - no files to manage.")
 
-        current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(VECTOR_STORE_ID)
-
-        st.markdown(
-            f"**📄 Total Files in Vector Store:**\n"
-            f"* {file_count} vector-embedded files\n"
-            f"* {len(true_orphan_ids)} are **not mirrored** in the local Knowledge Base (true orphans)\n"
-            f"* {len(pending_replacement_ids)} are **pending replacements** (listed as `old_file_id`)\n"
-            f"* {len(current_ids)} are live (mirrored) files"
-        )
-    except Exception as e:
-        st.error(f"❌ Failed to retrieve file count: {e}")
-
-
+    # Legacy buttons (keeping for compatibility)
+    st.markdown("---")
+    st.markdown("#### Legacy Management Options")
 
     # Button to delete all files in the vector store
     if st.button("🗑️ Delete All Files in Vector Store"):

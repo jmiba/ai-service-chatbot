@@ -7,13 +7,17 @@ from .utils import (
     create_database_if_not_exists,
     create_log_table,
     create_prompt_versions_table,
+    create_url_configs_table,
     initialize_default_prompt_if_empty,
     get_latest_prompt,
     create_knowledge_base_table,
     admin_authentication,
     render_sidebar,
     compute_sha256,
-    get_kb_entries
+    get_kb_entries,
+    save_url_configs,
+    load_url_configs,
+    initialize_default_url_configs
 )
 
 # Now you can import from utils directly, e.g.:
