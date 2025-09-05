@@ -8,6 +8,113 @@ import streamlit as st
 import json
 from openai import OpenAI
 from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs
+import time
+from io import BytesIO
+
+# Import vector store sync functionality
+try:
+    # Try to import from vectorize module (if available as a proper module)
+    from pages.vectorize import sync_vector_store, write_last_vector_sync_timestamp
+except ImportError:
+    # If not available as module, we'll define simplified sync functions here
+    sync_vector_store = None
+    write_last_vector_sync_timestamp = None
+
+# -----------------------------
+# Simplified Vector Store Sync (for use in scrape page)
+# -----------------------------
+def quick_vector_sync():
+    """
+    Simplified vector store sync for the scrape page.
+    Returns count of documents synced or None if failed.
+    """
+    try:
+        # Get OpenAI credentials from secrets
+        OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+        VECTOR_STORE_ID = st.secrets["VECTOR_STORE_ID"]
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # Get documents that need to be synced (vector_file_id is NULL)
+        cur.execute("""
+            SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content
+            FROM documents
+            WHERE vector_file_id IS NULL
+            LIMIT 50
+        """)
+        
+        docs_to_sync = cur.fetchall()
+        
+        if not docs_to_sync:
+            cur.close()
+            conn.close()
+            return 0
+        
+        synced_count = 0
+        
+        for doc_id, url, title, safe_title, crawl_date, lang, summary, tags, markdown in docs_to_sync:
+            try:
+                # Create content with metadata
+                content = f"""---
+title: "{title or ''}"
+url: "{url}"
+summary: "{summary or ''}"
+tags: {tags or []}
+crawl_date: "{crawl_date.isoformat() if crawl_date else ''}"
+language: "{lang or ''}"
+safe_title: "{safe_title or ''}"
+---
+
+{markdown or ''}
+"""
+                
+                # Upload to vector store
+                file_name = f"{doc_id}_{safe_title or 'untitled'}.md"
+                file_stream = BytesIO(content.encode("utf-8"))
+                
+                batch = client.vector_stores.file_batches.upload_and_poll(
+                    vector_store_id=VECTOR_STORE_ID,
+                    files=[(file_name, file_stream)]
+                )
+                
+                if batch.status == "completed":
+                    # Find the uploaded file ID
+                    vs_files = client.vector_stores.files.list(vector_store_id=VECTOR_STORE_ID)
+                    
+                    for vs_file in vs_files.data:
+                        file_obj = client.files.retrieve(vs_file.id)
+                        if file_obj.filename == file_name:
+                            # Update database with vector file ID
+                            cur.execute("""
+                                UPDATE documents 
+                                SET vector_file_id = %s, updated_at = NOW()
+                                WHERE id = %s
+                            """, (vs_file.id, doc_id))
+                            synced_count += 1
+                            break
+                
+            except Exception as e:
+                print(f"Failed to sync document {doc_id}: {e}")
+                continue
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        # Write sync timestamp
+        try:
+            with open("last_vector_sync.txt", "w") as f:
+                f.write(datetime.now().isoformat())
+        except:
+            pass  # Non-critical
+        
+        return synced_count
+        
+    except Exception as e:
+        print(f"Vector sync failed: {e}")
+        return None
 
 # -----------------------------
 # Auth / sidebar
@@ -871,7 +978,21 @@ def main():
             # Add quick action for vector sync
             if pending_sync > 0:
                 if st.button("🔄 Sync Vector Store"):
-                    st.info("Vector store sync would be triggered here (feature pending)")
+                    with st.spinner(f"Syncing {pending_sync} documents to vector store..."):
+                        try:
+                            synced_count = quick_vector_sync()
+                            if synced_count is not None:
+                                if synced_count > 0:
+                                    st.success(f"✅ Successfully synced {synced_count} documents to vector store!")
+                                    st.balloons()
+                                    time.sleep(1)
+                                    st.rerun()  # Refresh to show updated counts
+                                else:
+                                    st.info("ℹ️ No documents needed syncing.")
+                            else:
+                                st.error("❌ Vector store sync failed. Please try again.")
+                        except Exception as e:
+                            st.error(f"❌ Sync error: {str(e)}")
             else:
                 st.success("✅ All synced")
                 

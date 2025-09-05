@@ -467,6 +467,30 @@ safe_title: "{safe_title or ''}"
 authenticated = admin_authentication()
 render_sidebar(authenticated)
 
+# -----------------------------
+# Terminal-style logging for vectorize operations
+# -----------------------------
+import io
+import sys
+from contextlib import redirect_stdout
+
+def capture_sync_output():
+    """Context manager to capture print output during sync"""
+    output_buffer = io.StringIO()
+    return output_buffer
+
+def display_sync_log(log_container, output_buffer):
+    """Display captured output in terminal-style interface"""
+    output_text = output_buffer.getvalue()
+    if output_text:
+        log_container.text_area(
+            "📋 Sync Progress Log", 
+            value=output_text,
+            height=400,
+            disabled=True,
+            key=f"sync_log_{time.time()}"  # Unique key for each sync
+        )
+
 def read_last_export_timestamp():
     try:
         with open("last_export.txt", "r") as f:
@@ -711,23 +735,109 @@ if authenticated:
         sync_button_text += f" ({new_unsynced_count + pending_resync_count} pending)"
     
     if st.button(sync_button_text):
-        with st.spinner("Synchronizing documents..."):
+        # Create containers for status and terminal output
+        status_container = st.container()
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        log_container = st.empty()
+        
+        with status_container:
+            status_text.info("🚀 **Starting synchronization process...**")
+            progress_bar.progress(10)
+            
+            # Create output buffer to capture print statements
+            output_buffer = io.StringIO()
+            
             try:
-                result = sync_vector_store()
-                st.success("✅ Upload completed successfully.")
-                if result:
-                    st.subheader("📤 Sync Summary")
-                    st.markdown(f"**Uploaded {result['uploaded_count']} new/updated document(s) to the vector store.**")
-
-                    if result["synced_files"]:
-                        with st.expander("See synced file list"):
-                            for fname in result["synced_files"]:
-                                # Strip the numeric prefix if you want, keep just the human part
-                                pretty_name = fname.split("_", 1)[1] if "_" in fname else fname
-                                st.write(f"- {pretty_name}")
+                status_text.info("📤 **Uploading documents to vector store...**")
+                progress_bar.progress(30)
+                
+                # Capture all print output during sync
+                with redirect_stdout(output_buffer):
+                    result = sync_vector_store()
+                
+                # Display the captured output in terminal style
+                display_sync_log(log_container, output_buffer)
+                
+                status_text.info("🔄 **Finalizing synchronization...**")
+                progress_bar.progress(80)
+                
+                # Get updated counts after sync
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT 
+                        COUNT(CASE WHEN vector_file_id IS NULL AND old_file_id IS NULL THEN 1 END) as new_unsynced_count,
+                        COUNT(CASE WHEN vector_file_id IS NULL AND old_file_id IS NOT NULL THEN 1 END) as pending_resync_count,
+                        COUNT(CASE WHEN vector_file_id IS NOT NULL THEN 1 END) as vectorized_docs
+                    FROM documents
+                """)
+                updated_counts = cur.fetchone()
+                updated_new_count, updated_resync_count, updated_vectorized = updated_counts
+                cur.close()
+                conn.close()
+                
+                progress_bar.progress(100)
+                
+                # Success message with detailed results
+                st.success("✅ **Synchronization completed successfully!**")
+                
+                # Show sync summary in an info box
+                with st.container():
+                    st.markdown("### 📊 Sync Results")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("📤 Uploaded", 
+                                 result['uploaded_count'] if result else 0,
+                                 help="Documents successfully uploaded to vector store")
+                    with col2:
+                        st.metric("📝 New Remaining", 
+                                 updated_new_count,
+                                 help="New documents still waiting for sync")
+                    with col3:
+                        st.metric("🔄 Re-sync Remaining", 
+                                 updated_resync_count,
+                                 help="Documents still needing re-synchronization")
+                    with col4:
+                        st.metric("✅ Total Vectorized", 
+                                 updated_vectorized,
+                                 help="Total documents now in vector store")
+                    
+                    if result and result["uploaded_count"] > 0:
+                        st.info(f"🎉 **{result['uploaded_count']} documents** were successfully uploaded to the vector store and are now available for AI search!")
+                        
+                        if result["synced_files"]:
+                            with st.expander("📋 View uploaded files", expanded=False):
+                                for fname in result["synced_files"]:
+                                    # Strip the numeric prefix for cleaner display
+                                    pretty_name = fname.split("_", 1)[1] if "_" in fname else fname
+                                    st.write(f"✅ {pretty_name}")
+                    
+                    # Show next steps or all-clear message
+                    if updated_new_count == 0 and updated_resync_count == 0:
+                        st.success("🎯 **All documents are now synchronized!** Your knowledge base is fully up to date.")
+                    else:
+                        remaining_total = updated_new_count + updated_resync_count
+                        st.warning(f"📋 **{remaining_total} documents** still need synchronization. Run sync again if needed.")
+                
+                # Clear the progress indicators
+                progress_bar.empty()
+                status_text.empty()
+                
+                # Force cache refresh and page refresh to show updated status
+                _vs_files_cache["data"] = None  # Clear cache to ensure fresh data
+                st.balloons()  # Celebrate successful sync!
+                time.sleep(1)  # Brief pause to show balloons
+                st.rerun()  # Refresh the page to show updated metrics
 
             except Exception as e:
-                st.error(f"❌ Upload failed: {e}")
+                # Still show captured output even if there was an error
+                display_sync_log(log_container, output_buffer)
+                progress_bar.empty()
+                status_text.empty()
+                st.error(f"❌ **Synchronization failed:** {e}")
+                st.info("💡 Try running the sync again or check the logs above for more details.")
 
     st.markdown("---")
     st.markdown("### 🗂️ Vector Store File Management")
