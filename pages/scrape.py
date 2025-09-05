@@ -23,6 +23,7 @@ visited_norm = set()  # authoritative dedupe on normalized URLs
 frontier_seen = []    # for Dry Run reporting in the UI
 base_path = None      # base path to restrict scraping to
 processed_pages_count = 0  # count of pages processed by LLM and saved to DB
+dry_run_llm_eligible_count = 0  # count of pages that would be LLM processed in dry run mode
 
 # -----------------------------
 # URL Normalization Utilities
@@ -160,6 +161,13 @@ def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary,
 def get_existing_markdown_hash(conn, url):
     with conn.cursor() as cur:
         cur.execute("SELECT markdown_hash FROM documents WHERE url = %s", (url,))
+        result = cur.fetchone()
+        return result[0] if result else None
+
+def check_content_hash_exists(conn, content_hash):
+    """Check if any document with this content hash already exists in the database"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT url FROM documents WHERE markdown_hash = %s LIMIT 1", (content_hash,))
         result = cur.fetchone()
         return result[0] if result else None
 
@@ -401,9 +409,26 @@ def normalize_text(text):
 
 def is_page_not_found(text):
     text = text.strip().lower()
-    return any(phrase in text for phrase in [
-        "page not found", "seite nicht gefunden", "404-fehler", "# page not found"
-    ])
+    # Extended 404 detection patterns
+    error_patterns = [
+        "page not found", "seite nicht gefunden", "404-fehler", "# page not found",
+        "404 error", "not found", "page does not exist", "seite existiert nicht",
+        "fehler 404", "error 404", "diese seite wurde nicht gefunden",
+        "the requested page could not be found", "die angeforderte seite wurde nicht gefunden",
+        "sorry, this page doesn't exist", "entschuldigung, diese seite existiert nicht",
+        "oops! page not found", "ups! seite nicht gefunden",
+        "the page you are looking for", "die seite, die sie suchen"
+    ]
+    
+    # Check for multiple patterns to increase confidence
+    matches = sum(1 for pattern in error_patterns if pattern in text)
+    
+    # Also check for very short content that just says "not found" or similar
+    if len(text.strip()) < 100 and any(pattern in text for pattern in ["not found", "404", "nicht gefunden"]):
+        return True
+        
+    # Require at least one clear error pattern
+    return matches > 0
 
 def is_empty_markdown(markdown, min_length=50):
     if not markdown or not markdown.strip():
@@ -500,6 +525,21 @@ def scrape(url,
     # GET the page
     try:
         response = requests.get(norm_url, timeout=15)
+        
+        # Check HTTP status code - skip 404s and other error pages
+        if response.status_code == 404:
+            if log_callback:
+                log_callback(f"{'  ' * depth}🚫 Skipping 404 Not Found: {norm_url}")
+            return
+        elif response.status_code >= 400:
+            if log_callback:
+                log_callback(f"{'  ' * depth}❌ HTTP {response.status_code} error for {norm_url}")
+            return
+        elif response.status_code >= 300:
+            if log_callback:
+                log_callback(f"{'  ' * depth}🔄 HTTP {response.status_code} redirect for {norm_url} (following redirect)")
+            # Note: requests follows redirects by default, so this is just for logging
+            
     except requests.RequestException as e:
         if log_callback:
             log_callback(f"{'  ' * depth}❌ Error fetching {norm_url}: {e}")
@@ -546,6 +586,13 @@ def scrape(url,
     # Content extraction
     main = extract_main_content(soup, depth)
     if main:
+        # Check page title for 404 indicators
+        title = soup.title.string.strip().lower() if soup.title and soup.title.string else ""
+        if title and any(pattern in title for pattern in ["404", "not found", "nicht gefunden", "error", "fehler"]):
+            if log_callback:
+                log_callback(f"{'  ' * depth}🚫 Skipping error page (title indicates 404): {norm_url}")
+            return
+            
         main_text = main.get_text(separator=' ', strip=True).lower()
         if is_page_not_found(main_text):
             if log_callback:
@@ -559,10 +606,51 @@ def scrape(url,
                 log_callback(f"{'  ' * depth}📄 Skipping {norm_url}: no meaningful content after extraction.")
             return
 
-        # DB churn prevention
-        existing_hash = get_existing_markdown_hash(conn, norm_url) if (conn and not dry_run) else None
+        # DB churn prevention - check even in dry run to get accurate "new/changed" count
         current_hash = compute_sha256(markdown)
+        
+        if dry_run:
+            # For dry run, create a temporary connection to check existing hashes
+            try:
+                temp_conn = get_connection()
+                existing_hash = get_existing_markdown_hash(temp_conn, norm_url)
+                duplicate_content_url = check_content_hash_exists(temp_conn, current_hash)
+                temp_conn.close()
+            except Exception as e:
+                if log_callback:
+                    log_callback(f"{'  ' * depth}⚠️ Could not check existing hash in dry run: {e}")
+                existing_hash = None
+                duplicate_content_url = None
+        else:
+            existing_hash = get_existing_markdown_hash(conn, norm_url) if conn else None
+            duplicate_content_url = check_content_hash_exists(conn, current_hash) if conn else None
+            
+        # Skip if this exact content already exists anywhere in the database
+        if duplicate_content_url and duplicate_content_url != norm_url:
+            if log_callback:
+                if dry_run:
+                    log_callback(f"{'  ' * depth}🔄 [DRY RUN] DUPLICATE content - would skip (same as {duplicate_content_url}): {norm_url}")
+                else:
+                    log_callback(f"{'  ' * depth}🔄 DUPLICATE content - skipping (same as {duplicate_content_url}): {norm_url}")
+            return
+            
         skip_summary_and_db = (existing_hash == current_hash) if existing_hash is not None else False
+
+        # In dry run mode, count pages that would be LLM processed (new or changed content)
+        if dry_run and not skip_summary_and_db:
+            global dry_run_llm_eligible_count
+            dry_run_llm_eligible_count += 1
+            if existing_hash is None:
+                if log_callback:
+                    log_callback(f"{'  ' * depth}🤖 [DRY RUN] NEW page - would process with LLM: {norm_url}")
+            else:
+                if log_callback:
+                    log_callback(f"{'  ' * depth}🤖 [DRY RUN] CHANGED page - would process with LLM: {norm_url}")
+            if log_callback:
+                log_callback(f"{'  ' * depth}📊 Pages that would be LLM processed so far: {dry_run_llm_eligible_count}")
+        elif dry_run and skip_summary_and_db:
+            if log_callback:
+                log_callback(f"{'  ' * depth}⏭️ [DRY RUN] UNCHANGED page - would skip LLM: {norm_url}")
 
         if not (skip_summary_and_db or dry_run):
             try:
@@ -1032,10 +1120,11 @@ def main():
         visited_raw.clear()
         visited_norm.clear()
         frontier_seen.clear()
-        global base_path, processed_pages_count
+        global base_path, processed_pages_count, dry_run_llm_eligible_count
         base_path = None  # Reset base path for new session
         processed_pages_count = 0  # Reset processed pages counter
-        add_log("✅ Visited sets, base path, and processed pages counter cleared")
+        dry_run_llm_eligible_count = 0  # Reset dry run LLM counter
+        add_log("✅ Visited sets, base path, and all counters cleared")
         update_log_display()
 
         try:
@@ -1061,7 +1150,10 @@ def main():
             def update_metrics():
                 """Update metrics without creating new containers"""
                 metric_urls.metric("URLs Visited", len(visited_norm))
-                metric_llm.metric("LLM Processed", processed_pages_count)
+                if dry_run:
+                    metric_llm.metric("New/Changed Pages", dry_run_llm_eligible_count)
+                else:
+                    metric_llm.metric("LLM Processed", processed_pages_count)
                 metric_config.metric("Current Config", f"{current_config}/{total_configs}")
             
             # Count total configurations to estimate progress
@@ -1099,11 +1191,17 @@ def main():
                     def update_progress():
                         try:
                             # Update status text immediately  
-                            status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | LLM Processed: {processed_pages_count}")
+                            if dry_run:
+                                status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | New/Changed: {dry_run_llm_eligible_count}")
+                            else:
+                                status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | LLM Processed: {processed_pages_count}")
                             
                             # Add log entry for significant progress
                             if len(visited_norm) % 10 == 0:  # Log every 10 URLs
-                                add_log(f"📈 Progress: {len(visited_norm)} URLs visited, {processed_pages_count} LLM processed")
+                                if dry_run:
+                                    add_log(f"📈 Progress: {len(visited_norm)} URLs visited, {dry_run_llm_eligible_count} new/changed pages")
+                                else:
+                                    add_log(f"📈 Progress: {len(visited_norm)} URLs visited, {processed_pages_count} LLM processed")
                                 update_log_display()
                             
                             # Update metrics using the dedicated function
@@ -1120,14 +1218,20 @@ def main():
                     )
                     
                     add_log(f"✅ Completed config {current_config}/{total_configs}: {url}")
-                    add_log(f"   📊 URLs visited: {len(visited_norm)}, LLM processed: {processed_pages_count}")
+                    if dry_run:
+                        add_log(f"   📊 URLs visited: {len(visited_norm)}, new/changed pages: {dry_run_llm_eligible_count}")
+                    else:
+                        add_log(f"   📊 URLs visited: {len(visited_norm)}, LLM processed: {processed_pages_count}")
                     update_log_display()
             
             # Final progress update
             progress_bar.progress(1.0)
             status_text.write("✅ **Completed all URL configurations**")
             add_log("🎉 All URL configurations completed!")
-            add_log(f"📈 Final stats: {len(visited_norm)} URLs visited, {processed_pages_count} pages processed by LLM")
+            if dry_run:
+                add_log(f"📈 Final stats: {len(visited_norm)} URLs visited, {dry_run_llm_eligible_count} new/changed pages would be LLM processed")
+            else:
+                add_log(f"📈 Final stats: {len(visited_norm)} URLs visited, {processed_pages_count} pages processed by LLM")
             update_log_display()
             
             if not dry_run:
@@ -1160,17 +1264,21 @@ def main():
         with col3:
             if not dry_run:
                 st.metric("Pages Processed by LLM", f"{processed_pages_count}", 
-                            help="Number of pages that were processed by LLM and saved to database (waiting for vector sync)")
+                         help="Number of pages that were processed by LLM and saved to database (waiting for vector sync)")
             else:
-                st.metric("Dry Run Mode", "Active", help="No LLM processing or database writes performed")
+                st.metric("Would LLM Process", f"{dry_run_llm_eligible_count}", 
+                         help="Number of pages that would be processed by LLM in a real run (excluding duplicates)")
         
         if not dry_run:
             if processed_pages_count > 0:
                 st.success(f"✅ {processed_pages_count} pages are ready for vector store synchronization")
             else:
                 st.info("ℹ️ No new pages were processed (all pages may have been skipped or already exist)")
-        
-        # Improved frontier display
+        else:
+            if dry_run_llm_eligible_count > 0:
+                st.info(f"🧪 **Dry Run Results**: {dry_run_llm_eligible_count} pages would be processed by LLM in a real run")
+            else:
+                st.info("🧪 **Dry Run Results**: No pages would be processed by LLM (all may be duplicates or filtered out)")        # Improved frontier display
         if frontier_seen:
             with st.expander(f"📋 View Processed URLs ({len(frontier_seen)} total)", expanded=False):
                 # Group URLs by domain for better readability

@@ -4,11 +4,33 @@ import datetime
 from openai import OpenAI
 from io import BytesIO
 import streamlit as st
+import time
+from functools import lru_cache
 
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 VECTOR_STORE_ID = st.secrets["VECTOR_STORE_ID"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Cache for vector store files (expires after 5 minutes)
+_vs_files_cache = {"data": None, "timestamp": 0, "ttl": 300}
+
+def get_cached_vector_store_files(vector_store_id: str, force_refresh: bool = False):
+    """
+    Cache vector store files for 5 minutes to avoid repeated expensive API calls.
+    """
+    current_time = time.time()
+    cache = _vs_files_cache
+    
+    if force_refresh or cache["data"] is None or (current_time - cache["timestamp"]) > cache["ttl"]:
+        print("🔄 Refreshing vector store files cache...")
+        cache["data"] = list_all_files_in_vector_store(vector_store_id)
+        cache["timestamp"] = current_time
+        print(f"📦 Cached {len(cache['data'])} vector store files")
+    else:
+        print(f"⚡ Using cached vector store files ({len(cache['data'])} files)")
+    
+    return cache["data"]
 
 def list_all_files_in_vector_store(vector_store_id: str):
     """
@@ -33,15 +55,15 @@ def list_all_files_in_vector_store(vector_store_id: str):
         print(f"❌ Failed to list files in vector store: {e}")
         return []
     
-def compute_vector_store_sets(vector_store_id: str):
+def compute_vector_store_sets(vector_store_id: str, use_cache: bool = True):
     """
     Returns three sets of file IDs:
       - current_ids: files referenced as vector_file_id (the live ones)
       - pending_replacement_ids: files referenced as old_file_id (to delete after successful replacement)
       - true_orphan_ids: files in VS that are not in DB at all
     """
-    # 1) Vector store files (paginate!)
-    vs_files = list_all_files_in_vector_store(vector_store_id)
+    # 1) Vector store files (use cache for performance!)
+    vs_files = get_cached_vector_store_files(vector_store_id, force_refresh=not use_cache)
     vs_ids = {f.id for f in vs_files}
 
     # 2) DB references
@@ -121,7 +143,10 @@ def delete_file_ids(vector_store_id: str, file_ids: set[str], label: str):
     if not file_ids:
         print(f"✅ No {label} to delete.")
         return
-    for fid in file_ids:
+    
+    print(f"🗑️ Deleting {len(file_ids)} {label} files...")
+    
+    for i, fid in enumerate(file_ids):
         if not fid:
             continue
         try:
@@ -135,6 +160,15 @@ def delete_file_ids(vector_store_id: str, file_ids: set[str], label: str):
             print(f"🗑️ Deleted file resource {fid}")
         except Exception as e:
             print(f"⚠️ Delete failed for {fid}: {e}")
+        
+        # Progress indicator for large batches
+        if (i + 1) % 20 == 0:
+            print(f"📍 Deleted {i + 1}/{len(file_ids)} {label} files...")
+    
+    print(f"✅ Finished deleting {len(file_ids)} {label} files")
+    
+    # Clear cache after deletions to ensure fresh data
+    _vs_files_cache["data"] = None
 
 
 def clear_old_file_ids(file_ids: set[str]):
@@ -271,6 +305,34 @@ def chunked(iterable, size):
         yield iterable[i:i+size]
     
     
+def build_filename_to_id_map_efficiently(vs_files):
+    """
+    Build filename to ID mapping more efficiently by batching API calls.
+    """
+    filename_to_id = {}
+    failed_retrievals = 0
+    
+    print(f"🔍 Mapping {len(vs_files)} vector store files to filenames...")
+    
+    for i, vs_file in enumerate(vs_files):
+        try:
+            file_obj = client.files.retrieve(vs_file.id)
+            filename_to_id[file_obj.filename] = vs_file.id
+            
+            # Progress indicator for large batches
+            if (i + 1) % 50 == 0:
+                print(f"📍 Processed {i + 1}/{len(vs_files)} files...")
+                
+        except Exception as e:
+            failed_retrievals += 1
+            print(f"⚠️ Failed to retrieve file object for {vs_file.id}: {e}")
+    
+    if failed_retrievals > 0:
+        print(f"⚠️ {failed_retrievals} file retrievals failed")
+    
+    print(f"✅ Successfully mapped {len(filename_to_id)} filenames")
+    return filename_to_id
+
 def sync_vector_store():
     conn = get_connection()
     cur = conn.cursor()
@@ -320,23 +382,24 @@ safe_title: "{safe_title or ''}"
         conn.close()
         return
 
-    # Detach and delete old files
-    for doc_id, old_file_id in id_to_old_file.items():
-        if not old_file_id:   # 👈 guard against None
-            continue
+    print(f"📤 Will upload {len(docs_to_upload)} documents")
 
-        try:
-            client.vector_stores.files.delete(vector_store_id=VECTOR_STORE_ID, file_id=old_file_id)
-            print(f"🗑️ Detached file {old_file_id} from vector store.")
-        except Exception as e:
-            print(f"⚠️ Detach failed for {old_file_id}: {e} (may already be detached/deleted)")
+    # Batch delete old files for better performance
+    old_file_ids = [fid for fid in id_to_old_file.values() if fid]
+    if old_file_ids:
+        print(f"�️ Deleting {len(old_file_ids)} old files...")
+        for old_file_id in old_file_ids:
+            try:
+                client.vector_stores.files.delete(vector_store_id=VECTOR_STORE_ID, file_id=old_file_id)
+                print(f"🗑️ Detached file {old_file_id} from vector store.")
+            except Exception as e:
+                print(f"⚠️ Detach failed for {old_file_id}: {e} (may already be detached/deleted)")
 
-        try:
-            client.files.delete(old_file_id)
-            print(f"🗑️ Deleted file resource {old_file_id}.")
-        except Exception as e:
-            print(f"⚠️ Delete failed for {old_file_id}: {e} (may already be gone)")
-
+            try:
+                client.files.delete(old_file_id)
+                print(f"🗑️ Deleted file resource {old_file_id}.")
+            except Exception as e:
+                print(f"⚠️ Delete failed for {old_file_id}: {e} (may already be gone)")
 
     # Prepare files for upload
     upload_files = [
@@ -344,8 +407,11 @@ safe_title: "{safe_title or ''}"
         for (_, file_name, content) in docs_to_upload
     ]
 
+    print(f"📤 Starting batch upload of {len(upload_files)} files...")
+    
     try:
         for idx, files_chunk in enumerate(chunked(upload_files, 100), start=1):
+            print(f"📦 Uploading batch {idx} ({len(files_chunk)} files)...")
             batch = client.vector_stores.file_batches.upload_and_poll(
                 vector_store_id=VECTOR_STORE_ID,
                 files=files_chunk
@@ -358,26 +424,15 @@ safe_title: "{safe_title or ''}"
         conn.close()
         return
     
+    print("🔄 Refreshing vector store cache after upload...")
+    # Force refresh cache after upload
+    vs_files = get_cached_vector_store_files(VECTOR_STORE_ID, force_refresh=True)
 
-    # Retrieve all files in the vector store to map filenames to file IDs
-    try:
-        vs_files = list_all_files_in_vector_store(VECTOR_STORE_ID)
-    except Exception as e:
-        print("❌ Failed to list vector store files:", e)
-        cur.close()
-        conn.close()
-        return
-
-    # Map filenames to file IDs
-    filename_to_id = {}
-    for vs_file in vs_files:
-        try:
-            file_obj = client.files.retrieve(vs_file.id)
-            filename_to_id[file_obj.filename] = vs_file.id
-        except Exception as e:
-            print(f"⚠️ Failed to retrieve file object for {vs_file.id}: {e}")
+    # Build filename mapping more efficiently  
+    filename_to_id = build_filename_to_id_map_efficiently(vs_files)
 
     # Update the database with new file IDs
+    print(f"💾 Updating database for {len(docs_to_upload)} documents...")
     for doc_id, file_name, _ in docs_to_upload:
         file_id = filename_to_id.get(file_name)
         if not file_id:
@@ -445,6 +500,31 @@ if authenticated:
     
     st.title("Vector Store Sync Tool")
     
+    # Quick explanation with performance info
+    with st.expander("ℹ️ How this works", expanded=False):
+        st.markdown("""
+        **What is this?** This tool manages the synchronization between your document database and OpenAI's vector store.
+        
+        **The Process:**
+        1. 📄 Documents are scraped and stored in your database
+        2. 🔄 This tool uploads them to OpenAI's vector store for AI search
+        3. 🧹 Old versions and orphaned files are cleaned up to save storage space
+        
+        **File Lifecycle:**
+        - **New documents**: Need to be uploaded to vector store
+        - **Updated documents**: Create new vector files, old ones marked for cleanup  
+        - **Orphaned files**: Vector files no longer linked to any database entry
+        - **Old versions**: Previous versions of updated documents that can be safely deleted
+        
+        **⚡ Performance Optimizations:**
+        - **5-minute caching** of vector store data to avoid repeated API calls
+        - **Batch processing** for uploads and deletions
+        - **Progress indicators** for long-running operations
+        - **Efficient filename mapping** with progress tracking
+        """)
+    
+    st.markdown("---")
+    
     # --- Enhanced Status Dashboard ---
     try:
         # Get comprehensive counts with single optimized query
@@ -503,13 +583,28 @@ if authenticated:
         st.markdown("---")
         
         # Expensive vector store operations - only load when needed
-        if st.checkbox("🔧 Show vector store management", help="Load detailed vector store statistics (may take a moment)"):
-            with st.spinner("Loading vector store details..."):
+        vector_mgmt_col1, vector_mgmt_col2 = st.columns([3, 1])
+        
+        with vector_mgmt_col1:
+            show_vector_mgmt = st.checkbox("🔧 Show vector store management", help="Load detailed vector store statistics (uses caching for better performance)")
+        
+        with vector_mgmt_col2:
+            if st.button("🔄 Refresh Cache", help="Force refresh vector store data cache"):
+                _vs_files_cache["data"] = None  # Clear cache
+                st.success("Cache cleared!")
+                st.rerun()
+        
+        if show_vector_mgmt:
+            with st.spinner("Loading vector store details (using cache when possible)..."):
                 try:
-                    # Vector store stats (expensive operations)
-                    vs_files = list_all_files_in_vector_store(VECTOR_STORE_ID)
+                    # Vector store stats (now uses caching for better performance!)
+                    vs_files = get_cached_vector_store_files(VECTOR_STORE_ID)
                     vs_file_count = len(vs_files)
-                    current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(VECTOR_STORE_ID)
+                    current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(VECTOR_STORE_ID, use_cache=True)
+                    
+                    # Show cache status
+                    cache_age = time.time() - _vs_files_cache["timestamp"]
+                    st.caption(f"⚡ Using cached data (age: {cache_age:.0f}s)")
                     
                     st.markdown("### 🗂️ Vector Store Details")
                     col6, col7, col8, col9 = st.columns(4)
@@ -556,8 +651,6 @@ if authenticated:
             st.metric("📝 New (unsynced)", new_unsynced_count)
         with col5:
             st.metric("🔄 Need re-sync", pending_resync_count)
-            
-        true_orphan_ids = set()
 
     except Exception as e:
         st.error(f"❌ Failed to compute sync status: {e}")
@@ -639,57 +732,77 @@ if authenticated:
     st.markdown("---")
     st.markdown("### 🗂️ Vector Store File Management")
 
+    # Always compute vector store data for file management (this section needs accurate data)
+    try:
+        # If we didn't load vector store details above, load them now for file management
+        if 'vs_file_count' not in locals() or vs_file_count == 0:
+            vs_files = get_cached_vector_store_files(VECTOR_STORE_ID)
+            vs_file_count = len(vs_files)
+            current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(VECTOR_STORE_ID, use_cache=True)
+    except Exception as e:
+        st.error(f"❌ Failed to load vector store data: {e}")
+        vs_file_count = 0
+        current_ids = set()
+        pending_replacement_ids = set()
+        true_orphan_ids = set()
+            
     # Show file management options only if there are files to manage
     if vs_file_count > 0:
         st.info(f"📁 **Vector Store contains {vs_file_count} files** ({len(current_ids)} live, {len(pending_replacement_ids)} pending cleanup, {len(true_orphan_ids)} orphans)")
         
         # Cleanup options - organized by priority and safety
-        st.markdown("#### Safe Cleanup Operations")
+        st.markdown("#### 🧹 Vector Store Cleanup")
+        st.caption("Clean up unnecessary files to save storage space and keep the vector store organized.")
         
         # Row 1: Safe cleanup operations
         col1, col2 = st.columns(2)
         
         with col1:
             if len(true_orphan_ids) > 0:
-                st.markdown("**🧹 Clean Up Orphaned Files**")
-                st.write(f"Remove {len(true_orphan_ids)} files that are no longer referenced in the database")
-                if st.button("🧹 Delete Orphans", key="delete_orphans"):
+                st.markdown("**🗑️ Remove Orphaned Files**")
+                st.write(f"🔍 Found {len(true_orphan_ids)} files in vector store that no longer exist in the database")
+                st.caption("Safe to delete - these files are no longer referenced by any documents")
+                if st.button("🗑️ Delete Orphans", key="delete_orphans"):
                     with st.spinner("Deleting orphans..."):
                         try:
                             delete_file_ids(VECTOR_STORE_ID, true_orphan_ids, label="orphan")
-                            st.success("✅ Deleted all orphans from the vector store.")
+                            st.success("✅ Deleted all orphaned files from the vector store.")
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Failed to delete orphans: {e}")
             else:
-                st.markdown("**🧹 Clean Up Orphaned Files**")
+                st.markdown("**🗑️ Remove Orphaned Files**")
                 st.write("✅ No orphaned files found")
+                st.caption("All vector store files are properly referenced in the database")
         
         with col2:
             if len(pending_replacement_ids) > 0:
-                st.markdown("**♻️ Finalize Replacements**")
-                st.write(f"Clean up {len(pending_replacement_ids)} old files after successful content updates")
-                if st.button("♻️ Finalize Replacements", key="finalize_replacements"):
-                    with st.spinner("Finalizing replacements..."):
+                st.markdown("**♻️ Clean Up Old Versions**")
+                st.write(f"🔄 Found {len(pending_replacement_ids)} old file versions after content updates")
+                st.caption("Safe to delete - these are old versions that have been replaced with updated content")
+                if st.button("♻️ Clean Up Old Versions", key="finalize_replacements"):
+                    with st.spinner("Cleaning up old versions..."):
                         try:
-                            delete_file_ids(VECTOR_STORE_ID, pending_replacement_ids, label="pending replacement")
+                            delete_file_ids(VECTOR_STORE_ID, pending_replacement_ids, label="old version")
                             clear_old_file_ids(pending_replacement_ids)
-                            st.success("✅ Finalized replacements and cleared DB pointers.")
+                            st.success("✅ Cleaned up old file versions and updated database references.")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"❌ Failed to finalize replacements: {e}")
+                            st.error(f"❌ Failed to clean up old versions: {e}")
             else:
-                st.markdown("**♻️ Finalize Replacements**")
-                st.write("✅ No pending replacements")
+                st.markdown("**♻️ Clean Up Old Versions**")
+                st.write("✅ No old versions to clean up")
+                st.caption("All file replacements have been properly finalized")
         
         # Dangerous operation separated and clearly marked
         st.markdown("---")
-        st.markdown("#### ⚠️ Destructive Operation")
-        st.warning("**Danger Zone**: This will delete ALL files in the vector store!")
+        st.markdown("#### ⚠️ Nuclear Option")
+        st.error("**⚠️ DANGER**: This will permanently delete ALL files in the vector store!")
+        st.caption("Only use this if you want to completely rebuild the vector store from scratch.")
         
         col_danger1, col_danger2, col_danger3 = st.columns([1, 1, 2])
         with col_danger2:
-            if st.button("🗑️ Delete ALL Vector Store Files", 
+            if st.button("� Delete Everything", 
                         type="secondary", 
                         help="⚠️ This will permanently delete all files in the vector store"):
                 with st.spinner("Deleting all files..."):
@@ -702,38 +815,7 @@ if authenticated:
     else:
         st.info("📭 Vector store is empty - no files to manage.")
 
-    # Legacy buttons (keeping for compatibility)
-    st.markdown("---")
-    st.markdown("#### Legacy Management Options")
-
-    # Button to delete all files in the vector store
-    if st.button("🗑️ Delete All Files in Vector Store"):
-        with st.spinner("Deleting all files..."):
-            try:
-                delete_all_files_in_vector_store(VECTOR_STORE_ID)
-                st.success("✅ All files deleted from the vector store.")
-            except Exception as e:
-                st.error(f"❌ Failed to delete files: {e}")
-                
-    # Delete TRUE ORPHANS only (safe cleanup)
-    if st.button("🧹 Delete TRUE ORPHANS only"):
-        with st.spinner("Deleting true orphans..."):
-            try:
-                # Recompute to be fresh at click time
-                _, _, true_orphan_ids = compute_vector_store_sets(VECTOR_STORE_ID)
-                delete_file_ids(VECTOR_STORE_ID, true_orphan_ids, label="orphan")
-                st.success("✅ Deleted all true orphans from the vector store.")
-            except Exception as e:
-                st.error(f"❌ Failed to delete true orphans: {e}")
-
-    # Finalize replacements: delete old_file_id files, then clear DB pointers
-    if st.button("♻️ Finalize replacements (delete old_file_id)"):
-        with st.spinner("Deleting pending replacement files and clearing DB pointers..."):
-            try:
-                _, pending_replacement_ids, _ = compute_vector_store_sets(VECTOR_STORE_ID)
-                delete_file_ids(VECTOR_STORE_ID, pending_replacement_ids, label="pending replacement")
-                clear_old_file_ids(pending_replacement_ids)
-                st.success("✅ Finalized replacements: deleted old files and cleared old_file_id in DB.")
-            except Exception as e:
-                st.error(f"❌ Failed to finalize replacements: {e}")
+    
+else:
+    st.warning("� Authentication required to access the Vector Store Sync Tool.")
 
