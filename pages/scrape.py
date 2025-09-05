@@ -696,6 +696,11 @@ def main():
 
     # Buttons to add/remove URL config blocks
     st.markdown("##### Configuration Management")
+    st.info("💡 **Auto-save**: Configurations are automatically saved when you add/remove entries. Use the Save button after making changes to existing configurations.")
+    
+    # Create a placeholder for status messages
+    message_placeholder = st.empty()
+    
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("➕ Add URL Configuration for Web Scraping"):
@@ -708,9 +713,9 @@ def main():
             })
             try:
                 save_url_configs(st.session_state.url_configs)
-                st.success("✅ Configuration added and saved!")
+                message_placeholder.success("✅ Configuration added and saved!")
             except Exception as e:
-                st.error(f"Failed to save configuration: {e}")
+                message_placeholder.error(f"Failed to save configuration: {e}")
             st.rerun()
     with col2:
         if st.button("➖ Remove Last URL Configuration from List"):
@@ -718,19 +723,17 @@ def main():
                 st.session_state.url_configs.pop()
                 try:
                     save_url_configs(st.session_state.url_configs)
-                    st.success("✅ Configuration removed and saved!")
+                    message_placeholder.success("✅ Configuration removed and saved!")
                 except Exception as e:
-                    st.error(f"Failed to save configuration: {e}")
+                    message_placeholder.error(f"Failed to save configuration: {e}")
                 st.rerun()
     with col3:
         if st.button("💾 Save All Configurations"):
             try:
                 save_url_configs(st.session_state.url_configs)
-                st.success("✅ All configurations saved to database!")
+                message_placeholder.success("✅ All configurations saved to database!")
             except Exception as e:
-                st.error(f"Failed to save configurations: {e}")
-    
-    st.info("💡 **Auto-save**: Configurations are automatically saved when you add/remove entries. Use the Save button after making changes to existing configurations.")
+                message_placeholder.error(f"Failed to save configurations: {e}")
 
     # Render each URL config with improved layout
     if st.session_state.url_configs:
