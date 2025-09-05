@@ -427,7 +427,8 @@ def scrape(url,
            keep_query_keys: set[str] | None = None,
            max_urls_per_run: int = 5000,
            dry_run: bool = False,
-           progress_callback=None):
+           progress_callback=None,
+           log_callback=None):
     """
     Recursively scrape a URL, process its content, and save it to the database.
     Normalizes URLs (drops fragments, strips default ports, lowercases host, removes unwanted query params),
@@ -437,8 +438,9 @@ def scrape(url,
     """
     # Normalize the start URL immediately (drop fragments, normalize query, etc.)
     norm_url = normalize_url(url, "", keep_query=keep_query_keys)
-    print(f"{'  ' * depth}[DEBUG] Original URL: {url}")
-    print(f"{'  ' * depth}[DEBUG] Normalized URL: {norm_url}")
+    if log_callback:
+        log_callback(f"{'  ' * depth}🔍 Original URL: {url}")
+        log_callback(f"{'  ' * depth}🔗 Normalized URL: {norm_url}")
     
     # Set base path for path-restricted scraping (only on first call, depth 0)
     global base_path
@@ -450,22 +452,34 @@ def scrape(url,
             base_path = '/'.join(path_parts[:-1])
         else:
             base_path = '/'.join(path_parts)
-        if not base_path.endswith('/'):
+        
+        # For root domains, allow the entire site
+        if base_path == '' or base_path == '/':
+            base_path = '/'  # Allow entire site for root domains
+        elif not base_path.endswith('/'):
             base_path += '/'
-        print(f"{'  ' * depth}[DEBUG] Set base path for session: {base_path}")
+            
+        if log_callback:
+            log_callback(f"{'  ' * depth}📁 Set base path for session: {base_path}")
+            if base_path == '/':
+                log_callback(f"{'  ' * depth}🌐 Root domain detected - will crawl entire site")
 
     # Stop recursion if max depth, already visited, or crawl budget exceeded
     if depth > max_depth:
-        print(f"{'  ' * depth}[DEBUG] Skipping - depth {depth} > max_depth {max_depth}")
+        if log_callback:
+            log_callback(f"{'  ' * depth}⏹️ Skipping - depth {depth} > max_depth {max_depth}")
         return
     if len(visited_norm) >= max_urls_per_run:
-        print(f"{'  ' * depth}[DEBUG] Skipping - crawl budget exceeded: {len(visited_norm)} >= {max_urls_per_run}")
+        if log_callback:
+            log_callback(f"{'  ' * depth}📊 Skipping - crawl budget exceeded: {len(visited_norm)} >= {max_urls_per_run}")
         return
     if norm_url in visited_norm:
-        print(f"{'  ' * depth}[DEBUG] Skipping - URL already visited: {norm_url}")
+        if log_callback:
+            log_callback(f"{'  ' * depth}♻️ Skipping - URL already visited: {norm_url}")
         return
 
-    print(f"{'  ' * depth}[DEBUG] URL passed all checks, proceeding with scraping")
+    if log_callback:
+        log_callback(f"{'  ' * depth}✅ URL passed all checks, proceeding with scraping")
 
     # Track visited
     visited_raw.add(url)
@@ -477,7 +491,8 @@ def scrape(url,
         head = requests.head(norm_url, allow_redirects=True, timeout=10)
         ctype = head.headers.get("Content-Type", "")
         if "text/html" not in ctype and "application/xhtml+xml" not in ctype:
-            print(f"{'  ' * depth}[!] Skipping non-HTML: {norm_url} ({ctype})")
+            if log_callback:
+                log_callback(f"{'  ' * depth}🚫 Skipping non-HTML: {norm_url} ({ctype})")
             return
     except requests.RequestException:
         pass
@@ -486,13 +501,15 @@ def scrape(url,
     try:
         response = requests.get(norm_url, timeout=15)
     except requests.RequestException as e:
-        print(f"{'  ' * depth}[!] Error fetching {norm_url}: {e}")
+        if log_callback:
+            log_callback(f"{'  ' * depth}❌ Error fetching {norm_url}: {e}")
         return
 
     # Final content-type check
     ctype = response.headers.get("Content-Type", "")
     if "text/html" not in ctype and "application/xhtml+xml" not in ctype:
-        print(f"{'  ' * depth}[!] Skipping non-HTML: {norm_url} ({ctype})")
+        if log_callback:
+            log_callback(f"{'  ' * depth}🚫 Skipping non-HTML: {norm_url} ({ctype})")
         return
 
     # Encoding handling
@@ -505,11 +522,13 @@ def scrape(url,
             if 'charset=' in content:
                 declared_encoding = content.split('charset=')[-1]
     except Exception as e:
-        print(f"{'  ' * depth}[!] Encoding detection failed: {e}")
+        if log_callback:
+            log_callback(f"{'  ' * depth}⚠️ Encoding detection failed: {e}")
 
     response.encoding = declared_encoding or response.apparent_encoding
     soup = BeautifulSoup(response.text, 'html.parser')
-    print(f"{'  ' * depth}Scraping: {norm_url}")
+    if log_callback:
+        log_callback(f"{'  ' * depth}🕷️ Scraping: {norm_url}")
 
     # Respect canonical if present
     canon = get_canonical_url(soup, norm_url)
@@ -517,7 +536,8 @@ def scrape(url,
         canon_norm = normalize_url(canon, "", keep_query=keep_query_keys)
         if canon_norm != norm_url:
             if canon_norm in visited_norm:
-                print(f"{'  ' * depth}↳ Canonical already visited: {canon_norm}")
+                if log_callback:
+                    log_callback(f"{'  ' * depth}🔗 Canonical already visited: {canon_norm}")
                 return
             norm_url = canon_norm
             visited_norm.add(norm_url)
@@ -528,13 +548,15 @@ def scrape(url,
     if main:
         main_text = main.get_text(separator=' ', strip=True).lower()
         if is_page_not_found(main_text):
-            print(f"{'  ' * depth}[!] Skipping 'Page not found' at {norm_url}")
+            if log_callback:
+                log_callback(f"{'  ' * depth}🚫 Skipping 'Page not found' at {norm_url}")
             return
 
         markdown = md(str(main), heading_style="ATX")
         markdown = normalize_text(markdown)
         if is_empty_markdown(markdown):
-            print(f"{'  ' * depth}[!] Skipping {norm_url}: no meaningful content after extraction.")
+            if log_callback:
+                log_callback(f"{'  ' * depth}📄 Skipping {norm_url}: no meaningful content after extraction.")
             return
 
         # DB churn prevention
@@ -544,9 +566,12 @@ def scrape(url,
 
         if not (skip_summary_and_db or dry_run):
             try:
+                if log_callback:
+                    log_callback(f"{'  ' * depth}🤖 Processing with LLM: {norm_url}")
                 llm_output = summarize_and_tag_tooluse(markdown)
                 if llm_output is None:
-                    print(f"{'  ' * depth}[!] Failed to get LLM output for {norm_url}, skipping save")
+                    if log_callback:
+                        log_callback(f"{'  ' * depth}❌ Failed to get LLM output for {norm_url}, skipping save")
                     return
                     
                 summary = llm_output.get("summary", "No summary available")
@@ -568,12 +593,14 @@ def scrape(url,
                 if conn:
                     # IMPORTANT: we save by the normalized URL
                     save_document_to_db(conn, norm_url, title, safe_title, crawl_date, lang, summary, tags, markdown, current_hash, recordset, page_type, deleted=False)
-                    print(f"{'  ' * depth}Saved {norm_url} to database with recordset '{recordset}'")
+                    if log_callback:
+                        log_callback(f"{'  ' * depth}💾 Saved {norm_url} to database with recordset '{recordset}'")
                     
                     # Increment counter for successfully processed pages
                     global processed_pages_count
                     processed_pages_count += 1
-                    print(f"{'  ' * depth}[INFO] Pages processed by LLM so far: {processed_pages_count}")
+                    if log_callback:
+                        log_callback(f"{'  ' * depth}📊 Pages processed by LLM so far: {processed_pages_count}")
                     
                     # Update UI progress if callback provided
                     if progress_callback:
@@ -582,15 +609,20 @@ def scrape(url,
                         except Exception:
                             pass  # Don't let UI errors break scraping
             except Exception as e:
-                print("[LLM ERROR]", norm_url)
+                if log_callback:
+                    log_callback(f"❌ LLM ERROR for {norm_url}: {e}")
                 st.error(f"Failed to summarize or save {norm_url}: {e}")
                 return
 
     # Link discovery (dedup + filters)
     if soup is not None:
         base_host = urlparse(norm_url).netloc
+        links_found = []
+        links_processed = 0
+        
         for a in soup.find_all('a', href=True):
             href = a['href'].strip()
+            links_found.append(href)
 
             # Skip same-page anchors like '#section'
             if href.startswith("#"):
@@ -600,22 +632,32 @@ def scrape(url,
             next_url = normalize_url(norm_url, href, keep_query=keep_query_keys)
             if not next_url:
                 continue
+                
+            links_processed += 1
 
             # Stay on-site
             if urlparse(next_url).netloc != base_host:
+                if log_callback and depth <= 1:  # Only log for shallow depths to avoid spam
+                    log_callback(f"{'  ' * (depth+1)}🌐 Skipping external link: {next_url}")
                 continue
 
             # Include/exclude path filters
             parsed_link = urlparse(next_url)
             normalized_path = '/' + parsed_link.path.lstrip('/')
             if exclude_paths and any(excl in parsed_link.path for excl in exclude_paths):
+                if log_callback and depth <= 1:
+                    log_callback(f"{'  ' * (depth+1)}❌ Excluded by path filter: {next_url}")
                 continue
             if include_lang_prefixes and not any(normalized_path.startswith(prefix) for prefix in include_lang_prefixes):
+                if log_callback and depth <= 1:
+                    log_callback(f"{'  ' * (depth+1)}🚫 Not in allowed language prefix: {next_url}")
                 continue
             
             # Restrict to base path only (stay within the starting URL's path)
-            if base_path and not normalized_path.startswith(base_path):
-                print(f"{'  ' * (depth+1)}[DEBUG] Skipping {next_url} - outside base path {base_path}")
+            # For root domains (base_path = '/'), allow all paths on the same domain
+            if base_path and base_path != '/' and not normalized_path.startswith(base_path):
+                if log_callback:
+                    log_callback(f"{'  ' * (depth+1)}🚫 Skipping {next_url} - outside base path {base_path}")
                 continue
 
             # Skip non-HTML resources by extension
@@ -636,7 +678,12 @@ def scrape(url,
                    keep_query_keys=keep_query_keys,
                    max_urls_per_run=max_urls_per_run,
                    dry_run=dry_run,
-                   progress_callback=progress_callback)
+                   progress_callback=progress_callback,
+                   log_callback=log_callback)
+        
+        # Log link discovery summary
+        if log_callback:
+            log_callback(f"{'  ' * depth}🔗 Link discovery: Found {len(links_found)} total links, processed {links_processed} valid links")
 
 # -----------------------------
 # Streamlit UI
@@ -701,6 +748,20 @@ def main():
     # Create a placeholder for status messages
     message_placeholder = st.empty()
     
+    # Debug section to help diagnose save issues
+    with st.expander("🔍 Debug Information", expanded=False):
+        st.write("**Session State Configurations:**", len(st.session_state.url_configs))
+        try:
+            db_configs = load_url_configs()
+            st.write("**Database Configurations:**", len(db_configs))
+            if len(st.session_state.url_configs) != len(db_configs):
+                st.warning("⚠️ Session state and database are out of sync!")
+                if st.button("🔄 Sync Session from Database"):
+                    st.session_state.url_configs = db_configs
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Database connection error: {e}")
+    
     col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("➕ Add URL Configuration for Web Scraping"):
@@ -718,29 +779,27 @@ def main():
                 message_placeholder.error(f"Failed to save configuration: {e}")
             st.rerun()
     with col2:
-        if st.button("➖ Remove Last URL Configuration from List"):
-            if st.session_state.url_configs:
-                st.session_state.url_configs.pop()
-                try:
-                    save_url_configs(st.session_state.url_configs)
-                    message_placeholder.success("✅ Configuration removed and saved!")
-                except Exception as e:
-                    message_placeholder.error(f"Failed to save configuration: {e}")
-                st.rerun()
-    with col3:
         if st.button("💾 Save All Configurations"):
             try:
                 save_url_configs(st.session_state.url_configs)
                 message_placeholder.success("✅ All configurations saved to database!")
             except Exception as e:
                 message_placeholder.error(f"Failed to save configurations: {e}")
+    with col3:
+        if st.button("🔄 Reload from Database"):
+            try:
+                st.session_state.url_configs = load_url_configs()
+                message_placeholder.success(f"✅ Reloaded {len(st.session_state.url_configs)} configurations from database!")
+                st.rerun()
+            except Exception as e:
+                message_placeholder.error(f"Failed to reload configurations: {e}")
 
     # Render each URL config with improved layout
     if st.session_state.url_configs:
         st.markdown("##### ⚙️ Configuration Details")
     for i, config in enumerate(st.session_state.url_configs):
         # Create a container for each configuration with better visual separation
-        with st.expander(f"🔗 URL Configuration {i+1}" + (f" - {config.get('url', 'No URL set')[:50]}..." if config.get('url') else ""), expanded=True):
+        with st.expander(f"🔗 URL Configuration {i+1}" + (f" - {config.get('url', 'No URL set')[:50]}..." if config.get('url') else ""), expanded=False):
             # Use columns for better layout
             col1, col2 = st.columns([2, 1])
             
@@ -814,34 +873,112 @@ def main():
                 )
                 st.session_state.url_configs[i]["include_lang_prefixes"] = [prefix.strip() for prefix in include_prefixes_str.split(",") if prefix.strip()]
 
+            # Add delete button for this configuration
+            st.markdown("---")
+            col_delete1, col_delete2, col_delete3 = st.columns([1, 1, 1])
+            with col_delete2:
+                if st.button(f"🗑️ Delete Configuration {i+1}", key=f"delete_config_{i}", type="secondary"):
+                    # Remove this specific configuration
+                    st.session_state.url_configs.pop(i)
+                    try:
+                        save_url_configs(st.session_state.url_configs)
+                        st.success(f"✅ Configuration {i+1} deleted and saved!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to save after deletion: {e}")
+
     # Index button section
     st.markdown("---")
     st.markdown("##### 🚀 Start Indexing")
     if st.button("📥 Index All URLs"):
+        # Initialize log system
+        if 'scrape_log' not in st.session_state:
+            st.session_state.scrape_log = []
+        
+        def add_log(message, level="INFO"):
+            """Add a message to the scrape log with timestamp"""
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] [{level}] {message}"
+            st.session_state.scrape_log.append(log_entry)
+            # Keep only last 100 log entries to prevent memory issues
+            if len(st.session_state.scrape_log) > 100:
+                st.session_state.scrape_log = st.session_state.scrape_log[-100:]
+        
+        # Create terminal-like log display
+        st.markdown("##### 📟 Processing Log")
+        log_container = st.container()
+        with log_container:
+            # Create a fixed-height terminal-style log display
+            log_display = st.empty()
+            
+            def update_log_display():
+                """Update the terminal display with current log"""
+                if st.session_state.scrape_log:
+                    log_text = "\n".join(st.session_state.scrape_log[-20:])  # Show last 20 entries
+                else:
+                    log_text = "Waiting for processing to start..."
+                
+                # Use text_area with fixed height for consistent layout
+                # Clear the container and recreate to avoid key conflicts
+                log_display.empty()
+                with log_display.container():
+                    st.text_area(
+                        label="",
+                        value=log_text,
+                        height=300,  # Fixed height prevents layout jumping
+                        disabled=True,  # Read-only
+                        label_visibility="collapsed"  # Hide the label
+                    )
+        
+        # Clear log and start fresh
+        st.session_state.scrape_log = []
+        add_log("🚀 Starting indexing process...")
+        update_log_display()
+        
         # reset per-run state
-        print("[DEBUG] Clearing visited sets before scraping")
-        print(f"[DEBUG] Before clear - visited_norm has {len(visited_norm)} URLs")
+        add_log("🧹 Clearing visited sets before scraping")
+        add_log(f"📊 Before clear - visited_norm has {len(visited_norm)} URLs")
         visited_raw.clear()
         visited_norm.clear()
         frontier_seen.clear()
         global base_path, processed_pages_count
         base_path = None  # Reset base path for new session
         processed_pages_count = 0  # Reset processed pages counter
-        print("[DEBUG] Visited sets, base path, and processed pages counter cleared")
+        add_log("✅ Visited sets, base path, and processed pages counter cleared")
+        update_log_display()
 
         try:
             conn = None if dry_run else get_connection()
+            add_log(f"🔌 Database connection: {'DRY RUN (no writes)' if dry_run else 'CONNECTED'}")
+            update_log_display()
             
             # Create progress indicators for real-time updates
             progress_container = st.container()
             with progress_container:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                metrics_container = st.container()
+                
+                # Create fixed metric placeholders to prevent duplication
+                metrics_cols = st.columns(3)
+                with metrics_cols[0]:
+                    metric_urls = st.empty()
+                with metrics_cols[1]:
+                    metric_llm = st.empty()
+                with metrics_cols[2]:
+                    metric_config = st.empty()
+                
+            def update_metrics():
+                """Update metrics without creating new containers"""
+                metric_urls.metric("URLs Visited", len(visited_norm))
+                metric_llm.metric("LLM Processed", processed_pages_count)
+                metric_config.metric("Current Config", f"{current_config}/{total_configs}")
                 
             # Count total configurations to estimate progress
             total_configs = len([c for c in st.session_state.url_configs if c["url"].strip()])
             current_config = 0
+            add_log(f"📋 Found {total_configs} URL configuration(s) to process")
+            update_log_display()
             
             for config in st.session_state.url_configs:
                 url = config["url"].strip()
@@ -852,38 +989,35 @@ def main():
                 if url:
                     current_config += 1
                     
+                    add_log(f"🔍 Starting config {current_config}/{total_configs}: {url}")
+                    add_log(f"   📂 Recordset: {recordset}")
+                    add_log(f"   🔢 Max depth: {depth}")
+                    add_log(f"   🚫 Exclude paths: {exclude_paths}")
+                    add_log(f"   ✅ Include prefixes: {include_lang_prefixes}")
+                    update_log_display()
+                    
                     # Update status
                     status_text.write(f"🔄 **Processing URL {current_config}/{total_configs}:** {url}")
                     
                     # Update progress bar
                     progress_bar.progress((current_config - 1) / total_configs)
                     
-                    # Update metrics
-                    with metrics_container:
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("URLs Visited", len(visited_norm))
-                        with col2:
-                            st.metric("LLM Processed", processed_pages_count)
-                        with col3:
-                            st.metric("Current Config", f"{current_config}/{total_configs}")
+                    # Initialize metrics display
+                    update_metrics()
                     
-                    # Create a progress callback closure
+                    # Create a progress callback closure with logging
                     def update_progress():
                         try:
                             # Update status text immediately  
                             status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | LLM Processed: {processed_pages_count}")
                             
-                            # Update metrics container
-                            metrics_container.empty()
-                            with metrics_container.container():
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("URLs Visited", len(visited_norm))
-                                with col2:
-                                    st.metric("LLM Processed", processed_pages_count)
-                                with col3:
-                                    st.metric("Current Config", f"{current_config}/{total_configs}")
+                            # Add log entry for significant progress
+                            if len(visited_norm) % 10 == 0:  # Log every 10 URLs
+                                add_log(f"📈 Progress: {len(visited_norm)} URLs visited, {processed_pages_count} LLM processed")
+                                update_log_display()
+                            
+                            # Update metrics using the dedicated function
+                            update_metrics()
                         except Exception as e:
                             print(f"[UI UPDATE ERROR] {e}")  # Debug UI errors
                     
@@ -891,26 +1025,41 @@ def main():
                         url, depth=0, max_depth=depth, recordset=recordset,
                         conn=conn, exclude_paths=exclude_paths, include_lang_prefixes=include_lang_prefixes,
                         keep_query_keys=keep_query_keys, max_urls_per_run=max_urls_per_run, dry_run=dry_run,
-                        progress_callback=update_progress
+                        progress_callback=update_progress,
+                        log_callback=add_log
                     )
+                    
+                    add_log(f"✅ Completed config {current_config}/{total_configs}: {url}")
+                    add_log(f"   📊 URLs visited: {len(visited_norm)}, LLM processed: {processed_pages_count}")
+                    update_log_display()
             
             # Final progress update
             progress_bar.progress(1.0)
             status_text.write("✅ **Completed all URL configurations**")
+            add_log("🎉 All URL configurations completed!")
+            add_log(f"📈 Final stats: {len(visited_norm)} URLs visited, {processed_pages_count} pages processed by LLM")
+            update_log_display()
             
             if not dry_run:
                 st.success("Indexing completed.")
+                add_log("💾 Indexing completed - data saved to database")
             else:
                 st.success("Dry run completed. No DB writes or LLM calls were performed.")
+                add_log("🧪 Dry run completed - no database writes performed")
+            update_log_display()
         except Exception as e:
             st.error(f"Error during crawl: {e}")
+            add_log(f"❌ ERROR during crawl: {e}", "ERROR")
+            update_log_display()
             print(f"[CRAWL ERROR] {e}")
         finally:
             if not dry_run and conn:
                 conn.close()
+                add_log("🔌 Database connection closed")
+                update_log_display()
 
         # Show frontier results in the UI (Dry Run visibility; also useful for normal runs)
-        st.markdown("### Crawl Results (this run)")
+        st.markdown("### 📊 Crawl Summary")
         
         # Create metrics columns for better display
         col1, col2, col3 = st.columns(3)
@@ -925,18 +1074,34 @@ def main():
             else:
                 st.metric("Dry Run Mode", "Active", help="No LLM processing or database writes performed")
         
-        st.write(f"**Progress:** {len(visited_norm)} / {max_urls_per_run} URLs visited")
         if not dry_run:
-            st.write(f"**LLM Processing:** {processed_pages_count} pages successfully processed and saved to database")
             if processed_pages_count > 0:
-                st.info(f"✅ {processed_pages_count} pages are ready for vector store synchronization")
+                st.success(f"✅ {processed_pages_count} pages are ready for vector store synchronization")
+            else:
+                st.info("ℹ️ No new pages were processed (all pages may have been skipped or already exist)")
         
+        # Improved frontier display
         if frontier_seen:
-            # Show a compact list (avoid overwhelming the app)
-            max_show = min(len(frontier_seen), 1000)
-            st.text("\n".join(frontier_seen[:max_show]))
-            if len(frontier_seen) > max_show:
-                st.info(f"...and {len(frontier_seen) - max_show} more.")
+            with st.expander(f"📋 View Processed URLs ({len(frontier_seen)} total)", expanded=False):
+                # Group URLs by domain for better readability
+                from collections import defaultdict
+                url_groups = defaultdict(list)
+                for url in frontier_seen[:1000]:  # Limit to prevent performance issues
+                    domain = urlparse(url).netloc
+                    url_groups[domain].append(url)
+                
+                for domain, urls in url_groups.items():
+                    st.markdown(f"**{domain}** ({len(urls)} URLs)")
+                    # Show first 10 URLs for each domain
+                    display_urls = urls[:10]
+                    for url in display_urls:
+                        st.text(f"  • {url}")
+                    if len(urls) > 10:
+                        st.text(f"  ... and {len(urls) - 10} more URLs")
+                    st.markdown("---")
+                
+                if len(frontier_seen) > 1000:
+                    st.info(f"Showing first 1000 URLs. Total processed: {len(frontier_seen)}")
 
     # --- Show current knowledge base entries ---
     # Fetch entries for filters and display
