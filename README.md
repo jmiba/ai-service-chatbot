@@ -10,7 +10,8 @@ An intelligent AI-powered chatbot built with Streamlit and OpenAI that helps use
 - **Intelligent Q&A**: Natural language processing for library-related queries
 - **Source Citations**: Automatic citation generation with hover tooltips showing summaries
 - **Multi-language Support**: Ask questions in any language
-- **Real-time Streaming**: Live response generation with immediate feedback
+- **Real-time Streaming**: Live response generation with human-readable status indicators
+- **Enhanced UX**: Visual spinner with contextual status messages ("Searching the web…", "Searching my knowledge base…", "Generating answer…")
 - **Conversation Context**: Maintains conversation history for better context understanding
 
 ### 📊 Advanced Capabilities
@@ -21,8 +22,10 @@ An intelligent AI-powered chatbot built with Streamlit and OpenAI that helps use
 - **Citation Management**: Smart citation extraction with database-backed metadata
 
 ### 🔧 Technical Features
-- **RAG Implementation**: Vector search with OpenAI's file search capabilities
+- **RAG Implementation**: Vector search with OpenAI's file search capabilities (displayed as "knowledge base search")
+- **Web Search Integration**: External web search with contextual status updates
 - **Database Integration**: PostgreSQL with automatic schema migration
+- **Enhanced Streaming**: Human-readable progress indicators with visual spinner
 - **Error Handling**: Graceful degradation when services are unavailable
 - **Cloud-Ready**: Deployment support for Streamlit Cloud with external databases
 
@@ -150,8 +153,9 @@ psql "postgresql://user:pass@host/db" < backup.sql
 ## 📊 Features Overview
 
 ### 🤖 Chat Interface
-- Clean, responsive design
-- Real-time message streaming
+- Clean, responsive design with enhanced visual feedback
+- Real-time message streaming with contextual status indicators
+- Visual spinner with human-readable progress messages
 - Source citation with hover details
 - Conversation history
 
