@@ -6,6 +6,7 @@ from pathlib import Path
 import json, re, html
 import psycopg2
 from functools import lru_cache
+import uuid
 
 # ---- your utilities ----
 from utils import (
@@ -84,6 +85,10 @@ with st.sidebar:
     if is_authenticated:
         st.markdown("### Developer")
         debug_one = st.checkbox("Debug: show next response object", value=False, help="Shows final.model_dump() for the next assistant reply.")
+        
+        # Show session ID for debugging
+        if "session_id" in st.session_state:
+            st.caption(f"Session ID: `{st.session_state.session_id[:8]}...`")
     else:
         debug_one = False
 
@@ -93,15 +98,18 @@ def load_css(file_path):
     with open(BASE_DIR / file_path) as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-def log_interaction(user_input, assistant_response, citation_json=None, citation_count=0, confidence=0.0, error_code=None, request_classification=None, evaluation_notes=None):
+def log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, error_code=None, request_classification=None, evaluation_notes=None):
+    # Debug: Print session_id to console for troubleshooting
+    print(f"🔍 log_interaction called with session_id: {session_id} (type: {type(session_id)})")
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO log_table (timestamp, user_input, assistant_response, error_code, citation_count, citations, confidence, request_classification, evaluation_notes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (datetime.now(), user_input, assistant_response, error_code, citation_count, citation_json, confidence, request_classification, evaluation_notes))
+                    INSERT INTO log_table (timestamp, session_id, user_input, assistant_response, error_code, citation_count, citations, confidence, request_classification, evaluation_notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (datetime.now(), session_id, user_input, assistant_response, error_code, citation_count, citation_json, confidence, request_classification, evaluation_notes))
                 conn.commit()
+                print(f"✅ Successfully logged interaction with session_id: {session_id}")
     except psycopg2.Error as e:
         print(f"❌ DB logging error: {e}")
 
@@ -753,9 +761,12 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # Silently continue with default values for production
 
     try:
+        # Debug: Check session ID before logging
+        print(f"🔎 About to log interaction with session_id: {st.session_state.session_id}")
         log_interaction(
             user_input=user_input,
             assistant_response=cleaned,
+            session_id=st.session_state.session_id,
             citation_json=json.dumps(citation_map, ensure_ascii=False) if citation_map else None,
             citation_count=len(citation_map),
             confidence=confidence,
@@ -883,6 +894,13 @@ st.markdown("---")
 # replay chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
+
+# Initialize unique session ID for conversation tracking
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
+    print(f"🆕 Generated new session_id: {st.session_state.session_id}")
+else:
+    print(f"♻️ Using existing session_id: {st.session_state.session_id}")
 
 for msg in st.session_state.messages:
     if msg["role"] == "user":

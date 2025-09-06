@@ -142,6 +142,7 @@ def create_log_table():
         CREATE TABLE IF NOT EXISTS log_table (
             id SERIAL PRIMARY KEY,
             timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            session_id VARCHAR(36),
             user_input TEXT NOT NULL,
             assistant_response TEXT NOT NULL,
             error_code VARCHAR(10),
@@ -174,12 +175,77 @@ def create_log_table():
             EXCEPTION
                 WHEN duplicate_column THEN NULL;
             END;
+            
+            BEGIN
+                ALTER TABLE log_table ADD COLUMN session_id VARCHAR(36);
+            EXCEPTION
+                WHEN duplicate_column THEN NULL;
+            END;
         END $$;
+    """)
+    
+    # Create index on session_id for efficient conversation queries
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_log_table_session_id ON log_table(session_id);
     """)
     
     conn.commit()
     cursor.close()
     conn.close()
+
+def check_log_table_schema():
+    """
+    Debug function to check the current log_table schema.
+    Returns column information.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT column_name, data_type, is_nullable 
+            FROM information_schema.columns 
+            WHERE table_name = 'log_table' 
+            ORDER BY ordinal_position;
+        """)
+        columns = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return columns
+    except Exception as e:
+        print(f"Error checking schema: {e}")
+        return []
+
+def force_add_session_id_column():
+    """
+    Force add session_id column if it doesn't exist.
+    Use this if the automatic migration didn't work.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Check if column exists
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'log_table' AND column_name = 'session_id';
+        """)
+        
+        if cursor.fetchone() is None:
+            # Column doesn't exist, add it
+            cursor.execute("ALTER TABLE log_table ADD COLUMN session_id VARCHAR(36);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_log_table_session_id ON log_table(session_id);")
+            conn.commit()
+            print("✅ Successfully added session_id column to log_table")
+        else:
+            print("✅ session_id column already exists in log_table")
+            
+        cursor.close()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"❌ Error adding session_id column: {e}")
+        return False
     
 # Function to create the prompt_versions table if it doesn't exist
 def create_prompt_versions_table():
