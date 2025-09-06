@@ -332,7 +332,7 @@ def admin_authentication():
         st.session_state.authenticated = False
 
     if not st.session_state.authenticated:
-        st.title("🔒 Admin Login")
+        st.title("🔑 Admin Login")
         password = st.text_input("Admin Password", type="password")
         if password == st.secrets["ADMIN_PASSWORD"]:
             st.session_state.authenticated = True
@@ -352,15 +352,15 @@ def render_sidebar(authenticated=False):
     
     if authenticated:
         st.sidebar.success("Authenticated as admin.")
-        st.sidebar.page_link("pages/admin.py", label="Edit Prompt")
-        st.sidebar.page_link("pages/view_logs.py", label="View Logs")
-        st.sidebar.page_link("pages/scrape.py", label="Scrape Web")
-        st.sidebar.page_link("pages/vectorize.py", label="Vectorize Documents")
+        st.sidebar.page_link("pages/admin.py", label="⚙️ LLM Settings")
+        st.sidebar.page_link("pages/logs.py", label="📊 Logs & Analytics")
+        st.sidebar.page_link("pages/scrape.py", label="🌐 Content Indexing")
+        st.sidebar.page_link("pages/vectorize.py", label="🗄️ Vector Store Management")
         #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
         
         st.sidebar.button("🔓 Logout", on_click=lambda: st.session_state.update({"authenticated": False}))
     else:
-        st.sidebar.page_link("pages/admin.py", label="🔒 Admin Login")
+        st.sidebar.page_link("pages/admin.py", label="🔑 Admin Login")
 
 # Functions to save a document to the knowledge base
 def compute_sha256(text):
@@ -368,6 +368,203 @@ def compute_sha256(text):
 
 # URL Configuration Management Functions
 def save_url_configs(url_configs):
+    pass  # ... existing function ...
+
+# LLM Configuration Management Functions
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_available_openai_models():
+    """
+    Fetch available OpenAI models dynamically from the API.
+    Returns a curated list of the most useful chat models, filtering out:
+    - Duplicate dated versions (keeps latest canonical)
+    - Specialized variants (audio, realtime, etc.) unless commonly used
+    - Legacy/deprecated models
+    Cached for 1 hour to improve performance.
+    """
+    try:
+        import openai
+        client = openai.OpenAI(api_key=st.secrets.get("OPENAI_API_KEY"))
+        
+        # Get all available models
+        models = client.models.list()
+        
+        # Extract all GPT models first
+        all_gpt_models = []
+        for model in models.data:
+            model_id = model.id
+            if (model_id.startswith('gpt-') and 
+                not any(exclude in model_id.lower() for exclude in ['embedding', 'whisper', 'tts', 'dall-e', 'ada', 'babbage', 'curie', 'davinci'])):
+                all_gpt_models.append(model_id)
+        
+        # Smart filtering to get canonical/latest versions
+        curated_models = []
+        
+        # Define preferred models in priority order
+        preferred_patterns = [
+            # GPT-5 series (latest)
+            ('gpt-5-mini', r'^gpt-5-mini$'),
+            ('gpt-5', r'^gpt-5$'),
+            
+            # GPT-4o series (current flagship)
+            ('gpt-4o-mini', r'^gpt-4o-mini$'),
+            ('gpt-4o', r'^gpt-4o$'),
+            
+            # GPT-4 series (established)
+            ('gpt-4-turbo', r'^gpt-4-turbo$'),
+            ('gpt-4', r'^gpt-4$'),
+            
+            # GPT-3.5 series (legacy but still useful)
+            ('gpt-3.5-turbo', r'^gpt-3.5-turbo$'),
+        ]
+        
+        # Add canonical models if they exist
+        import re
+        for display_name, pattern in preferred_patterns:
+            matching_models = [m for m in all_gpt_models if re.match(pattern, m)]
+            if matching_models:
+                curated_models.append(matching_models[0])  # Take first match
+        
+        # Add some commonly used specialized models if available
+        useful_specialized = [
+            'chatgpt-4o-latest',  # Latest ChatGPT model
+            'gpt-4o-2024-11-20',  # Specific stable version
+            'gpt-4o-mini-2024-07-18',  # Specific stable mini version
+        ]
+        
+        for specialized in useful_specialized:
+            if specialized in all_gpt_models and specialized not in curated_models:
+                curated_models.append(specialized)
+        
+        # If we have a good curated list, use it
+        if len(curated_models) >= 5:  # Ensure we have reasonable selection
+            return curated_models
+        else:
+            # Fallback: use all models but with better sorting
+            model_priority = {
+                'gpt-5-mini': 1, 'gpt-5': 2,
+                'gpt-4o-mini': 3, 'gpt-4o': 4,
+                'gpt-4-turbo': 5, 'gpt-4': 6,
+                'gpt-3.5-turbo': 7
+            }
+            
+            def sort_key(model_name):
+                return (model_priority.get(model_name, 999), model_name)
+            
+            all_gpt_models.sort(key=sort_key)
+            return all_gpt_models
+            
+    except Exception as e:
+        print(f"⚠️ Could not fetch models from OpenAI API: {e}")
+        # Fallback to curated hardcoded list
+        return [
+            "gpt-5-mini",
+            "gpt-5", 
+            "gpt-4o-mini",
+            "gpt-4o", 
+            "gpt-4-turbo",
+            "gpt-4",
+            "gpt-3.5-turbo"
+        ]
+
+def create_llm_settings_table():
+    """Create table for storing LLM configuration settings (future-ready with reasoning effort and verbosity)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS llm_settings (
+            id SERIAL PRIMARY KEY,
+            model VARCHAR(100) NOT NULL DEFAULT 'gpt-4o-mini',
+            parallel_tool_calls BOOLEAN DEFAULT TRUE,
+            reasoning_effort VARCHAR(20) DEFAULT 'medium',
+            text_verbosity VARCHAR(20) DEFAULT 'medium',
+            updated_by VARCHAR(100),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    
+    # Insert default settings if table is empty
+    cursor.execute("SELECT COUNT(*) FROM llm_settings")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("""
+            INSERT INTO llm_settings (model, parallel_tool_calls, reasoning_effort, text_verbosity, updated_by)
+            VALUES (%s, %s, %s, %s, %s)
+        """, ('gpt-4o-mini', True, 'medium', 'medium', 'system'))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def save_llm_settings(model, parallel_tool_calls=True, reasoning_effort="medium", text_verbosity="medium", updated_by="admin"):
+    """Save LLM settings to database (future-ready with reasoning effort and verbosity)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Update the single row (we only keep one active configuration)
+    cursor.execute("""
+        UPDATE llm_settings SET 
+            model = %s,
+            parallel_tool_calls = %s,
+            reasoning_effort = %s,
+            text_verbosity = %s,
+            updated_by = %s,
+            updated_at = NOW()
+        WHERE id = (SELECT MIN(id) FROM llm_settings)
+    """, (model, parallel_tool_calls, reasoning_effort, text_verbosity, updated_by))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def supports_reasoning_effort(model_name):
+    """Check if a model supports the reasoning.effort parameter"""
+    # GPT-5 models support reasoning effort
+    gpt5_models = ['gpt-5', 'gpt-5-mini', 'gpt-5-turbo']
+    return any(gpt5_model in model_name.lower() for gpt5_model in gpt5_models)
+
+def get_supported_verbosity_options(model_name):
+    """Get supported verbosity options for a model"""
+    if supports_reasoning_effort(model_name):  # GPT-5 models
+        return ["low", "medium", "high"]
+    else:  # GPT-4 models
+        return ["medium"]  # Only medium is supported
+
+def supports_full_verbosity(model_name):
+    """Check if a model supports all verbosity options (low/medium/high)"""
+    return supports_reasoning_effort(model_name)  # Same as reasoning effort for now
+
+def get_llm_settings():
+    """Get current LLM settings from database (future-ready with reasoning effort and verbosity)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT model, parallel_tool_calls, reasoning_effort, text_verbosity, updated_by, updated_at
+        FROM llm_settings
+        ORDER BY updated_at DESC
+        LIMIT 1
+    """)
+    result = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    if result:
+        return {
+            'model': result[0],
+            'parallel_tool_calls': result[1],
+            'reasoning_effort': result[2],
+            'text_verbosity': result[3],
+            'updated_by': result[4],
+            'updated_at': result[5]
+        }
+    else:
+        # Return defaults if no settings found
+        return {
+            'model': 'gpt-4o-mini',
+            'parallel_tool_calls': True,
+            'reasoning_effort': 'medium',
+            'text_verbosity': 'medium',
+            'updated_by': 'system',
+            'updated_at': None
+        }
     """Save URL configurations to the database, replacing existing ones."""
     conn = get_connection()
     cursor = conn.cursor()

@@ -8,7 +8,6 @@ authenticated = admin_authentication()
 render_sidebar(authenticated)
 
 st.set_page_config(page_title="Interaction Logs", layout="wide")
-st.title("📄 View Interaction Logs")
 
 # --- Read logs from DB ---
 def read_logs(limit=200, error_code=None):
@@ -40,6 +39,7 @@ if authenticated:
     # Admin-only content
     filter_code = st.selectbox("Filter by error code", options=["All", "E00", "E01", "E02"])
     logs = read_logs(limit=200, error_code=filter_code)
+    st.title("📄 View Interaction Logs")
 
     st.markdown(f"### Showing {len(logs)} log entries")
 

@@ -12,7 +12,8 @@ import uuid
 from utils import (
     get_connection, create_prompt_versions_table, create_log_table,
     initialize_default_prompt_if_empty, get_latest_prompt, render_sidebar,
-    create_database_if_not_exists
+    create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
+    supports_reasoning_effort
 )
 # -------------------------------------
 
@@ -497,12 +498,25 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         tool_event_shown = False
 
         try:
-            with client.responses.stream(
-                model=st.secrets.get("MODEL", "gpt-5-mini"),
-                input=conversation_input,
-                tools=tool_cfg,
-                parallel_tool_calls=True,  # force serial tool calls so tool events stream live (if SDK supports)
-            ) as stream:
+            # Get current LLM configuration from database
+            llm_config = get_current_llm_config()
+            
+            # Build API parameters conditionally based on model support
+            api_params = {
+                'model': llm_config['model'],
+                'input': conversation_input,
+                'tools': tool_cfg,
+                'parallel_tool_calls': llm_config['parallel_tool_calls']
+            }
+            
+            # Add reasoning effort for supported models
+            if supports_reasoning_effort(llm_config['model']):
+                api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
+            
+            # Add text verbosity (all models support at least 'medium')
+            api_params['text'] = {'verbosity': llm_config['text_verbosity']}
+            
+            with client.responses.stream(**api_params) as stream:
                 for event in stream:
                     etype = getattr(event, "type", "") or ""
 
@@ -595,11 +609,25 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             if isinstance(e, BadRequestError):
                 # Fallback: non-streaming request rendered inside same bubble
                 with st.spinner("Thinking…"):
-                    final = client.responses.create(
-                        model=st.secrets.get("MODEL", "gpt-5-mini"),
-                        input=conversation_input,
-                        tools=tool_cfg,
-                    )
+                    # Get current LLM configuration from database
+                    llm_config = get_current_llm_config()
+                    
+                    # Build API parameters conditionally based on model support
+                    api_params = {
+                        'model': llm_config['model'],
+                        'input': conversation_input,
+                        'tools': tool_cfg,
+                        'parallel_tool_calls': llm_config['parallel_tool_calls']
+                    }
+                    
+                    # Add reasoning effort for supported models
+                    if supports_reasoning_effort(llm_config['model']):
+                        api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
+                    
+                    # Add text verbosity (all models support at least 'medium')
+                    api_params['text'] = {'verbosity': llm_config['text_verbosity']}
+                    
+                    final = client.responses.create(**api_params)
                     buf = _get_attr(final, "output_text", "") or ""
                     content_placeholder.markdown(buf, unsafe_allow_html=True)
             elif isinstance(e, RateLimitError):
@@ -723,14 +751,18 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         Error codes: 0=perfect response, 1=minor issues, 2=significant gaps, 3=unable to answer properly
         """.format(citation_count=len(citation_map))
 
+        # Get current LLM configuration from database
+        llm_config = get_current_llm_config()
+        
         structured = client.responses.create(
-            model=st.secrets.get("MODEL", "gpt-5-mini"),
+            model=llm_config['model'],
             input=[
                 {"role": "system", "content": evaluation_system_prompt},
                 {"role": "user", "content": f"Original user request: {user_input}"},
                 {"role": "assistant", "content": f"Assistant response: {cleaned}"},
                 {"role": "user", "content": "Please evaluate this interaction and return the JSON evaluation."}
             ]
+            # Note: No tools needed for evaluation, so no parallel_tool_calls parameter
         )
 
         payload_text = _safe_output_text(structured)
@@ -804,6 +836,26 @@ PROMPT_PATH = BASE_DIR / ".streamlit/system_prompt.txt"
 with PROMPT_PATH.open("r", encoding="utf-8") as f:
     DEFAULT_PROMPT = f.read()
 
+# Helper function to get current LLM configuration
+def get_current_llm_config():
+    """Get current LLM settings from database with fallback to defaults"""
+    try:
+        settings = get_llm_settings()
+        return {
+            'model': settings['model'],
+            'parallel_tool_calls': settings['parallel_tool_calls'],
+            'reasoning_effort': settings.get('reasoning_effort', 'medium'),
+            'text_verbosity': settings.get('text_verbosity', 'medium')
+        }
+    except Exception:
+        # Fallback to defaults if database not available
+        return {
+            'model': st.secrets.get("MODEL", "gpt-4o-mini"),
+            'parallel_tool_calls': True,
+            'reasoning_effort': 'medium',
+            'text_verbosity': 'medium'
+        }
+
 # Initialize database and tables
 database_available = False
 try:
@@ -812,6 +864,7 @@ try:
         create_prompt_versions_table()
         initialize_default_prompt_if_empty(DEFAULT_PROMPT)
         create_log_table()
+        create_llm_settings_table()  # Initialize LLM settings table
         #print("✅ Database initialization completed successfully.")
     else:
         # Show database configuration instructions when no database is available

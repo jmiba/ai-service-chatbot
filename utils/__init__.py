@@ -8,16 +8,23 @@ from .utils import (
     create_log_table,
     create_prompt_versions_table,
     create_url_configs_table,
+    create_knowledge_base_table,
     initialize_default_prompt_if_empty,
     get_latest_prompt,
-    create_knowledge_base_table,
     admin_authentication,
     render_sidebar,
     compute_sha256,
     get_kb_entries,
     save_url_configs,
     load_url_configs,
-    initialize_default_url_configs
+    initialize_default_url_configs,
+    create_llm_settings_table,
+    save_llm_settings,
+    get_llm_settings,
+    get_available_openai_models,
+    supports_reasoning_effort,
+    get_supported_verbosity_options,
+    supports_full_verbosity
 )
 
 # Now you can import from utils directly, e.g.:
