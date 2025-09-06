@@ -112,10 +112,17 @@ ai-service-chatbot/
 │   ├── scrape.py        # Web scraping with LLM analysis & individual controls
 │   ├── vectorize.py     # Document processing with terminal-style logging
 │   └── view_logs.py     # Analytics dashboard with session tracking
+├── tests/                # Test suite (organized for better structure)
+│   ├── __init__.py      # Test package initialization
+│   ├── README.md        # Test documentation
+│   ├── test_filters.py  # Content filtering tests
+│   ├── test_session_id.py           # Session tracking verification
+│   ├── test_streamlit_sim.py        # Streamlit behavior simulation
+│   ├── test_advanced_parameters.py  # API parameter testing
+│   ├── test_implementation_status.py # Filter status validation
+│   └── test_*.py        # Additional test files
 ├── exported_markdown/    # Scraped content storage
 ├── check_db_schema.py   # Database diagnostic and repair tool
-├── test_session_id.py   # Session tracking verification script
-├── test_streamlit_sim.py # Streamlit behavior simulation
 ├── ux_improvements.md   # Development progress documentation
 └── __pycache__/         # Python cache files
 ```
@@ -311,10 +318,16 @@ CREATE TABLE prompt_versions (
 ### Running Tests
 ```bash
 # Test session ID functionality
-python3 test_session_id.py
+python3 tests/test_session_id.py
 
 # Test Streamlit session simulation
-python3 test_streamlit_sim.py
+python3 tests/test_streamlit_sim.py
+
+# Test filter implementations
+python3 tests/test_filters.py
+
+# Validate filter implementation status
+python3 tests/test_implementation_status.py
 
 # Verify database schema
 python3 check_db_schema.py
@@ -322,8 +335,8 @@ python3 check_db_schema.py
 # Install development dependencies
 pip install -e .
 
-# Run tests (if available)
-pytest
+# Run all tests (if using pytest)
+pytest tests/
 ```
 
 ### Development Features
