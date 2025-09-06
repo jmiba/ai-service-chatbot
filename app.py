@@ -81,17 +81,7 @@ def _safe_output_text(resp_obj):
 # Check if user is authenticated (admin)
 is_authenticated = st.session_state.get("authenticated", False)
 
-render_sidebar(authenticated=is_authenticated)
-with st.sidebar:
-    if is_authenticated:
-        st.markdown("### Developer")
-        debug_one = st.checkbox("Debug: show next response object", value=False, help="Shows final.model_dump() for the next assistant reply.")
-        
-        # Show session ID for debugging
-        if "session_id" in st.session_state:
-            st.caption(f"Session ID: `{st.session_state.session_id[:8]}...`")
-    else:
-        debug_one = False
+debug_one = render_sidebar(authenticated=is_authenticated, show_debug=True)
 
 BASE_DIR = Path(__file__).parent
 

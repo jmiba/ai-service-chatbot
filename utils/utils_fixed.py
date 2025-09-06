@@ -344,26 +344,11 @@ def admin_authentication():
 
 
 # Function to render the sidebar with common elements
-def render_sidebar(authenticated=False, show_debug=False):
+def render_sidebar(authenticated=False):
     """
     Renders common sidebar elements.
-    Args:
-        authenticated: Whether user is authenticated
-        show_debug: Whether to show debug controls (only for main chat page)
-    Returns:
-        debug_one: Debug state if show_debug=True, otherwise False
     """
     st.sidebar.page_link("app.py", label="💬 Chat Assistant")
-    
-    # Debug checkbox right beneath chat assistant (only on main page when authenticated)
-    debug_one = False
-    if authenticated and show_debug:
-        debug_one = st.sidebar.checkbox("Debug: show response object", value=False, 
-                                       help="Shows final.model_dump() for the next assistant reply.")
-        
-        # Show session ID for debugging
-        if "session_id" in st.session_state:
-            st.sidebar.caption(f"Session ID: `{st.session_state.session_id[:8]}...`")
     
     if authenticated:
         st.sidebar.success("Authenticated as admin.")
@@ -376,8 +361,6 @@ def render_sidebar(authenticated=False, show_debug=False):
         st.sidebar.button("🔓 Logout", on_click=lambda: st.session_state.update({"authenticated": False}))
     else:
         st.sidebar.page_link("pages/admin.py", label="🔑 Admin Login")
-    
-    return debug_one
 
 # Functions to save a document to the knowledge base
 def compute_sha256(text):
@@ -825,4 +808,3 @@ def get_filter_settings():
             'updated_by': 'system',
             'updated_at': None
         }
-

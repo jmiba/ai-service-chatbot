@@ -344,26 +344,11 @@ def admin_authentication():
 
 
 # Function to render the sidebar with common elements
-def render_sidebar(authenticated=False, show_debug=False):
+def render_sidebar(authenticated=False):
     """
     Renders common sidebar elements.
-    Args:
-        authenticated: Whether user is authenticated
-        show_debug: Whether to show debug controls (only for main chat page)
-    Returns:
-        debug_one: Debug state if show_debug=True, otherwise False
     """
     st.sidebar.page_link("app.py", label="💬 Chat Assistant")
-    
-    # Debug checkbox right beneath chat assistant (only on main page when authenticated)
-    debug_one = False
-    if authenticated and show_debug:
-        debug_one = st.sidebar.checkbox("Debug: show response object", value=False, 
-                                       help="Shows final.model_dump() for the next assistant reply.")
-        
-        # Show session ID for debugging
-        if "session_id" in st.session_state:
-            st.sidebar.caption(f"Session ID: `{st.session_state.session_id[:8]}...`")
     
     if authenticated:
         st.sidebar.success("Authenticated as admin.")
@@ -376,8 +361,126 @@ def render_sidebar(authenticated=False, show_debug=False):
         st.sidebar.button("🔓 Logout", on_click=lambda: st.session_state.update({"authenticated": False}))
     else:
         st.sidebar.page_link("pages/admin.py", label="🔑 Admin Login")
+        """, ('system',))
     
-    return debug_one
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def save_filter_settings(settings, updated_by="admin"):
+    """Save filter settings to database"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Update the single row (we only keep one active configuration)
+    cursor.execute("""
+        UPDATE filter_settings SET 
+            confidence_threshold = %s,
+            min_citations = %s,
+            max_response_length = %s,
+            enable_fact_checking = %s,
+            academic_integrity_check = %s,
+            language_consistency = %s,
+            topic_restriction = %s,
+            inappropriate_content_filter = %s,
+            user_type_adaptation = %s,
+            citation_style = %s,
+            enable_sentiment_analysis = %s,
+            enable_keyword_blocking = %s,
+            blocked_keywords = %s,
+            enable_response_caching = %s,
+            updated_by = %s,
+            updated_at = NOW()
+        WHERE id = (SELECT MIN(id) FROM filter_settings)
+    """, (
+        settings.get('confidence_threshold', 0.70),
+        settings.get('min_citations', 1),
+        settings.get('max_response_length', 2000),
+        settings.get('enable_fact_checking', True),
+        settings.get('academic_integrity_check', True),
+        settings.get('language_consistency', True),
+        settings.get('topic_restriction', 'University-related only'),
+        settings.get('inappropriate_content_filter', True),
+        settings.get('user_type_adaptation', 'Standard'),
+        settings.get('citation_style', 'Academic (APA-style)'),
+        settings.get('enable_sentiment_analysis', False),
+        settings.get('enable_keyword_blocking', False),
+        settings.get('blocked_keywords', ''),
+        settings.get('enable_response_caching', True),
+        updated_by
+    ))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_filter_settings():
+    """Get current filter settings from database"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT confidence_threshold, min_citations, max_response_length, 
+               enable_fact_checking, academic_integrity_check, language_consistency,
+               topic_restriction, inappropriate_content_filter, user_type_adaptation,
+               citation_style, enable_sentiment_analysis, enable_keyword_blocking,
+               blocked_keywords, enable_response_caching, updated_by, updated_at
+        FROM filter_settings
+        ORDER BY updated_at DESC
+        LIMIT 1
+    """)
+    result = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    if result:
+        return {
+            'confidence_threshold': float(result[0]),
+            'min_citations': result[1],
+            'max_response_length': result[2],
+            'enable_fact_checking': result[3],
+            'academic_integrity_check': result[4],
+            'language_consistency': result[5],
+            'topic_restriction': result[6],
+            'inappropriate_content_filter': result[7],
+            'user_type_adaptation': result[8],
+            'citation_style': result[9],
+            'enable_sentiment_analysis': result[10],
+            'enable_keyword_blocking': result[11],
+            'blocked_keywords': result[12],
+            'enable_response_caching': result[13],
+            'updated_by': result[14],
+            'updated_at': result[15]
+        }
+    else:
+        # Return defaults if no settings found
+        return {
+            'confidence_threshold': 0.70,
+            'min_citations': 1,
+            'max_response_length': 2000,
+            'enable_fact_checking': True,
+            'academic_integrity_check': True,
+            'language_consistency': True,
+            'topic_restriction': 'University-related only',
+            'inappropriate_content_filter': True,
+            'user_type_adaptation': 'Standard',
+            'citation_style': 'Academic (APA-style)',
+            'enable_sentiment_analysis': False,
+            'enable_keyword_blocking': False,
+            'blocked_keywords': '',
+            'enable_response_caching': True,
+            'updated_by': 'system',
+            'updated_at': None
+        }
+
+⚙️ LLM Settings")
+        st.sidebar.page_link("pages/logs.py", label="📊 Logs & Analytics")
+        st.sidebar.page_link("pages/scrape.py", label="🌐 Content Indexing")
+        st.sidebar.page_link("pages/vectorize.py", label="🗄️ Vector Store Management")
+        #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
+        
+        st.sidebar.button("🔓 Logout", on_click=lambda: st.session_state.update({"authenticated": False}))
+    else:
+        st.sidebar.page_link("pages/admin.py", label="🔑 Admin Login")
 
 # Functions to save a document to the knowledge base
 def compute_sha256(text):
@@ -385,107 +488,7 @@ def compute_sha256(text):
 
 # URL Configuration Management Functions
 def save_url_configs(url_configs):
-    """Save URL configurations to the database, replacing existing ones."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        # Clear existing configurations
-        cursor.execute("DELETE FROM url_configs")
-        
-        # Insert new configurations
-        for config in url_configs:
-            if config["url"].strip():  # Only save non-empty URLs
-                cursor.execute("""
-                    INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (
-                    config["url"],
-                    config["recordset"],
-                    config["depth"],
-                    config["exclude_paths"],
-                    config["include_lang_prefixes"]
-                ))
-        
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        cursor.close()
-        conn.close()
-
-def load_url_configs():
-    """Load URL configurations from the database."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            SELECT url, recordset, depth, exclude_paths, include_lang_prefixes
-            FROM url_configs
-            ORDER BY id
-        """)
-        
-        configs = []
-        for row in cursor.fetchall():
-            url, recordset, depth, exclude_paths, include_lang_prefixes = row
-            configs.append({
-                "url": url,
-                "recordset": recordset,
-                "depth": depth,
-                "exclude_paths": exclude_paths or [],
-                "include_lang_prefixes": include_lang_prefixes or []
-            })
-        
-        return configs
-    except Exception as e:
-        # If table doesn't exist or other error, return empty list
-        return []
-    finally:
-        cursor.close()
-        conn.close()
-
-def initialize_default_url_configs():
-    """Initialize default URL configurations if none exist."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("SELECT COUNT(*) FROM url_configs")
-        count = cursor.fetchone()[0]
-        
-        if count == 0:
-            # Add some default configurations
-            default_configs = [
-                {
-                    "url": "https://www.europa-uni.de",
-                    "recordset": "university_main",
-                    "depth": 2,
-                    "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
-                    "include_lang_prefixes": ["/de/"]
-                }
-            ]
-            
-            for config in default_configs:
-                cursor.execute("""
-                    INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (
-                    config["url"],
-                    config["recordset"],
-                    config["depth"],
-                    config["exclude_paths"],
-                    config["include_lang_prefixes"]
-                ))
-            
-            conn.commit()
-    except Exception:
-        # Ignore errors during initialization
-        pass
-    finally:
-        cursor.close()
-        conn.close()
+    pass  # ... existing function ...
 
 # LLM Configuration Management Functions
 @st.cache_data(ttl=3600)  # Cache for 1 hour
@@ -682,6 +685,107 @@ def get_llm_settings():
             'updated_by': 'system',
             'updated_at': None
         }
+    """Save URL configurations to the database, replacing existing ones."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Clear existing configurations
+        cursor.execute("DELETE FROM url_configs")
+        
+        # Insert new configurations
+        for config in url_configs:
+            if config["url"].strip():  # Only save non-empty URLs
+                cursor.execute("""
+                    INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    config["url"],
+                    config["recordset"],
+                    config["depth"],
+                    config["exclude_paths"],
+                    config["include_lang_prefixes"]
+                ))
+        
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        cursor.close()
+        conn.close()
+
+def load_url_configs():
+    """Load URL configurations from the database."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT url, recordset, depth, exclude_paths, include_lang_prefixes
+            FROM url_configs
+            ORDER BY id
+        """)
+        
+        configs = []
+        for row in cursor.fetchall():
+            url, recordset, depth, exclude_paths, include_lang_prefixes = row
+            configs.append({
+                "url": url,
+                "recordset": recordset,
+                "depth": depth,
+                "exclude_paths": exclude_paths or [],
+                "include_lang_prefixes": include_lang_prefixes or []
+            })
+        
+        return configs
+    except Exception as e:
+        # If table doesn't exist or other error, return empty list
+        return []
+    finally:
+        cursor.close()
+        conn.close()
+
+def initialize_default_url_configs():
+    """Initialize default URL configurations if none exist."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT COUNT(*) FROM url_configs")
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            # Add some default configurations
+            default_configs = [
+                {
+                    "url": "https://www.europa-uni.de",
+                    "recordset": "university_main",
+                    "depth": 2,
+                    "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
+                    "include_lang_prefixes": ["/de/"]
+                }
+            ]
+            
+            for config in default_configs:
+                cursor.execute("""
+                    INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    config["url"],
+                    config["recordset"],
+                    config["depth"],
+                    config["exclude_paths"],
+                    config["include_lang_prefixes"]
+                ))
+            
+            conn.commit()
+    except Exception:
+        # Ignore errors during initialization
+        pass
+    finally:
+        cursor.close()
+        conn.close()
 
 # Filter Settings Management Functions
 def create_filter_settings_table():
@@ -825,4 +929,3 @@ def get_filter_settings():
             'updated_by': 'system',
             'updated_at': None
         }
-
