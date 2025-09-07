@@ -744,17 +744,96 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 placements_map = []  # (char_index_in_rebuilt, title, url)
                 last = 0
                 pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
-                for m in pattern.finditer(text_orig):
-                    # append text before link
-                    pre = text_orig[last:m.start()]
+                # We'll scan for either grouped parentheses containing multiple links,
+                # e.g. "( [a](url1), [b](url2), [c](url3) )", or single links.
+                # This ensures we remove surrounding parentheses and any commas between links.
+                i = 0
+                while True:
+                    m = pattern.search(text_orig, i)
+                    if not m:
+                        break
+
+                    # look left for a '(' (skip whitespace)
+                    pos_left = m.start() - 1
+                    while pos_left >= 0 and text_orig[pos_left].isspace():
+                        pos_left -= 1
+                    has_wrap_left = (pos_left >= 0 and text_orig[pos_left] == "(")
+
+                    post_advance = m.end()
+                    group_links = [m]
+
+                    # if there's a '(' before this link, try to see if this is a comma-separated group
+                    group_end = None
+                    if has_wrap_left:
+                        scan_pos = m.end()
+                        last_match = m
+                        while True:
+                            # look for next link after scan_pos
+                            nm = pattern.search(text_orig, scan_pos)
+                            if not nm:
+                                break
+                            # find next non-space char after nm.end()
+                            temp = nm.end()
+                            while temp < len(text_orig) and text_orig[temp].isspace():
+                                temp += 1
+                            if temp < len(text_orig) and text_orig[temp] == ",":
+                                # part of same group; continue scanning
+                                group_links.append(nm)
+                                last_match = nm
+                                scan_pos = temp + 1
+                                continue
+                            # if the next non-space char is ')', we ended a group
+                            if temp < len(text_orig) and text_orig[temp] == ")":
+                                group_links.append(nm)
+                                last_match = nm
+                                group_end = temp
+                                break
+                            # otherwise not a grouped parenthesis sequence
+                            break
+
+                    if group_end is not None:
+                        # We found a parenthesized group of links from pos_left .. group_end
+                        pre = text_orig[last:pos_left]
+                        rebuilt.append(pre)
+                        # iterate each link in the group and append only anchor-display (or empty)
+                        for idx_link, lm in enumerate(group_links):
+                            anchor = lm.group(1).strip()
+                            url = lm.group(2).strip()
+                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+                            display_anchor = "" if looks_like_url else anchor
+                            start_idx = sum(len(p) for p in rebuilt)
+                            rebuilt.append(display_anchor)
+                            placements_map.append((start_idx, anchor, url))
+                            # add a single separating space between anchors so supers don't concatenate
+                            if idx_link != len(group_links) - 1:
+                                rebuilt.append(" ")
+                        last = group_end + 1
+                        i = last
+                        continue
+
+                    # not a grouped parenthesis case — treat single link normally
+                    pos_right = m.end()
+                    while pos_right < len(text_orig) and text_orig[pos_right].isspace():
+                        pos_right += 1
+                    has_wrap_right = (pos_right < len(text_orig) and text_orig[pos_right] == ")")
+                    if has_wrap_left and has_wrap_right:
+                        pre = text_orig[last:pos_left]
+                        post_advance = pos_right + 1
+                    else:
+                        pre = text_orig[last:m.start()]
+                        post_advance = m.end()
+
                     rebuilt.append(pre)
                     anchor = m.group(1).strip()
                     url = m.group(2).strip()
+                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+                    display_anchor = "" if looks_like_url else anchor
                     start_idx = sum(len(p) for p in rebuilt)
-                    # append anchor text in place of the link
-                    rebuilt.append(anchor)
+                    rebuilt.append(display_anchor)
                     placements_map.append((start_idx, anchor, url))
-                    last = m.end()
+                    last = post_advance
+                    i = last
+            
                 rebuilt.append(text_orig[last:])
                 cleaned = "".join(rebuilt).strip()
 
@@ -787,14 +866,79 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             rebuilt = []
             placements_map = []
             last = 0
-            for m in pattern.finditer(text_orig):
-                rebuilt.append(text_orig[last:m.start()])
+            i = 0
+            while True:
+                m = pattern.search(text_orig, i)
+                if not m:
+                    break
+
+                # look left for '(' skipping whitespace
+                pos_left = m.start() - 1
+                while pos_left >= 0 and text_orig[pos_left].isspace():
+                    pos_left -= 1
+                has_wrap_left = (pos_left >= 0 and text_orig[pos_left] == "(")
+
+                post_advance = m.end()
+                group_links = [m]
+                group_end = None
+                if has_wrap_left:
+                    scan_pos = m.end()
+                    while True:
+                        nm = pattern.search(text_orig, scan_pos)
+                        if not nm:
+                            break
+                        temp = nm.end()
+                        while temp < len(text_orig) and text_orig[temp].isspace():
+                            temp += 1
+                        if temp < len(text_orig) and text_orig[temp] == ",":
+                            group_links.append(nm)
+                            scan_pos = temp + 1
+                            continue
+                        if temp < len(text_orig) and text_orig[temp] == ")":
+                            group_links.append(nm)
+                            group_end = temp
+                        break
+
+                if group_end is not None:
+                    # emit pre, then each link anchor (no commas), separated by single spaces
+                    pre = text_orig[last:pos_left]
+                    rebuilt.append(pre)
+                    for idx_link, lm in enumerate(group_links):
+                        anchor = lm.group(1).strip()
+                        url = lm.group(2).strip()
+                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+                        display_anchor = "" if looks_like_url else anchor
+                        start_idx = sum(len(p) for p in rebuilt)
+                        rebuilt.append(display_anchor)
+                        placements_map.append((start_idx, anchor, url))
+                        if idx_link != len(group_links) - 1:
+                            rebuilt.append(" ")
+                    last = group_end + 1
+                    i = last
+                    continue
+
+                # single link fallback
+                pos_right = m.end()
+                while pos_right < len(text_orig) and text_orig[pos_right].isspace():
+                    pos_right += 1
+                has_wrap_right = (pos_right < len(text_orig) and text_orig[pos_right] == ")")
+                if has_wrap_left and has_wrap_right:
+                    pre = text_orig[last:pos_left]
+                    post_advance = pos_right + 1
+                else:
+                    pre = text_orig[last:m.start()]
+                    post_advance = m.end()
+
+                rebuilt.append(pre)
                 anchor = m.group(1).strip()
                 url = m.group(2).strip()
+                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+                display_anchor = "" if looks_like_url else anchor
                 start_idx = sum(len(p) for p in rebuilt)
-                rebuilt.append(anchor)
+                rebuilt.append(display_anchor)
                 placements_map.append((start_idx, anchor, url))
-                last = m.end()
+                last = post_advance
+                i = last
             rebuilt.append(text_orig[last:])
             cleaned = "".join(rebuilt).strip()
 
@@ -828,7 +972,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # Overwrite the streamed text in the SAME bubble with the enriched version
         content_placeholder.markdown(rendered, unsafe_allow_html=True)
         if sources_md:
-            with st.expander("Show sources"):
+            with st.expander("Show references"):
                 st.markdown(sources_md, unsafe_allow_html=True)
 
         # --- Optional debug dump of final (sidebar toggle) ---
@@ -1097,7 +1241,7 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant"):
                 st.markdown(msg["rendered"], unsafe_allow_html=True)
                 if msg.get("sources"):
-                    with st.expander("Show sources"):
+                    with st.expander("Show references"):
                         st.markdown(msg["sources"], unsafe_allow_html=True)
         else:
             st.chat_message("assistant").markdown(msg["content"])
