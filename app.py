@@ -8,13 +8,14 @@ import psycopg2
 from functools import lru_cache
 import uuid
 
-# ---- your utilities ----
+# ---- utilities ----
 from utils import (
     get_connection, create_prompt_versions_table, create_log_table,
     initialize_default_prompt_if_empty, get_latest_prompt, render_sidebar,
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
     supports_reasoning_effort, get_kb_entries
 )
+
 # -------------------------------------
 
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
