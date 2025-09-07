@@ -252,13 +252,22 @@ def render_with_citations_by_index(text_html, citation_map, placements):
     """
     s = text_html or ""
     n = len(s)
+    used_nums = set()
+    # Insert superscripts at valid indices
     for idx, num in sorted(placements, key=lambda x: x[0], reverse=True):
         note = citation_map.get(num)
         if not note:
             continue
-        sup = f"<sup title='Source: {note['title']}'>[{num}]</sup>"
-        i = max(0, min(n, idx))
-        s = s[:i] + sup + s[i:]
+        if idx is not None and 0 <= idx <= n:
+            sup = f"<sup title='Source: {note['title']}'>[{num}]</sup>"
+            i = max(0, min(n, idx))
+            s = s[:i] + sup + s[i:]
+            used_nums.add(num)
+    # For any citation not referenced (e.g., missing/invalid index), append at end
+    for num, note in citation_map.items():
+        if num not in used_nums:
+            sup = f"<sup title='Source: {note['title']}'>[{num}]</sup>"
+            s += sup
     return s
 
 def render_sources_list(citation_map):
@@ -702,15 +711,21 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         else:
             citation_map, placements = ({}, [])
 
+
         # If we have the normalized text part (canonical, no inline markers), use it as the base
         if normalized_part:
             cleaned = normalized_part.get("text", "").strip()
+            # Remove inline web citations (markdown links) from the text before rendering
+            # Pattern: [text](http...) or [text](https...)
+            cleaned = re.sub(r'\[([^\]]+)\]\((https?://[^)]+)\)', '', cleaned)
             rendered = render_with_citations_by_index(cleaned, citation_map, placements)
             # No need to process filecite markers when we have normalized text with proper annotations
         else:
             # Fallback: we only have output_text which may contain inline filecite markers.
             # Replace markers in-order with supers based on placements (best-effort).
             cleaned = response_text.strip()
+            # Remove inline web citations (markdown links) from the text before rendering
+            cleaned = re.sub(r'\[([^\]]+)\]\((https?://[^)]+)\)', '', cleaned)
             rendered = replace_filecite_markers_with_sup(cleaned, citation_map, placements, annotations=None)
 
         # Safety cleanup: remove any remaining filecite markers that might have been missed
