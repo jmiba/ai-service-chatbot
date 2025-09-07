@@ -133,45 +133,163 @@ class ResponseFormatter:
     def __init__(self, citation_style: str = "Academic (APA-style)"):
         self.citation_style = citation_style
     
-    def format_citations(self, response: str, citations: List[Dict]) -> str:
-        """Format citations according to the specified style"""
+    def format_citations(self, response: str, citations: List[Dict], style: str = "numbered", start_number: int = 1) -> str:
+        """Format citations according to the specified style
         
-        if self.citation_style == "Academic (APA-style)":
-            return self._format_apa_style(response, citations)
-        elif self.citation_style == "Numbered":
-            return self._format_numbered(response, citations)
-        elif self.citation_style == "Simple links":
-            return self._format_simple_links(response, citations)
-        else:  # Inline
-            return self._format_inline(response, citations)
+        Args:
+            response: The response text containing inline citations
+            citations: List of citation dictionaries with title and url
+            style: Citation style ('Academic', 'Numbered', 'Simple', 'Inline')
+            start_number: Starting number for citations (default 1, use for coordinated numbering)
+        """
+        
+        # Remove existing inline web citations with more comprehensive patterns
+        import re
+        
+        # Store original response for reference positioning
+        original_response = response
+        cleaned_response = response
+        
+        # FOR NUMBERED CITATIONS: Replace citation patterns with numbered references BEFORE cleaning
+        if style.lower() == 'numbered':
+            citation_num = start_number
+            
+            # Handle multiple citations in the same parenthetical group first
+            # Pattern: ([domain1.com](url1), [domain2.com](url2))
+            multi_citation_pattern = r'\(\s*\[([^\]]+)\]\([^)]+\)\s*,\s*\[([^\]]+)\]\([^)]+\)\s*\)'
+            
+            def replace_multi_citation(match):
+                nonlocal citation_num
+                # Count how many citations are in this group
+                group_text = match.group(0)
+                citation_count = group_text.count('](')
+                
+                # Create reference markers for this group
+                if citation_count <= 3:
+                    numbers = [str(citation_num + i) for i in range(citation_count)]
+                    ref_marker = f'[{",".join(numbers)}]'
+                else:
+                    markers = [f'[{citation_num + i}]' for i in range(citation_count)]
+                    ref_marker = ''.join(markers)
+                
+                citation_num += citation_count
+                return ref_marker
+            
+            # Replace multiple citations in parentheses
+            cleaned_response = re.sub(multi_citation_pattern, replace_multi_citation, cleaned_response)
+            
+            # Handle remaining individual citations
+            # Pattern: ([domain.com](url)) - single parenthetical markdown link
+            def replace_single_citation(match):
+                nonlocal citation_num
+                ref_marker = f'[{citation_num}]'
+                citation_num += 1
+                return ref_marker
+            
+            # Single citations in parentheses
+            single_paren_pattern = r'\(\[([^\]]+)\]\([^)]+\)\)'
+            cleaned_response = re.sub(single_paren_pattern, replace_single_citation, cleaned_response)
+            
+            # Standalone markdown links
+            standalone_pattern = r'\[([^\]]+)\]\([^)]+\)'
+            cleaned_response = re.sub(standalone_pattern, replace_single_citation, cleaned_response)
+        
+        else:
+            # FOR OTHER CITATION STYLES: Clean up as before
+            # Track citation positions before removal - find where inline citations appear
+            citation_positions = []
+            
+            # Find positions of various citation patterns
+            # Pattern 1: ([domain.com](url), [domain.org](url))
+            for match in re.finditer(r'\s*\(\s*\[([^\]]+)\]\([^)]+\)(?:\s*,\s*\[([^\]]+)\]\([^)]+\))*\s*\)', original_response):
+                citation_positions.append(match.start())
+            
+            # Pattern 2: [domain.com](url) (standalone)
+            for match in re.finditer(r'\s*\[([^\]]*\.[a-z]{2,4}[^\]]*)\]\([^)]+\)', original_response):
+                if match.start() not in citation_positions:  # Avoid duplicates
+                    citation_positions.append(match.start())
+            
+            # Pattern 3: (domain.com, domain.org) (plain text domains)
+            for match in re.finditer(r'\s*\([^)]*\.[a-z]{2,4}[^)]*\)', original_response):
+                if match.start() not in citation_positions:  # Avoid duplicates
+                    citation_positions.append(match.start())
+            
+            # Remove patterns like ([domain.com](url), [domain.org](url))
+            cleaned_response = re.sub(r'\s*\(\s*\[([^\]]+)\]\([^)]+\)\s*,?\s*\[([^\]]+)\]\([^)]+\)\s*\)', '', cleaned_response)
+            
+            # Remove patterns like [domain.com](url)
+            cleaned_response = re.sub(r'\s*\[([^\]]*\.[a-z]{2,4}[^\]]*)\]\([^)]+\)', '', cleaned_response)
+            
+            # Remove patterns like (domain.com, domain.org)
+            cleaned_response = re.sub(r'\s*\([^)]*\.[a-z]{2,4}[^)]*\)', '', cleaned_response)
+            
+            # Clean up any remaining parentheses or commas
+            cleaned_response = re.sub(r'\s*\(\s*,\s*\)\s*', '', cleaned_response)
+            cleaned_response = re.sub(r'\s*\(\s*\)\s*', '', cleaned_response)
+        
+        # Apply the selected formatting style with coordinated numbering
+        if style.lower() == 'academic':
+            return self._format_apa_style(cleaned_response, citations, start_number)
+        elif style.lower() == 'numbered':
+            return self._format_numbered(cleaned_response, citations, start_number)
+        elif style.lower() == 'simple':
+            return self._format_simple_links(cleaned_response, citations, start_number)
+        elif style.lower() == 'inline':
+            return self._format_inline(cleaned_response, citations, start_number)
+        else:
+            # Default to numbered format
+            return self._format_numbered(cleaned_response, citations, start_number)
     
-    def _format_apa_style(self, response: str, citations: List[Dict]) -> str:
+    def _format_apa_style(self, response: str, citations: List[Dict], start_number: int = 1) -> str:
         """Format citations in APA style"""
         formatted_response = response
         
         if citations:
             formatted_response += "\n\n**Quellen:**\n"
-            for i, citation in enumerate(citations, 1):
+            for i, citation in enumerate(citations, start_number):
                 title = citation.get('title', 'Untitled')
                 url = citation.get('url', '#')
                 formatted_response += f"{i}. {title}. Verfügbar unter: {url}\n"
                 
         return formatted_response
     
-    def _format_numbered(self, response: str, citations: List[Dict]) -> str:
-        """Format with numbered references"""
-        # Implementation for numbered citations
-        return response  # Simplified
+    def _format_numbered(self, response: str, citations: List[Dict], start_number: int = 1) -> str:
+        """Format with numbered references (citation positioning already handled in format_citations)"""
+        formatted_response = response
+        
+        if citations:
+            # Add references section as a proper numbered list
+            formatted_response += "\n\n**References:**"
+            for i, citation in enumerate(citations, start_number):
+                title = citation.get('title', 'Untitled')
+                url = citation.get('url', '#')
+                # Clean formatting - avoid nested markdown links
+                clean_title = title.replace('[', '').replace(']', '').replace('(', '').replace(')', '')
+                formatted_response += f"\n[{i}] {clean_title}"
+                if url and url != '#':
+                    formatted_response += f" - {url}"
+                    
+        return formatted_response
     
-    def _format_simple_links(self, response: str, citations: List[Dict]) -> str:
+    def _format_simple_links(self, response: str, citations: List[Dict], start_number: int = 1) -> str:
         """Format with simple links"""
-        # Implementation for simple links
-        return response  # Simplified
+        formatted_response = response
+        
+        if citations:
+            formatted_response += "\n\n**Sources:**\n"
+            for citation in citations:
+                title = citation.get('title', 'Untitled')
+                url = citation.get('url', '#')
+                formatted_response += f"• [{title}]({url})\n"
+                
+        return formatted_response
     
-    def _format_inline(self, response: str, citations: List[Dict]) -> str:
+    def _format_inline(self, response: str, citations: List[Dict], start_number: int = 1) -> str:
         """Format with inline citations"""
-        # Implementation for inline citations
-        return response  # Simplified
+        # For inline format, we don't use the start_number since citations are embedded directly
+        # For inline, we embed citations directly in the text
+        # This is a simplified implementation
+        return response
 
 class UserTypeAdapter:
     """Adapt responses based on user type and context"""

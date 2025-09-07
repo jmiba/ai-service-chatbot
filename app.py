@@ -13,8 +13,9 @@ from utils import (
     get_connection, create_prompt_versions_table, create_log_table,
     initialize_default_prompt_if_empty, get_latest_prompt, render_sidebar,
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
-    supports_reasoning_effort
+    supports_reasoning_effort, get_filter_settings
 )
+from filter_examples import ResponseFormatter
 # -------------------------------------
 
 # Response evaluation schema for the second API call
@@ -151,56 +152,97 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
     norm = []
     for a in annotations:
         a_type = _ga(a, "type")
-        if a_type != "file_citation":
-            continue
-
-        # file_id may be on the annotation or nested under .file_citation
-        file_id = _ga(a, "file_id")
-        if not file_id:
-            fc = _ga(a, "file_citation")
-            file_id = _ga(fc, "file_id") if fc is not None else None
-        if not file_id:
-            continue
-
-        filename = _ga(a, "filename")
-        idx = _ga(a, "index")
-        try:
-            idx = int(idx) if idx is not None else len(full_text)
-        except Exception:
-            idx = len(full_text)
-
-        norm.append({"file_id": file_id, "filename": filename, "index": idx})
+        if a_type == "file_citation":
+            # file_id may be on the annotation or nested under .file_citation
+            file_id = _ga(a, "file_id")
+            if not file_id:
+                fc = _ga(a, "file_citation")
+                file_id = _ga(fc, "file_id") if fc is not None else None
+            if not file_id:
+                continue
+            filename = _ga(a, "filename")
+            idx = _ga(a, "index")
+            try:
+                idx = int(idx) if idx is not None else len(full_text)
+            except Exception:
+                idx = len(full_text)
+            norm.append({
+                "type": "file_citation",
+                "file_id": file_id,
+                "filename": filename,
+                "index": idx
+            })
+        elif a_type == "web_citation":
+            # Web citation: extract url, title, summary, index
+            url = _ga(a, "url")
+            title = _ga(a, "title")
+            summary = _ga(a, "summary")
+            idx = _ga(a, "index")
+            try:
+                idx = int(idx) if idx is not None else len(full_text)
+            except Exception:
+                idx = len(full_text)
+            norm.append({
+                "type": "web_citation",
+                "url": url,
+                "title": title,
+                "summary": summary,
+                "index": idx
+            })
 
     if not norm:
         return citation_map, placements
 
-    # Deduplicate for DB lookup
-    file_ids = list({n["file_id"] for n in norm})
-    conn = get_connection()
-    file_data = get_urls_and_titles_by_file_ids(conn, file_ids)  # {file_id: (url, title, summary)}
+    # Separate file and web citations for lookup
+    file_norm = [n for n in norm if n["type"] == "file_citation"]
+    web_norm = [n for n in norm if n["type"] == "web_citation"]
+
+    # File citations: DB lookup
+    file_ids = list({n["file_id"] for n in file_norm})
+    file_data = {}
+    if file_ids:
+        conn = get_connection()
+        file_data = get_urls_and_titles_by_file_ids(conn, file_ids)  # {file_id: (url, title, summary)}
 
     # Build map and placements in order of appearance
-    for i, n in enumerate(norm, start=1):
-        file_id = n["file_id"]
-        filename = n["filename"] or _cached_filename(file_id)
-        idx = max(0, min(len(full_text), n["index"]))  # clamp
-
-        url, title, summary = file_data.get(file_id, (None, None, None))
-        if not title:
-            title = filename.rsplit(".", 1)[0]
-
-        clean_title = html.escape(re.sub(r"^\d+_", "", title).replace("_", " "))
-        clean_summary = html.escape(summary or "")
-
-        citation_map[i] = {
-            "number": i,
-            "file_name": filename,
-            "file_id": file_id,
-            "url": url,
-            "title": clean_title,
-            "summary": clean_summary,
-        }
-        placements.append((idx, i))
+    i = 1
+    for n in norm:
+        if n["type"] == "file_citation":
+            file_id = n["file_id"]
+            filename = n["filename"] or _cached_filename(file_id)
+            idx = max(0, min(len(full_text), n["index"]))  # clamp
+            url, title, summary = file_data.get(file_id, (None, None, None))
+            if not title:
+                title = filename.rsplit(".", 1)[0]
+            clean_title = html.escape(re.sub(r"^\d+_", "", title).replace("_", " "))
+            clean_summary = html.escape(summary or "")
+            citation_map[i] = {
+                "number": i,
+                "file_name": filename,
+                "file_id": file_id,
+                "url": url,
+                "title": clean_title,
+                "summary": clean_summary,
+            }
+            placements.append((idx, i))
+            i += 1
+        elif n["type"] == "web_citation":
+            idx = max(0, min(len(full_text), n["index"]))
+            url = n["url"]
+            title = n["title"] or url or "Web Source"
+            summary = n["summary"] or ""
+            clean_title = html.escape(title)
+            clean_summary = html.escape(summary)
+            citation_map[i] = {
+                "number": i,
+                "file_name": None,
+                "file_id": None,
+                "url": url,
+                "title": clean_title,
+                "summary": clean_summary,
+            }
+            placements.append((idx, i))
+            i += 1
 
     return citation_map, placements
 
@@ -405,9 +447,9 @@ def coerce_text_part(part):
 # ---------- Streamed handling ----------
 def handle_stream_and_render(user_input, system_instructions, client, retrieval_filters=None, debug_one=False):
     """
-    Responses API (streaming) with spinner INSIDE the assistant chat bubble:
+    Responses API (streaming) with status indicator to avoid chat duplication:
       - opens the assistant bubble immediately
-      - shows real spinner beside avatar until first event
+      - shows status text beside avatar (no spinner to avoid duplication)
       - streams tokens into same bubble
       - parses final output, inserts index-based citations, shows sources
       - logs to DB
