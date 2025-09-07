@@ -127,6 +127,97 @@ def _cached_filename(file_id: str) -> str:
         return file_id
 
 # ---------- Responses helpers (index-based citations) ----------
+def _pick_index(ann, full_len):
+    # Prefer explicit starts
+    for key in ("start_index", "start", "index", "offset", "position"):
+        v = ann.get(key) if isinstance(ann, dict) else getattr(ann, key, None)
+        if v is not None:
+            try:
+                iv = int(v)
+                return max(0, min(full_len, iv))
+            except Exception:
+                pass
+    # Some SDKs nest values under the type key, e.g. ann["url_citation"]["start_index"]
+    t = ann.get("type") if isinstance(ann, dict) else getattr(ann, "type", None)
+    inner = ann.get(t) if isinstance(ann, dict) else getattr(ann, t, None)
+    if isinstance(inner, dict):
+        for key in ("start_index", "start", "index", "offset", "position"):
+            v = inner.get(key)
+            if v is not None:
+                try:
+                    iv = int(v)
+                    return max(0, min(full_len, iv))
+                except Exception:
+                    pass
+    return None
+
+# --- helpers: strip markdown links (and grouped parenthesized link lists) from HTML-ish text
+# Replace [anchor](url) with just 'anchor', preserving Markdown & spacing.
+# - Skips images: ![alt](url)
+# - Skips fenced code blocks: ```...```
+# - Leaves whitespace/newlines intact
+
+_LINK_RE = re.compile(r'(?<!!)\[([^\]]+)\]\((https?://[^)\s]+)\)')
+
+def _strip_markdown_links_preserve_md(md_text: str) -> str:
+    if not md_text:
+        return md_text
+
+    # 1) Split by fenced code blocks to avoid touching code sections.
+    parts = re.split(r'(```.*?```)', md_text, flags=re.DOTALL)
+    for i, part in enumerate(parts):
+        if part.startswith("```"):
+            continue  # leave code fences untouched
+
+        # 2) Replace standard links with their anchor text.
+        #    If the anchor itself looks like a URL, drop it (renders cleaner with your numeric refs).
+        def repl(m: re.Match) -> str:
+            anchor = m.group(1)
+            # keep EXACT spacing/newlines around the match; only change the link itself
+            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+            return "" if looks_like_url else anchor
+
+        safe = _LINK_RE.sub(repl, part)
+
+        # 3) Remove truly empty parentheses created by link removal, but ONLY if empty.
+        #    (We do *not* remove any other parentheses or compress whitespace.)
+        safe = re.sub(r'\(\s*\)', '', safe)
+
+        parts[i] = safe
+
+    return "".join(parts)
+
+# Run this AFTER render_with_citations_by_index(...) and your link stripping.
+# It removes parenthesis groups that contain only separators/whitespace (no words),
+# e.g. "(, )", "( ; )", "( / , )", "( | )", "( – )", or just "()".
+
+_SEP_ONLY_PARENS = re.compile(
+    r"""\(\s*                                   # opening paren
+        (?:[,;:/|·•\-–—]|\s|&nbsp;|&\#160;)*     # only separators/whitespace
+        \)                                      # closing paren
+    """,
+    re.VERBOSE
+)
+
+# Also remove the very common exact cases quickly (cheap pass):
+def _trim_separator_artifacts(s: str) -> str:
+    if not s:
+        return s
+
+    # 1) Nuke empty/sep-only parenthesis groups like "(, )", "( ; )", "()"
+    s = _SEP_ONLY_PARENS.sub("", s)
+
+    # 2) If a dangling comma was left behind right before a block end, newline, or end of string,
+    #    remove that comma (avoids "... [7] [8],\n" or "... [7] [8],</p>")
+    s = re.sub(r",\s*(?=(?:$|\n|\r|</p>|</li>|</div>|</ul>|</ol>))", "", s, flags=re.IGNORECASE)
+
+    # 3) Collapse any accidental multiple spaces that appear right before punctuation
+    s = re.sub(r"\s+([,.;:])", r"\1", s)
+
+    return s
+
+
+
 def extract_citations_from_annotations_response_dict(text_part, client_unused=None):
     """
     Robust extractor for Responses API annotations (dicts or objects).
@@ -151,44 +242,61 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
     # Normalize each annotation into a simple dict
     norm = []
     for a in annotations:
-        a_type = _ga(a, "type")
+        a_type = (str((a.get("type") if isinstance(a, dict) else getattr(a, "type", "")) or "")
+                .strip().lower())
+
         if a_type == "file_citation":
-            # file_id may be on the annotation or nested under .file_citation
-            file_id = _ga(a, "file_id")
+            file_id = a.get("file_id") if isinstance(a, dict) else getattr(a, "file_id", None)
             if not file_id:
-                fc = _ga(a, "file_citation")
-                file_id = _ga(fc, "file_id") if fc is not None else None
+                fc = a.get("file_citation") if isinstance(a, dict) else getattr(a, "file_citation", None)
+                if isinstance(fc, dict):
+                    file_id = fc.get("file_id")
             if not file_id:
                 continue
-            filename = _ga(a, "filename")
-            idx = _ga(a, "index")
-            try:
-                idx = int(idx) if idx is not None else len(full_text)
-            except Exception:
+
+            filename = a.get("filename") if isinstance(a, dict) else getattr(a, "filename", None)
+            idx = _pick_index(a, len(full_text))
+            if idx is None:
                 idx = len(full_text)
+
             norm.append({
                 "type": "file_citation",
                 "file_id": file_id,
                 "filename": filename,
                 "index": idx
             })
-        elif a_type == "web_citation":
-            # Web citation: extract url, title, summary, index
-            url = _ga(a, "url")
-            title = _ga(a, "title")
-            summary = _ga(a, "summary")
-            idx = _ga(a, "index")
-            try:
-                idx = int(idx) if idx is not None else len(full_text)
-            except Exception:
+
+        elif a_type in ("url_citation", "web_citation"):
+            # sometimes payload is flat (as in your sample)
+            payload = a
+            # but tolerate nested shapes like a["url_citation"] = {...}
+            inner = a.get("url_citation") if isinstance(a, dict) else getattr(a, "url_citation", None)
+            if isinstance(inner, dict):
+                payload = inner
+
+            url = payload.get("url") if isinstance(payload, dict) else getattr(payload, "url", None)
+            title = payload.get("title") if isinstance(payload, dict) else getattr(payload, "title", None)
+            summary = payload.get("summary") if isinstance(payload, dict) else getattr(payload, "summary", None)
+
+            idx = _pick_index(payload, len(full_text))
+            # if both start and end exist, prefer end for placement
+            if idx is None and "end_index" in payload:
+                try:
+                    idx = int(payload["end_index"])
+                except Exception:
+                    pass
+            if idx is None:
                 idx = len(full_text)
+
+
             norm.append({
-                "type": "web_citation",
+                "type": "web_citation",   # keep your internal normalized name
                 "url": url,
                 "title": title,
                 "summary": summary,
                 "index": idx
             })
+
 
     if not norm:
         return citation_map, placements
@@ -860,7 +968,18 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 # No inline link rebuild needed; use original cleaned text
                 cleaned = normalized_part.get("text", "").strip()
             rendered = render_with_citations_by_index(cleaned, citation_map, placements)
-            # No need to process filecite markers when we have normalized text with proper annotations
+
+            has_url_annotations = any(
+                (a.get("type") if isinstance(a, dict) else getattr(a, "type", "")) in ("url_citation","web_citation")
+                for a in (normalized_part.get("annotations") or [])
+            )
+
+            if has_url_annotations:
+                rendered = _strip_markdown_links_preserve_md(rendered)
+                
+            # 🔧 NEW: remove leftover "(, )" (and similar) artifacts
+            rendered = _trim_separator_artifacts(rendered)
+
         else:
             # Fallback: we only have output_text which may contain inline filecite markers.
             # Replace markers in-order with supers based on placements (best-effort).
