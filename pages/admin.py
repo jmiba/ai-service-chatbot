@@ -1,23 +1,49 @@
 import streamlit as st
-from utils import get_connection, get_latest_prompt, admin_authentication, render_sidebar, create_llm_settings_table, save_llm_settings, get_llm_settings, get_available_openai_models, supports_reasoning_effort, get_supported_verbosity_options, supports_full_verbosity, create_filter_settings_table, get_filter_settings, save_filter_settings
+from utils import get_connection, get_latest_prompt, admin_authentication, render_sidebar, create_llm_settings_table, save_llm_settings, get_llm_settings, get_available_openai_models, supports_reasoning_effort, get_supported_verbosity_options, create_filter_settings_table, get_filter_settings, save_filter_settings
+
+# Must be the first Streamlit call
+st.set_page_config(page_title="LLM Settings", layout="wide")
 
 # Initialize LLM settings table
+def _ensure_prompt_versions_table():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        # Minimal, portable-ish schema without PK (sufficient for history listing)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS prompt_versions (
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                prompt TEXT NOT NULL,
+                edited_by VARCHAR(255),
+                note TEXT
+            )
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Error ensuring prompt_versions table: {e}")
+
 try:
     create_llm_settings_table()
     create_filter_settings_table()
+    _ensure_prompt_versions_table()
 except Exception as e:
     st.error(f"Error initializing settings tables: {e}")
 
 def backup_prompt_to_db(current_prompt, edited_by=None, note=None):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO prompt_versions (prompt, edited_by, note)
-        VALUES (%s, %s, %s)
-    """, (current_prompt, edited_by, note))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO prompt_versions (prompt, edited_by, note)
+            VALUES (%s, %s, %s)
+        """, (current_prompt, edited_by, note))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Error saving prompt: {e}")
 
 def get_prompt_history(limit=10):
     conn = get_connection()
@@ -33,11 +59,13 @@ def get_prompt_history(limit=10):
     conn.close()
     return history
 
+@st.cache_data(ttl=900)
+def _load_available_models_cached():
+    return get_available_openai_models()
+
 # --- Authentication ---
 authenticated = admin_authentication()
 render_sidebar(authenticated)
-
-st.set_page_config(page_title="LLM Settings", layout="wide")
 
 # --- Admin content ---
 if authenticated:
@@ -50,6 +78,7 @@ if authenticated:
         st.header("Edit System Prompt")
 
         current_prompt, current_note = get_latest_prompt()
+        current_prompt = current_prompt or ""
 
         new_prompt = st.text_area("**System prompt:**", value=current_prompt, height=400)
         new_note = st.text_input("**Edit note (optional):**", value="")
@@ -64,7 +93,12 @@ if authenticated:
 
         with st.expander("🕒 Prompt history"):
             for ts, prompt, author, note in get_prompt_history():
-                st.markdown(f"🕒 **{ts.strftime('%Y-%m-%d %H:%M:%S')}** by `{author or 'unknown'}` – {note or ''}")
+                # Safe timestamp formatting
+                try:
+                    ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if ts else "unknown time"
+                except Exception:
+                    ts_str = str(ts) if ts is not None else "unknown time"
+                st.markdown(f"🕒 **{ts_str}** by `{author or 'unknown'}` – {note or ''}")
                 st.info(prompt)
                 
     with tab2:
@@ -73,9 +107,9 @@ if authenticated:
         # Get current settings from database
         current_settings = get_llm_settings()
         
-        # Fetch available models dynamically from OpenAI API
+        # Fetch available models dynamically from OpenAI API (cached)
         with st.spinner("Loading available models..."):
-            available_models = get_available_openai_models()
+            available_models = _load_available_models_cached()
         
         # Show model count and refresh option
         col_refresh, col_count = st.columns([3, 1])
@@ -86,17 +120,21 @@ if authenticated:
         with col_count:
             st.caption(f"📊 {len(available_models)} models available")
         
+        if not available_models:
+            st.error("No models available. Please check OpenAI credentials/network and try refreshing.")
+            st.stop()
+        
         # Model selection
         model_index = 0
         try:
             model_index = available_models.index(current_settings['model'])
-        except ValueError:
+        except Exception:
             pass  # Use default if current model not in list
             
         model = st.selectbox(
             "Select Language Model", 
             options=available_models,
-            index=model_index,
+            index=min(model_index, max(0, len(available_models) - 1)),
             help="Choose from available OpenAI models (fetched dynamically from API). Models are prioritized by capability and cost-effectiveness."
         )
         
@@ -113,7 +151,7 @@ if authenticated:
         
         # Show advanced controls for GPT-5 models
         if supports_reasoning_effort(model):
-            st.info("🧠 **Advanced AI Model** - This model supports reasoning effort and full verbosity control")
+            st.info("🧠 Advanced AI Model - This model supports reasoning effort and full verbosity control")
             
             col1, col2 = st.columns(2)
             
@@ -121,45 +159,35 @@ if authenticated:
                 reasoning_effort = st.selectbox(
                     "Reasoning Effort",
                     options=["low", "medium", "high"],
-                    index=["low", "medium", "high"].index(reasoning_effort),
+                    index=["low", "medium", "high"].index(reasoning_effort) if reasoning_effort in ["low", "medium", "high"] else 1,
                     help="Controls how much the model thinks before responding"
                 )
                 
                 # Show reasoning effort explanation with latency warnings
                 effort_explanations = {
-                    "low": "⚡ **Fast reasoning** - Quick responses (~25s), lower cost",
-                    "medium": "⚖️ **Balanced reasoning** - Good quality-speed balance (~35s)", 
-                    "high": "🎯 **Deep reasoning** - Best quality, much slower responses (~85s) 💰"
+                    "low": "⚡ Fast reasoning - Quick responses (~25s), lower cost",
+                    "medium": "⚖️ Balanced reasoning - Good quality-speed balance (~35s)", 
+                    "high": "🎯 Deep reasoning - Best quality, much slower responses (~85s) 💰"
                 }
                 
                 if reasoning_effort == "high":
-                    st.warning("⚠️ **High effort significantly increases response time** (3-4x slower) and cost")
+                    st.warning("High effort significantly increases response time (3-4x slower) and cost")
                 
-                st.caption(effort_explanations[reasoning_effort])
+                st.caption(effort_explanations.get(reasoning_effort, ""))
             
             with col2:
+                supported_verbosity = get_supported_verbosity_options(model) or ["medium"]
                 text_verbosity = st.selectbox(
                     "Response Verbosity",
-                    options=["low", "medium", "high"],
-                    index=["low", "medium", "high"].index(text_verbosity),
+                    options=supported_verbosity,
+                    index=supported_verbosity.index(text_verbosity) if text_verbosity in supported_verbosity else 0,
                     help="Controls how detailed and comprehensive responses are"
                 )
-                
-                # Show verbosity explanation
-                verbosity_explanations = {
-                    "low": "📝 **Concise** - Brief, to-the-point responses",
-                    "medium": "📄 **Balanced** - Appropriate detail level",
-                    "high": "📚 **Comprehensive** - Detailed, thorough responses"
-                }
-                st.caption(verbosity_explanations[text_verbosity])
-                
         else:
-            st.info("ℹ️ **Standard Model** - Advanced controls available with GPT-5 models")
-            
-            # Still show verbosity for GPT-4 models, but limited to medium
-            supported_verbosity = get_supported_verbosity_options(model)
+            st.info("ℹ️ Standard Model - Advanced controls available with GPT-5 models")
+            supported_verbosity = get_supported_verbosity_options(model) or ["medium"]
             if len(supported_verbosity) == 1:
-                st.caption("🔧 **Response Verbosity**: Medium (only option supported by this model)")
+                st.caption("🔧 Response Verbosity: Medium (only option supported by this model)")
                 text_verbosity = "medium"
             else:
                 text_verbosity = st.selectbox(
@@ -290,7 +318,7 @@ if authenticated:
                 help="Block or flag potentially harmful or offensive content"
             )
         
-        # User Experience Filters
+        # User Experience
         st.subheader("👥 User Experience")
         
         col1, col2 = st.columns(2)
@@ -391,8 +419,8 @@ if authenticated:
                 }
                 
                 try:
-                    from utils.utils import save_filter_settings
-                    save_filter_settings(filter_settings, updated_by="admin")
+                    # Use the already-imported save_filter_settings from utils
+                    save_filter_settings(filter_settings, updated_by="admin@viadrina.de")
                     st.success("✅ Filter settings saved successfully!")
                     st.caption("Filters will be applied to all new conversations")
                 except Exception as e:
@@ -428,5 +456,4 @@ if authenticated:
             else:
                 st.error(f"{feature}: {status}")
         
-        st.caption("💡 **All core filtering features are fully operational and ready for production use!**")    
-
+        st.caption("💡 All core filtering features are fully operational and ready for production use!")
