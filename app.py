@@ -291,6 +291,23 @@ def render_sources_list(citation_map):
             lines.append(f"* {badge} {title}")
     return "\n".join(lines)
 
+
+def _extract_markdown_links(text):
+    """Return list of (start_index, title, url) for markdown links [title](url) in text."""
+    if not text:
+        return []
+    pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+    results = []
+    for m in pattern.finditer(text):
+        try:
+            start = m.start()
+            title = m.group(1).strip()
+            url = m.group(2).strip()
+            results.append((start, title, url))
+        except Exception:
+            continue
+    return results
+
 # New helper: replace inline filecite markers by ordered supers based on placements
 # ...existing code...
 def replace_filecite_markers_with_sup(text, citation_map, placements, annotations=None):
@@ -520,7 +537,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # Create status row first (spinner + status text on same line)
         status_row = st.container()
         with status_row:
-            col_spinner, col_status = st.columns([0.03, 0.97])
+            col_spinner, col_status = st.columns([0.02, 0.98])
             with col_spinner:
                 spinner_ctx = st.spinner("")  # minimal spinner, no text
                 spinner_ctx.__enter__()
@@ -715,17 +732,87 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # If we have the normalized text part (canonical, no inline markers), use it as the base
         if normalized_part:
             cleaned = normalized_part.get("text", "").strip()
-            # Remove inline web citations (markdown links) from the text before rendering
+            # Detect inline web citations (markdown links) and add them to citation_map
             # Pattern: [text](http...) or [text](https...)
-            cleaned = re.sub(r'\[([^\]]+)\]\((https?://[^)]+)\)', '', cleaned)
+            md_links = _extract_markdown_links(normalized_part.get("text", "") or "")
+            # If annotations didn't provide web citations, use inline links as fallback
+            # Rebuild the text so links are replaced by their anchor text and compute placements
+            if md_links and not any(v.get("url") for v in citation_map.values()):
+                # Build a new cleaned string where each markdown link is replaced by its anchor text
+                text_orig = normalized_part.get("text", "") or ""
+                rebuilt = []
+                placements_map = []  # (char_index_in_rebuilt, title, url)
+                last = 0
+                pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+                for m in pattern.finditer(text_orig):
+                    # append text before link
+                    pre = text_orig[last:m.start()]
+                    rebuilt.append(pre)
+                    anchor = m.group(1).strip()
+                    url = m.group(2).strip()
+                    start_idx = sum(len(p) for p in rebuilt)
+                    # append anchor text in place of the link
+                    rebuilt.append(anchor)
+                    placements_map.append((start_idx, anchor, url))
+                    last = m.end()
+                rebuilt.append(text_orig[last:])
+                cleaned = "".join(rebuilt).strip()
+
+                # Add to citation_map using positions computed in rebuilt text
+                next_num = max([int(k) for k in citation_map.keys()], default=0) + 1
+                for start_idx, title, url in placements_map:
+                    clean_title = html.escape(title)
+                    citation_map[next_num] = {
+                        "number": next_num,
+                        "file_name": None,
+                        "file_id": None,
+                        "url": url,
+                        "title": clean_title,
+                        "summary": "",
+                    }
+                    placements.append((max(0, min(len(cleaned), start_idx)), next_num))
+                    next_num += 1
+            else:
+                # No inline link rebuild needed; use original cleaned text
+                cleaned = normalized_part.get("text", "").strip()
             rendered = render_with_citations_by_index(cleaned, citation_map, placements)
             # No need to process filecite markers when we have normalized text with proper annotations
         else:
             # Fallback: we only have output_text which may contain inline filecite markers.
             # Replace markers in-order with supers based on placements (best-effort).
             cleaned = response_text.strip()
-            # Remove inline web citations (markdown links) from the text before rendering
-            cleaned = re.sub(r'\[([^\]]+)\]\((https?://[^)]+)\)', '', cleaned)
+            # For fallback raw text: rebuild so links are replaced by anchor text and compute placements
+            text_orig = cleaned
+            pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+            rebuilt = []
+            placements_map = []
+            last = 0
+            for m in pattern.finditer(text_orig):
+                rebuilt.append(text_orig[last:m.start()])
+                anchor = m.group(1).strip()
+                url = m.group(2).strip()
+                start_idx = sum(len(p) for p in rebuilt)
+                rebuilt.append(anchor)
+                placements_map.append((start_idx, anchor, url))
+                last = m.end()
+            rebuilt.append(text_orig[last:])
+            cleaned = "".join(rebuilt).strip()
+
+            if placements_map:
+                next_num = max([int(k) for k in citation_map.keys()], default=0) + 1
+                for start_idx, title, url in placements_map:
+                    clean_title = html.escape(title)
+                    citation_map[next_num] = {
+                        "number": next_num,
+                        "file_name": None,
+                        "file_id": None,
+                        "url": url,
+                        "title": clean_title,
+                        "summary": "",
+                    }
+                    placements.append((max(0, min(len(cleaned), start_idx)), next_num))
+                    next_num += 1
+
             rendered = replace_filecite_markers_with_sup(cleaned, citation_map, placements, annotations=None)
 
         # Safety cleanup: remove any remaining filecite markers that might have been missed
