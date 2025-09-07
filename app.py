@@ -15,41 +15,12 @@ from utils import (
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
     supports_reasoning_effort, get_kb_entries
 )
-from filter_examples import ResponseFormatter
+
 # -------------------------------------
 
-# Response evaluation schema for the second API call
-RESPONSE_EVALUATION_SCHEMA = {
-    "name": "response_evaluation",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {
-            "request_classification": {
-                "type": "string",
-                "enum": ["library_hours", "book_search", "research_help", "account_info", "facility_info", "policy_question", "technical_support", "literature search", "citation search", "other"],
-                "description": "Classification of the user's request type"
-            },
-            "confidence": {
-                "type": "number",
-                "description": "Confidence in the response quality (0.0-1.0)",
-                "minimum": 0,
-                "maximum": 1
-            },
-            "error_code": {
-                "type": "integer",
-                "description": "Error assessment: 0=perfect response, 1=minor issues/uncertainty, 2=significant gaps, 3=unable to answer properly"
-            },
-            "evaluation_notes": {
-                "type": "string",
-                "description": "Brief explanation of confidence/error assessment"
-            }
-        },
-        "required": ["request_classification", "confidence", "error_code", "evaluation_notes"],
-        "additionalProperties": False
-    }
-}
+st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
 
+# -------------------------------------
 def _redact_ids(obj_str: str) -> str:
     # redact typical object/ids like resp_, file_, vs_, msg_, fs_, txt_
     return re.sub(r'\b(resp|file|vs|msg|fs|txt)_[A-Za-z0-9\-]{6,}\b', r'\1_[REDACTED]', obj_str)
@@ -663,7 +634,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         
         # Content placeholder below the status row
         content_placeholder = st.empty()
-        got_first_event = False
         buf = ""
         final = None
         tool_event_shown = False
@@ -697,7 +667,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                             spinner_ctx.__exit__(None, None, None)
                         except Exception:
                             pass
-                        got_first_event = True
 
                     # Always show a concise human-friendly status when available.
                     # In normal mode we only show the friendly label; debug_one toggles verbose info.
@@ -879,7 +848,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     group_end = None
                     if has_wrap_left:
                         scan_pos = m.end()
-                        last_match = m
                         while True:
                             # look for next link after scan_pos
                             nm = pattern.search(text_orig, scan_pos)
@@ -1331,7 +1299,7 @@ if database_available:
         # Get current document count and latest prompt from database 
         all_entries = get_kb_entries()
         doc_count = len(all_entries)
-        current_prompt, current_note = get_latest_prompt()
+        current_prompt, _ = get_latest_prompt()
         CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time, doc_count=doc_count)
     except Exception as e:
         st.warning("Using default prompt due to database connection issues. Error: " + str(e))
@@ -1340,7 +1308,6 @@ else:
     # Use default prompt when database is not available
     CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
 
-st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
 load_css("css/styles.css")
 
 col1, col2 = st.columns([3, 3])
