@@ -249,12 +249,16 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
 def render_with_citations_by_index(text_html, citation_map, placements):
     """
     Insert <sup>[n]</sup> at the specified character indices (desc order to avoid shifts).
+    Ensures that when multiple citations share the same index they appear left-to-right
+    in numeric order and are separated by a space.
     """
     s = text_html or ""
     n = len(s)
     used_nums = set()
-    # Insert superscripts at valid indices
-    for idx, num in sorted(placements, key=lambda x: x[0], reverse=True):
+    # Sort by (index, num) and reverse so we insert at largest index first.
+    # For equal indices, the higher num is inserted first so the final left-to-right
+    # order of superscripts is increasing (e.g., [6] [7]).
+    for idx, num in sorted(placements or [], key=lambda x: (x[0], x[1]), reverse=True):
         note = citation_map.get(num)
         if not note:
             continue
@@ -268,6 +272,8 @@ def render_with_citations_by_index(text_html, citation_map, placements):
         if num not in used_nums:
             sup = f"<sup title='Source: {note['title']}'>[{num}]</sup>"
             s += sup
+    # Ensure there's a visible space between adjacent supers if they ended up touching
+    s = re.sub(r"</sup><sup", "</sup> <sup", s)
     return s
 
 def render_sources_list(citation_map):
@@ -498,8 +504,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         for tool in tool_cfg:
             if tool.get("type") == "web_search":
                 tool["filters"] = retrieval_filters
-                break
-            
+                break    
     # Build conversation context (last 10 exchanges to stay within limits)
     def build_conversation_context():
         conversation = [{"role": "system", "content": system_instructions}]
@@ -968,6 +973,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         rendered = re.sub(r'\bturn\d+file\d+(?:turn\d+file\d+)*\b', '', rendered)
 
         sources_md = render_sources_list(citation_map)
+        
 
         # Overwrite the streamed text in the SAME bubble with the enriched version
         content_placeholder.markdown(rendered, unsafe_allow_html=True)
@@ -1206,7 +1212,7 @@ if database_available:
         current_prompt, current_note = get_latest_prompt()
         CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time)
     except Exception as e:
-        st.warning("Using default prompt due to database connection issues.")
+        st.warning("Using default prompt due to database connection issues. Error: " + str(e))
         CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
 else:
     # Use default prompt when database is not available
