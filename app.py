@@ -15,7 +15,6 @@ from utils import (
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
     supports_reasoning_effort, get_kb_entries
 )
-
 # -------------------------------------
 
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
