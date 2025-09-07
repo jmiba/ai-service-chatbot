@@ -1211,13 +1211,10 @@ if database_available:
     try:
         # Get current document count and latest prompt from database 
         all_entries = get_kb_entries()
-        document_count = len(all_entries)
+        doc_count = len(all_entries)
         current_prompt, current_note = get_latest_prompt()
-        CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time)
-        CUSTOM_INSTRUCTIONS = CUSTOM_INSTRUCTIONS.replace("{document_count}", str(document_count))
-    except Exception as e:
+        CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time, doc_count=doc_count)
         st.warning("Using default prompt due to database connection issues. Error: " + str(e))
-        CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
 else:
     # Use default prompt when database is not available
     CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
