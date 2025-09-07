@@ -1214,7 +1214,9 @@ if database_available:
         doc_count = len(all_entries)
         current_prompt, current_note = get_latest_prompt()
         CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time, doc_count=doc_count)
+    except Exception as e:
         st.warning("Using default prompt due to database connection issues. Error: " + str(e))
+        CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
 else:
     # Use default prompt when database is not available
     CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
