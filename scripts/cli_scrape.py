@@ -4,16 +4,18 @@ Standalone CLI scraper runner for cron/systemd.
 - Loads URL configs from DB (utils.load_url_configs)
 - Reuses pages.scrape.scrape() to crawl and write to DB
 - Logs to stdout
+- After scraping, optionally uploads new/updated docs to the vector store
 
 Usage examples:
   python scripts/cli_scrape.py --budget 2000 --dry-run
   python scripts/cli_scrape.py --only "university_main"
   python scripts/cli_scrape.py --keep-query page,lang
+  python scripts/cli_scrape.py --no-vectorize  # skip vector store sync
 
 Environment / Secrets:
   - Provide Streamlit secrets in one of these ways:
     a) Env var STREAMLIT_SECRETS_JSON containing JSON, e.g.
-       '{"postgres": {"host": "...", "port": 5432, "user": "...", "password": "...", "database": "..."}, "OPENAI_API_KEY": "sk-...", "MODEL": "gpt-4o-mini"}'
+       '{"postgres": {"host": "...", "port": 5432, "user": "...", "password": "...", "database": "..."}, "OPENAI_API_KEY": "sk-...", "MODEL": "gpt-4o-mini", "VECTOR_STORE_ID": "vs_..."}'
     b) A secrets.toml at ~/.streamlit/secrets.toml or <project>/.streamlit/secrets.toml
 
 Exit codes: 0 success, 1 error
@@ -109,10 +111,13 @@ def main():
     parser.add_argument("--only", type=str, default="", help="Only run configs whose recordset contains this substring")
     parser.add_argument("--exclude", type=str, default="", help="Skip configs whose recordset contains this substring")
     parser.add_argument("--sleep", type=float, default=0.0, help="Sleep seconds between configs (rate limiting)")
+    # Vector store sync control (enabled by default)
+    parser.add_argument("--no-vectorize", dest="vectorize", action="store_false", help="Skip uploading to vector store after scraping")
+    parser.set_defaults(vectorize=True)
     args = parser.parse_args()
 
     start_ts = datetime.utcnow().isoformat()
-    print(f"[INFO] cli_scrape start {start_ts}Z budget={args.budget} dry_run={args.dry_run}")
+    print(f"[INFO] cli_scrape start {start_ts}Z budget={args.budget} dry_run={args.dry_run} vectorize={args.vectorize}")
 
     # Ensure tables exist
     try:
@@ -220,6 +225,29 @@ def main():
                 conn.close()
             except Exception:
                 pass
+
+        # After scraping, optionally sync to vector store (skip in dry-run)
+        if not args.dry_run and args.vectorize:
+            print("[INFO] Starting vector store sync...")
+            try:
+                # Import lazily to avoid heavy Streamlit UI code; utils UI was monkey-patched above
+                from pages.vectorize import sync_vector_store
+            except Exception as e:
+                print(f"[ERROR] Could not import vectorization module: {e}")
+            else:
+                try:
+                    result = sync_vector_store()
+                    if result and isinstance(result, dict):
+                        uploaded = result.get('uploaded_count', 0)
+                        print(f"[INFO] Vector store sync finished. Uploaded: {uploaded}")
+                    else:
+                        print("[INFO] Vector store sync finished.")
+                except Exception as e:
+                    print(f"[ERROR] Vector store sync failed: {e}")
+        elif args.dry_run:
+            print("[INFO] Dry-run mode: skipping vector store sync.")
+        else:
+            print("[INFO] Vector store sync disabled via --no-vectorize.")
 
     finally:
         # Release lock
