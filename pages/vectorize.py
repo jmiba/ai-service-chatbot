@@ -661,20 +661,20 @@ if authenticated:
             pending_replacement_ids = set()
             true_orphan_ids = set()
 
-        # Display metrics dashboard
-        st.markdown("### 📊 Synchronization Status")
+        # # Display metrics dashboard
+        # st.markdown("### 📊 Synchronization Status")
         
-        col1, col2, col3, col4, col5 = st.columns(5)
-        with col1:
-            st.metric("📄 Total Documents", total_docs)
-        with col2:
-            st.metric("✅ Vectorized", vectorized_docs)
-        with col3:
-            st.metric("⏳ Non-vectorized", non_vectorized_docs)
-        with col4:
-            st.metric("📝 New (unsynced)", new_unsynced_count)
-        with col5:
-            st.metric("🔄 Need re-sync", pending_resync_count)
+        # col1, col2, col3, col4, col5 = st.columns(5)
+        # with col1:
+        #     st.metric("📄 Total Documents", total_docs)
+        # with col2:
+        #     st.metric("✅ Vectorized", vectorized_docs)
+        # with col3:
+        #     st.metric("⏳ Non-vectorized", non_vectorized_docs)
+        # with col4:
+        #     st.metric("📝 New (unsynced)", new_unsynced_count)
+        # with col5:
+        #     st.metric("🔄 Need re-sync", pending_resync_count)
 
     except Exception as e:
         st.error(f"❌ Failed to compute sync status: {e}")
