@@ -294,14 +294,13 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
             if not title:
                 title = filename.rsplit(".", 1)[0]
             clean_title = html.escape(re.sub(r"^\d+_", "", title).replace("_", " "))
-            clean_summary = html.escape(summary or "")
             citation_map[i] = {
                 "number": i,
                 "file_name": filename,
                 "file_id": file_id,
                 "url": url,
                 "title": clean_title,
-                "summary": clean_summary,
+                "summary": summary,
             }
             placements.append((idx, i))
             i += 1
@@ -311,14 +310,13 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
             title = n["title"] or url or "Web Source"
             summary = n["summary"] or ""
             clean_title = html.escape(title)
-            clean_summary = html.escape(summary)
             citation_map[i] = {
                 "number": i,
                 "file_name": None,
                 "file_id": None,
                 "url": url,
                 "title": clean_title,
-                "summary": clean_summary,
+                "summary": summary,
             }
             placements.append((idx, i))
             i += 1
@@ -361,7 +359,7 @@ def render_sources_list(citation_map):
     lines = []
     for c in citation_map.values():
         title = c["title"] or "Untitled"
-        summary = html.escape(c["summary"] or "")
+        summary = html.escape((c["summary"] or "").replace("\n", " ").strip())
         badge = f"[{c['number']}]"
         if c["url"]:
             # Always escape the title too (already escaped earlier, but harmless to do again)
