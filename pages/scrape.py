@@ -855,49 +855,51 @@ def main():
         # Status Dashboard - Give users immediate overview of system state
         st.markdown("---")
         st.markdown("#### 📊 System Status")
-        try:
-            # Get current statistics
-            all_entries = get_kb_entries()
-            total_pages = len(all_entries)
-            
-            # Count pending vector sync
-            conn = get_connection()
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM documents WHERE vector_file_id IS NULL")
-                pending_sync = cur.fetchone()[0]
-            conn.close()
-            
-            # Count configurations
-            total_configs = len(st.session_state.url_configs)
-            
-            # Display metrics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("📄 Total Pages", total_pages)
-            with col2:
-                sync_color = "🟢" if pending_sync == 0 else "🟡"
-                st.metric(f"{sync_color} Pending Sync", pending_sync)
-            with col3:
-                config_color = "🟢" if total_configs > 0 else "🔴"
-                st.metric(f"{config_color} Configurations", total_configs)
-            with col4:
-                # Vector synchronization is handled in the separate 'Vectorize' page
-                if pending_sync > 0:
-                    st.info(f"⏳ There are {pending_sync} documents waiting for vector store synchronization.\n"
-                            "Run the 'Vectorize' page to perform batch vector synchronization (keeps scraping responsive).")
-                else:
-                    st.success("✅ All synced")
-                    
-            # Show status summary
-            if total_pages == 0:
-                st.info("🚀 **Welcome!** Add your first URL configuration below to start indexing content.")
-            elif pending_sync > 0:
-                st.warning(f"⏳ **{pending_sync} pages** are waiting for vector store synchronization.")
-            else:
-                st.success(f"✅ **System healthy** - All {total_pages} pages are indexed and synchronized.")
+        show_sys = st.checkbox("Show system status (vector sync, configs, counts)", value=False, key="show_sys_status")
+        if show_sys:
+            try:
+                # Get current statistics
+                all_entries = get_kb_entries()
+                total_pages = len(all_entries)
                 
-        except Exception as e:
-            st.error(f"Could not load system status: {e}")
+                # Count pending vector sync
+                conn = get_connection()
+                with conn.cursor() as cur:
+                    cur.execute("SELECT COUNT(*) FROM documents WHERE vector_file_id IS NULL")
+                    pending_sync = cur.fetchone()[0]
+                conn.close()
+                
+                # Count configurations
+                total_configs = len(st.session_state.url_configs)
+                
+                # Display metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("📄 Total Pages", total_pages)
+                with col2:
+                    sync_color = "🟢" if pending_sync == 0 else "🟡"
+                    st.metric(f"{sync_color} Pending Sync", pending_sync)
+                with col3:
+                    config_color = "🟢" if total_configs > 0 else "🔴"
+                    st.metric(f"{config_color} Configurations", total_configs)
+                with col4:
+                    # Vector synchronization is handled in the separate 'Vectorize' page
+                    if pending_sync > 0:
+                        st.info(f"⏳ There are {pending_sync} documents waiting for vector store synchronization.\n"
+                                "Run the 'Vectorize' page to perform batch vector synchronization (keeps scraping responsive).")
+                    else:
+                        st.success("✅ All synced")
+                        
+                # Show status summary
+                if total_pages == 0:
+                    st.info("🚀 **Welcome!** Add your first URL configuration below to start indexing content.")
+                elif pending_sync > 0:
+                    st.warning(f"⏳ **{pending_sync} pages** are waiting for vector store synchronization.")
+                else:
+                    st.success(f"✅ **System healthy** - All {total_pages} pages are indexed and synchronized.")
+                    
+            except Exception as e:
+                st.error(f"Could not load system status: {e}")
 
         # Crawl settings (global for a run)
         st.markdown("---")
@@ -1213,7 +1215,7 @@ def main():
                         metric_llm = st.empty()
                     with metrics_cols[2]:
                         metric_config = st.empty()
-                    
+                
                 def update_metrics():
                     """Update metrics without creating new containers"""
                     metric_urls.metric("URLs Visited", len(visited_norm))

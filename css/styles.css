@@ -1,3 +1,15 @@
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
+
+.ref-icon {
+    display: inline-block;
+    font-family: 'Material Icons';
+    font-size: 1em;
+    line-height: 1;
+    vertical-align: text-top;
+    margin: 3px .1em 0 .5em;
+    color: #3F4C7B;
+}
+
 .stChatInput textarea {
     border-radius: 0px !important;
     padding: 10px;
@@ -42,4 +54,12 @@
 
 .stExpander > details {
     border-radius: 0px !important;
+}
+
+/* Make list items inside reference expander align icon, badge, and text on one line */
+.stExpander ul li > p {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0; /* remove extra p-margin for tighter alignment */
 }

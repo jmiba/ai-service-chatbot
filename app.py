@@ -296,6 +296,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
             clean_title = html.escape(re.sub(r"^\d+_", "", title).replace("_", " "))
             citation_map[i] = {
                 "number": i,
+                "source": "file",
                 "file_name": filename,
                 "file_id": file_id,
                 "url": url,
@@ -313,6 +314,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
             clean_title = html.escape(title)
             citation_map[i] = {
                 "number": i,
+                "source": "web",
                 "file_name": None,
                 "file_id": None,
                 "url": url,
@@ -360,6 +362,13 @@ def render_sources_list(citation_map):
     if not citation_map:
         return ""
 
+    def _icon_for_source(src):
+        if src == "file":
+            return "<span class='ref-icon'>description</span>"  # material icon: file
+        if src == "web":
+            return "<span class='ref-icon'>public</span>"      # material icon: public/web
+        return ""
+
     lines = []
     for c in citation_map.values():
         title = c["title"] or "Untitled"
@@ -390,11 +399,12 @@ def render_sources_list(citation_map):
         else:
             link_part = html.escape(title)
 
-        # Compose line: badge + optional recordset + link (and summary already in tooltip)
+        icon_html = _icon_for_source(c.get("source"))
+
         if rs_html:
-            lines.append(f"* {badge} {rs_html}: {link_part}")
+            lines.append(f"* {badge}{icon_html}{rs_html}: {link_part}")
         else:
-            lines.append(f"* {badge} {link_part}")
+            lines.append(f"* {badge}{icon_html}{link_part}")
 
     return "\n".join(lines)
 
@@ -1020,7 +1030,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     for idx_link, lm in enumerate(group_links):
                         anchor = lm.group(1).strip()
                         url = lm.group(2).strip()
-                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za:z]{2,})$', anchor.strip(), re.I))
+                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-Za:z]{2,})$', anchor.strip(), re.I))
                         display_anchor = "" if looks_like_url else anchor
                         start_idx = sum(len(p) for p in rebuilt)
                         rebuilt.append(display_anchor)
@@ -1046,7 +1056,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 rebuilt.append(pre)
                 anchor = m.group(1).strip()
                 url = m.group(2).strip()
-                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                 display_anchor = "" if looks_like_url else anchor
                 start_idx = sum(len(p) for p in rebuilt)
                 rebuilt.append(display_anchor)
