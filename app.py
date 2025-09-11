@@ -1,5 +1,5 @@
 import streamlit as st
-from openai import OpenAI, APIConnectionError, BadRequestError, RateLimitError
+from openai import OpenAI, APIConnectionError, BadRequestError, RateLimitError, APIError
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -77,15 +77,15 @@ def log_interaction(user_input, assistant_response, session_id=None, citation_js
         print(f"❌ DB logging error: {e}")
 
 def get_urls_and_titles_by_file_ids(conn, file_ids):
-    """Returns {file_id: (url, title, summary)}"""
+    """Returns {file_id: (url, title, summary, recordset)}"""
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT vector_file_id, url, title, summary
+            SELECT vector_file_id, url, title, summary, recordset
             FROM documents
             WHERE vector_file_id = ANY(%s);
         """, (file_ids,))
         rows = cur.fetchall()
-        return {row[0]: (row[1], row[2], row[3]) for row in rows}
+        return {row[0]: (row[1], row[2], row[3], row[4]) for row in rows}
 
 # ---------- Cached file metadata lookups ----------
 @lru_cache(maxsize=1024)
@@ -281,7 +281,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
     file_data = {}
     if file_ids:
         conn = get_connection()
-        file_data = get_urls_and_titles_by_file_ids(conn, file_ids)  # {file_id: (url, title, summary)}
+        file_data = get_urls_and_titles_by_file_ids(conn, file_ids)  # {file_id: (url, title, summary, recordset)}
 
     # Build map and placements in order of appearance
     i = 1
@@ -290,7 +290,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
             file_id = n["file_id"]
             filename = n["filename"] or _cached_filename(file_id)
             idx = max(0, min(len(full_text), n["index"]))  # clamp
-            url, title, summary = file_data.get(file_id, (None, None, None))
+            url, title, summary, recordset = file_data.get(file_id, (None, None, None, None))
             if not title:
                 title = filename.rsplit(".", 1)[0]
             clean_title = html.escape(re.sub(r"^\d+_", "", title).replace("_", " "))
@@ -301,6 +301,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
                 "url": url,
                 "title": clean_title,
                 "summary": summary,
+                "recordset": recordset,
             }
             placements.append((idx, i))
             i += 1
@@ -322,6 +323,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
             i += 1
 
     return citation_map, placements
+
 
 def render_with_citations_by_index(text_html, citation_map, placements):
     """
@@ -353,25 +355,47 @@ def render_with_citations_by_index(text_html, citation_map, placements):
     s = re.sub(r"</sup><sup", "</sup> <sup", s)
     return s
 
+
 def render_sources_list(citation_map):
     if not citation_map:
         return ""
+
     lines = []
     for c in citation_map.values():
         title = c["title"] or "Untitled"
         summary = html.escape((c["summary"] or "").replace("\n", " ").strip())
         badge = f"[{c['number']}]"
-        if c["url"]:
-            # Always escape the title too (already escaped earlier, but harmless to do again)
-            safe_title = html.escape(title)
-            # Plain Markdown link (safe) if no summary; HTML anchor with title tooltip otherwise
-            if summary:
-                url_with_tooltip = f'<a href="{c["url"]}" title="{summary}" target="_blank" rel="noopener noreferrer">{safe_title}</a>'
-                lines.append(f"* {badge} {url_with_tooltip}")
-            else:
-                lines.append(f"* {badge} [{safe_title}]({c['url']})")
+        url = c.get("url")
+
+        # Prepare recordset (plain, in front)
+        rs = c.get("recordset")
+        if isinstance(rs, (dict, list, tuple)):
+            try:
+                rs_text = json.dumps(rs, ensure_ascii=False)
+            except Exception:
+                rs_text = str(rs)
         else:
-            lines.append(f"* {badge} {title}")
+            rs_text = str(rs) if rs is not None else ""
+        rs_text = rs_text.strip()
+        rs_html = html.escape(rs_text) if rs_text else ""
+
+        # Link rendering (keep url_with_tooltip behavior as-is)
+        if url:
+            safe_title = html.escape(title)
+            if summary:
+                url_with_tooltip = f'<a href="{url}" title="{summary}" target="_blank" rel="noopener noreferrer">{safe_title}</a>'
+                link_part = url_with_tooltip
+            else:
+                link_part = f"[{safe_title}]({url})"
+        else:
+            link_part = html.escape(title)
+
+        # Compose line: badge + optional recordset + link (and summary already in tooltip)
+        if rs_html:
+            lines.append(f"* {badge} {rs_html}: {link_part}")
+        else:
+            lines.append(f"* {badge} {link_part}")
+
     return "\n".join(lines)
 
 
@@ -736,7 +760,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         print("post-stream tool detection failed:", e)
 
 
-        except (BadRequestError, APIConnectionError, RateLimitError) as e:
+        except (BadRequestError, APIConnectionError, RateLimitError, APIError) as e:
             print(f"❌ OpenAI API error during streaming: {e}", flush=True)
             # Ensure spinner is closed before fallback/error
             try:
@@ -744,7 +768,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             except Exception:
                 pass
 
-            if isinstance(e, BadRequestError):
+            if isinstance(e, (BadRequestError, APIError)):
                 # Fallback: non-streaming request rendered inside same bubble
                 with st.spinner("Thinking…"):
                     # Get current LLM configuration from database
@@ -878,7 +902,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         for idx_link, lm in enumerate(group_links):
                             anchor = lm.group(1).strip()
                             url = lm.group(2).strip()
-                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                             display_anchor = "" if looks_like_url else anchor
                             start_idx = sum(len(p) for p in rebuilt)
                             rebuilt.append(display_anchor)
@@ -905,7 +929,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     rebuilt.append(pre)
                     anchor = m.group(1).strip()
                     url = m.group(2).strip()
-                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                     display_anchor = "" if looks_like_url else anchor
                     start_idx = sum(len(p) for p in rebuilt)
                     rebuilt.append(display_anchor)
@@ -996,7 +1020,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     for idx_link, lm in enumerate(group_links):
                         anchor = lm.group(1).strip()
                         url = lm.group(2).strip()
-                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za:z]{2,})$', anchor.strip(), re.I))
                         display_anchor = "" if looks_like_url else anchor
                         start_idx = sum(len(p) for p in rebuilt)
                         rebuilt.append(display_anchor)
@@ -1022,7 +1046,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 rebuilt.append(pre)
                 anchor = m.group(1).strip()
                 url = m.group(2).strip()
-                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                 display_anchor = "" if looks_like_url else anchor
                 start_idx = sum(len(p) for p in rebuilt)
                 rebuilt.append(display_anchor)
@@ -1156,6 +1180,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         st.error("Evaluation call rate-limited. Please try again shortly.")
     except APIConnectionError as e:
         st.error(f"Evaluation call connection error: {e}")
+    except APIError as e:
+        st.error(f"Evaluation call server error: {e}")
     except Exception as e:
         if debug_one:
             st.error(f"Evaluation call unexpected error: {e}")
