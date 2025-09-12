@@ -57,6 +57,10 @@ debug_one = render_sidebar(authenticated=is_authenticated, show_debug=True)
 
 BASE_DIR = Path(__file__).parent
 
+# Avatare zentral definieren
+AVATAR_ASSISTANT = str(BASE_DIR / "assets/robot_2_24dp_4B77D1_FILL0_wght400_GRAD0_opsz24.svg")
+AVATAR_USER = str(BASE_DIR / "assets/face_24dp_F5B908_FILL0_wght400_GRAD0_opsz24.svg")
+
 def load_css(file_path):
     with open(BASE_DIR / file_path) as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
@@ -649,7 +653,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     response_text = ""
 
     # Assistant bubble first so spinner sits next to avatar
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar= AVATAR_ASSISTANT):
         # Create status row first (spinner + status text on same line)
         status_row = st.container()
         with status_row:
@@ -912,7 +916,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         for idx_link, lm in enumerate(group_links):
                             anchor = lm.group(1).strip()
                             url = lm.group(2).strip()
-                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                             display_anchor = "" if looks_like_url else anchor
                             start_idx = sum(len(p) for p in rebuilt)
                             rebuilt.append(display_anchor)
@@ -939,7 +943,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     rebuilt.append(pre)
                     anchor = m.group(1).strip()
                     url = m.group(2).strip()
-                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                     display_anchor = "" if looks_like_url else anchor
                     start_idx = sum(len(p) for p in rebuilt)
                     rebuilt.append(display_anchor)
@@ -1364,21 +1368,21 @@ else:
 
 for msg in st.session_state.messages:
     if msg["role"] == "user":
-        st.chat_message("user").markdown(msg["content"])
+        st.chat_message("user", avatar= AVATAR_USER).markdown(msg["content"])
     elif msg["role"] == "assistant":
         if "rendered" in msg:
-            with st.chat_message("assistant"):
+            with st.chat_message("assistant", avatar= AVATAR_ASSISTANT):
                 st.markdown(msg["rendered"], unsafe_allow_html=True)
                 if msg.get("sources"):
                     with st.expander("Show references"):
                         st.markdown(msg["sources"], unsafe_allow_html=True)
         else:
-            st.chat_message("assistant").markdown(msg["content"])
+            st.chat_message("assistant", avatar= AVATAR_ASSISTANT).markdown(msg["content"])
 
 # main input
 user_input = st.chat_input("Ask me library-related questions in any language ...")
 if user_input:
-    st.chat_message("user").markdown(user_input)
+    st.chat_message("user", avatar= AVATAR_USER).markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
 
     # Optional: scope retrieval (adjust to your ingestion metadata)
