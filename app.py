@@ -159,7 +159,7 @@ def _strip_markdown_links_preserve_md(md_text: str) -> str:
         def repl(m: re.Match) -> str:
             anchor = m.group(1)
             # keep EXACT spacing/newlines around the match; only change the link itself
-            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za-z]{2,})$', anchor.strip(), re.I))
+            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
             return "" if looks_like_url else anchor
 
         safe = _LINK_RE.sub(repl, part)
@@ -689,6 +689,11 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     citation_map = {}
     cleaned = ""
     response_text = ""
+    # Track evaluation call usage to include in totals/cost
+    eval_input_tok = 0
+    eval_output_tok = 0
+    eval_total_tok = 0
+    eval_reasoning_tok = 0
 
     # Assistant bubble first so spinner sits next to avatar
     with st.chat_message("assistant", avatar= AVATAR_ASSISTANT):
@@ -1170,14 +1175,13 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         st.session_state.messages = st.session_state.messages[-MAX_HISTORY:]
 
     # --- Structured evaluation follow-up (request classification + response evaluation) ---
-    confidence = 0.0
-    error_code = None
     request_classification = "other"
     evaluation_notes = ""
-
+    confidence = 0.0
+    error_code = None
     try:
         evaluation_system_prompt = """
-        You are an expert evaluator for a library assistant chatbot. Your task is to:
+        You are an academic assistant evaluating the quality of a chatbot's response. Your task is to:
         1. Classify the user's request type
         2. Evaluate the assistant's response quality and accuracy
         
@@ -1201,7 +1205,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
         # Get current LLM configuration from database
         llm_config = get_current_llm_config()
-        
         structured = client.responses.create(
             model=llm_config['model'],
             input=[
@@ -1210,8 +1213,17 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 {"role": "assistant", "content": f"Assistant response: {cleaned}"},
                 {"role": "user", "content": "Please evaluate this interaction and return the JSON evaluation."}
             ]
-            # Note: No tools needed for evaluation, so no parallel_tool_calls parameter
         )
+
+        # Capture evaluation usage to include in totals/cost
+        try:
+            e_in, e_out, e_total, e_reason = _get_usage_from_final(structured)
+            eval_input_tok = int(e_in or 0)
+            eval_output_tok = int(e_out or 0)
+            eval_total_tok = int(e_total or 0)
+            eval_reasoning_tok = int(e_reason or 0)
+        except Exception:
+            pass
 
         payload_text = _safe_output_text(structured)
         if not payload_text:
@@ -1247,6 +1259,13 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         print(f"🔎 About to log interaction with session_id: {st.session_state.session_id}")
         # Determine model (from current config)
         llm_config = get_current_llm_config()
+
+        # Include evaluation usage in totals before computing cost
+        input_tok = (input_tok or 0) + eval_input_tok
+        output_tok = (output_tok or 0) + eval_output_tok
+        total_tok = (total_tok or 0) + eval_total_tok
+        reasoning_tok = (reasoning_tok or 0) + eval_reasoning_tok
+
         cost_usd = estimate_cost_usd(llm_config['model'], input_tok, output_tok)
         log_interaction(
             user_input=user_input,
