@@ -66,7 +66,7 @@ def load_css(file_path):
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 def log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, error_code=None, request_classification=None, evaluation_notes=None,
-                    model=None, usage_input_tokens=None, usage_output_tokens=None, usage_total_tokens=None, usage_reasoning_tokens=None, api_cost_usd=None):
+                    model=None, usage_input_tokens=None, usage_output_tokens=None, usage_total_tokens=None, usage_reasoning_tokens=None, api_cost_usd=None, response_time_ms=None):
     # Debug: Print session_id to console for troubleshooting
     print(f"🔍 log_interaction called with session_id: {session_id} (type: {type(session_id)})")
     try:
@@ -76,14 +76,16 @@ def log_interaction(user_input, assistant_response, session_id=None, citation_js
                     INSERT INTO log_table (
                         timestamp, session_id, user_input, assistant_response, error_code,
                         citation_count, citations, confidence, request_classification, evaluation_notes,
-                        model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_reasoning_tokens, api_cost_usd
+                        model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_reasoning_tokens, api_cost_usd,
+                        response_time_ms
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     datetime.now(), session_id, user_input, assistant_response, error_code,
                     citation_count, citation_json, confidence, request_classification, evaluation_notes,
-                    model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_reasoning_tokens, api_cost_usd
+                    model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_reasoning_tokens, api_cost_usd,
+                    response_time_ms
                 ))
                 conn.commit()
                 print(f"✅ Successfully logged interaction with session_id: {session_id}")
@@ -736,12 +738,12 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             # Add text verbosity (all models support at least 'medium')
             api_params['text'] = {'verbosity': llm_config['text_verbosity']}
             
+            # Measure latency of main API call
+            t_start = datetime.now()
             with client.responses.stream(**api_params) as stream:
                 for event in stream:
-                    etype = getattr(event, "type", "") or ""
-
                     # Keep spinner until the model is done emitting text.
-                    if etype == "response.output_text.complete":
+                    if event.type == "response.output_text.complete":
                         try:
                             spinner_ctx.__exit__(None, None, None)
                         except Exception:
@@ -757,16 +759,16 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                             except Exception:
                                 pass
                         elif debug_one:
-                            status_placeholder.markdown(f"`event.type` = `{etype}`")
+                            status_placeholder.markdown(f"`event.type` = `{event.type}`")
                     except Exception:
                         # best-effort: avoid breaking stream on status failures
                         if debug_one:
-                            print("status update failed for event:", etype)
+                            print("status update failed for event:", event.type)
 
                     # If verbose debug requested, show more detailed per-tool phases
-                    if debug_one and etype and ("tool_call" in etype or etype.endswith("_call") or "tool" in etype):
-                        tool_name = getattr(event, "name", None) or getattr(event, "tool", None) or etype.split(".")[-1]
-                        phase = etype.split(".")[-1]
+                    if debug_one and event.type and ("tool_call" in event.type or event.type.endswith("_call") or "tool" in event.type):
+                        tool_name = getattr(event, "name", None) or getattr(event, "tool", None) or event.type.split(".")[-1]
+                        phase = event.type.split(".")[-1]
                         try:
                             status_placeholder.markdown(f"_{tool_name}: {phase}_")
                         except Exception:
@@ -775,47 +777,20 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         continue
 
                     # Stream tokens
-                    if etype == "response.output_text.delta":
+                    if event.type == "response.output_text.delta":
                         buf += event.delta
                         content_placeholder.markdown(buf, unsafe_allow_html=True)
                         continue
 
                     # clear the status when text ends (keep UI minimal)
-                    if etype == "response.output_text.complete":
+                    if event.type == "response.output_text.complete":
                         status_placeholder.empty()
                         continue
 
                 # fetch the full object for your citation pass later
                 final = stream.get_final_response()
-                
-                # If no tool events were streamed, but final.output shows tool calls,
-                # render a short post-hoc status so the UI reflects that tools ran.
-                if not tool_event_shown and final is not None:
-                    try:
-                        out = _get_attr(final, "output", []) or []
-                        called = []
-                        for item in out:
-                            t = _get_attr(item, "type", "") or ""
-                            if t.endswith("_call") and t not in called:
-                                called.append(t)
-                        if called:
-                            try:
-                                    # Map technical names to human-readable descriptions
-                                    friendly_names = []
-                                    for tool_type in called:
-                                        if "web_search" in tool_type:
-                                            friendly_names.append("web search")
-                                        elif "file_search" in tool_type:
-                                            friendly_names.append("knowledge base search")
-                                        else:
-                                            friendly_names.append(tool_type.replace("_", " "))
-                                    status_placeholder.markdown(f"_Response based on {', '.join(friendly_names)}_")
-
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        print("post-stream tool detection failed:", e)
-
+            t_end = datetime.now()
+            main_latency_ms = int((t_end - t_start).total_seconds() * 1000)
 
         except (BadRequestError, APIConnectionError, RateLimitError, APIError) as e:
             print(f"❌ OpenAI API error during streaming: {e}", flush=True)
@@ -830,7 +805,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 with st.spinner("Thinking…"):
                     # Get current LLM configuration from database
                     llm_config = get_current_llm_config()
-                    
                     # Build API parameters conditionally based on model support
                     api_params = {
                         'model': llm_config['model'],
@@ -838,15 +812,13 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         'tools': tool_cfg,
                         'parallel_tool_calls': llm_config['parallel_tool_calls']
                     }
-                    
-                    # Add reasoning effort for supported models
                     if supports_reasoning_effort(llm_config['model']):
                         api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
-                    
-                    # Add text verbosity (all models support at least 'medium')
                     api_params['text'] = {'verbosity': llm_config['text_verbosity']}
-                    
+                    t_start = datetime.now()
                     final = client.responses.create(**api_params)
+                    t_end = datetime.now()
+                    main_latency_ms = int((t_end - t_start).total_seconds() * 1000)
                     buf = _get_attr(final, "output_text", "") or ""
                     content_placeholder.markdown(buf, unsafe_allow_html=True)
             elif isinstance(e, RateLimitError):
@@ -1283,6 +1255,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             usage_total_tokens=total_tok,
             usage_reasoning_tokens=reasoning_tok,
             api_cost_usd=cost_usd,
+            response_time_ms=main_latency_ms if 'main_latency_ms' in locals() else None,
         )
     except Exception as log_error:
         # Silently fail for logging - don't interrupt user experience

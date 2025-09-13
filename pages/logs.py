@@ -253,19 +253,101 @@ if authenticated:
             with col3:
                 st.metric("Avg Interactions/Session", f"{stats[2]:.1f}" if stats[2] else "0.0")
         
+        # --- Topics distribution (request_classification) ---
+        try:
+            from psycopg2.extras import DictCursor as _DictCursor
+            cursor.close()
+            cursor = conn.cursor(cursor_factory=_DictCursor)
+            cursor.execute(
+                """
+                SELECT COALESCE(request_classification, '(unclassified)') AS topic,
+                       COUNT(*)::int AS count
+                FROM log_table
+                GROUP BY topic
+                ORDER BY count DESC
+                """
+            )
+            topic_rows = cursor.fetchall()
+        except Exception as e:
+            topic_rows = []
+            st.warning(f"Could not load topics: {e}")
+        finally:
+            cursor.close()
+            conn.close()
+
+        st.markdown("### Topics (request_classification)")
+        if topic_rows:
+            try:
+                import pandas as pd
+                import altair as alt
+                # Normalize rows to a clean list of dicts and coerce types
+                records = []
+                for row in topic_rows:
+                    # row can be a DictRow; prefer key access, fall back to positional
+                    try:
+                        topic_val = row["topic"]
+                    except Exception:
+                        try:
+                            topic_val = row[0]
+                        except Exception:
+                            topic_val = "(unclassified)"
+                    if not isinstance(topic_val, str):
+                        topic_val = str(topic_val) if topic_val is not None else "(unclassified)"
+
+                    try:
+                        count_val = int(row["count"])  # ensure int
+                    except Exception:
+                        try:
+                            count_val = int(row[1])
+                        except Exception:
+                            count_val = 0
+                    records.append({"topic": topic_val, "count": count_val})
+
+                df_topics = pd.DataFrame.from_records(records)
+                # Drop zero or negative counts just in case
+                df_topics = df_topics[df_topics["count"] > 0]
+                if df_topics.empty:
+                    st.info("No topic data available yet.")
+                else:
+                    pie = (
+                        alt.Chart(df_topics)
+                        .mark_arc()
+                        .encode(
+                            theta=alt.Theta(field="count", type="quantitative"),
+                            color=alt.Color(field="topic", type="nominal", legend=alt.Legend(title="Topic")),
+                            tooltip=[
+                                alt.Tooltip("topic:N", title="Topic"),
+                                alt.Tooltip("count:Q", title="Count")
+                            ],
+                        )
+                        .properties(height=320)
+                    )
+                    st.altair_chart(pie, use_container_width=True)
+            except Exception as e:
+                st.warning("Falling back to table view due to a charting error.")
+                try:
+                    st.exception(e)
+                except Exception:
+                    pass
+                # Fallback: show as simple table if chart fails
+                try:
+                    st.table(df_topics if 'df_topics' in locals() else topic_rows)
+                except Exception:
+                    st.write(topic_rows)
+        else:
+            st.info("No topic data available yet.")
+        
         # Sessions overview table
-        cursor.close()
-        conn.close()
         st.markdown("### Sessions Overview")
         rows = get_session_overview(limit=500)
         if rows:
             table = [
                 {
-                    "session_id": r["session_id"],
-                    "interactions": r["interactions"],
-                    "first_seen": fmt_dt(r["first_seen"]),
-                    "last_seen": fmt_dt(r["last_seen"]),
-                    "errors": r["errors"],
+                    "Session ID": r["session_id"],
+                    "Interactions": r["interactions"],
+                    "Start": fmt_dt(r["first_seen"]),
+                    "Stop": fmt_dt(r["last_seen"]),
+                    "Errors": r["errors"],
                 }
                 for r in rows
             ]
@@ -290,7 +372,7 @@ if authenticated:
         
     with tab3:
         st.subheader("System Performance Metrics")
-        st.caption("OpenAI usage, tokens, and estimated costs (from log_table)")
+        st.caption("OpenAI usage, tokens, estimated costs, and latency (from log_table)")
 
         # Date range filter
         today = datetime.now().date()
@@ -313,7 +395,8 @@ if authenticated:
                    COALESCE(usage_output_tokens, 0) AS output_tokens,
                    COALESCE(usage_total_tokens, 0) AS total_tokens,
                    COALESCE(usage_reasoning_tokens, 0) AS reasoning_tokens,
-                   COALESCE(api_cost_usd, 0.0) AS cost_usd
+                   COALESCE(api_cost_usd, 0.0) AS cost_usd,
+                   response_time_ms
             FROM log_table
             WHERE timestamp::date BETWEEN %s AND %s
         """,
@@ -328,16 +411,19 @@ if authenticated:
         total_out = sum(r["output_tokens"] for r in rows)
         total_reason = sum(r["reasoning_tokens"] for r in rows)
         total_cost = sum(float(r["cost_usd"]) for r in rows)
+        latencies = [int(r["response_time_ms"]) for r in rows if r.get("response_time_ms") is not None]
+        avg_latency = (sum(latencies) / len(latencies) / 1000) if latencies else 0.0
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Input tokens", f"{total_in:,}")
         c2.metric("Output tokens", f"{total_out:,}")
         c3.metric("Reasoning tokens", f"{total_reason:,}")
         c4.metric("Estimated cost (USD)", f"${total_cost:,.2f}")
+        c5.metric("Avg. latency (s)", f"{avg_latency:,.1f}")
 
         # Prepare daily aggregates
         from collections import defaultdict
-        daily_tokens = defaultdict(lambda: {"input":0, "output":0, "total":0, "reason":0, "cost":0.0})
+        daily_tokens = defaultdict(lambda: {"input":0, "output":0, "total":0, "reason":0, "cost":0.0, "lat":[]})
         for r in rows:
             d = r["day"]
             daily = daily_tokens[d]
@@ -346,6 +432,8 @@ if authenticated:
             daily["total"] += r["total_tokens"]
             daily["reason"] += r["reasoning_tokens"]
             daily["cost"] += float(r["cost_usd"])
+            if r.get("response_time_ms") is not None:
+                daily["lat"].append(int(r["response_time_ms"]))
 
         if daily_tokens:
             # Build chart-friendly data
@@ -356,12 +444,14 @@ if authenticated:
                 "output_tokens": [daily_tokens[d]["output"] for d in days_sorted],
                 "total_tokens": [daily_tokens[d]["total"] for d in days_sorted],
                 "cost_usd": [daily_tokens[d]["cost"] for d in days_sorted],
+                "avg_latency_ms": [ (sum(daily_tokens[d]["lat"])/len(daily_tokens[d]["lat"])) if daily_tokens[d]["lat"] else 0 for d in days_sorted ],
             }
             st.line_chart(chart_data, x="day", y=["input_tokens","output_tokens","total_tokens"], use_container_width=True)
             st.area_chart({"day": chart_data["day"], "cost_usd": chart_data["cost_usd"]}, x="day", y="cost_usd", use_container_width=True)
+            st.line_chart({"day": chart_data["day"], "avg_latency_ms": chart_data["avg_latency_ms"]}, x="day", y="avg_latency_ms", use_container_width=True)
 
-        # Breakdown by model
-        model_agg = defaultdict(lambda: {"input":0, "output":0, "total":0, "reason":0, "cost":0.0})
+        # Breakdown by model (add latency)
+        model_agg = defaultdict(lambda: {"input":0, "output":0, "total":0, "reason":0, "cost":0.0, "latencies":[]})
         for r in rows:
             m = r["model"] or "(unknown)"
             model_agg[m]["input"] += r["input_tokens"]
@@ -369,20 +459,23 @@ if authenticated:
             model_agg[m]["total"] += r["total_tokens"]
             model_agg[m]["reason"] += r["reasoning_tokens"]
             model_agg[m]["cost"] += float(r["cost_usd"])
+            if r.get("response_time_ms") is not None:
+                model_agg[m]["latencies"].append(int(r["response_time_ms"]))
 
         if model_agg:
             st.markdown("### By model")
             table = [
                 {
-                    "model": m,
-                    "input_tokens": v["input"],
-                    "output_tokens": v["output"],
-                    "total_tokens": v["total"],
-                    "reasoning_tokens": v["reason"],
-                    "cost_usd": round(v["cost"], 4),
+                    "Model": m,
+                    "Input tokens": v["input"],
+                    "Output tokens": v["output"],
+                    "Total tokens": v["total"],
+                    "Reasoning tokens": v["reason"],
+                    "Costs (USD)": round(v["cost"], 3),
+                    "Avg. latency (s)": round((sum(v["latencies"])/len(v["latencies"])/1000) if v["latencies"] else 0.0, 1)
                 }
                 for m, v in sorted(model_agg.items(), key=lambda kv: kv[1]["cost"], reverse=True)
             ]
             st.dataframe(table, use_container_width=True, hide_index=True)
 
-        st.info("Costs are estimated from stored usage and pricing; configure st.secrets['pricing'] to override prices.")
+        st.info("Costs are estimated from stored usage and pricing in config/pricing.json.")

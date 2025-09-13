@@ -212,7 +212,9 @@ def create_log_table():
             usage_output_tokens INTEGER,
             usage_total_tokens INTEGER,
             usage_reasoning_tokens INTEGER,
-            api_cost_usd NUMERIC(12,6)
+            api_cost_usd NUMERIC(12,6),
+            -- Latency of main API call in milliseconds
+            response_time_ms INTEGER
         );
     """)
     
@@ -250,6 +252,9 @@ def create_log_table():
             EXCEPTION WHEN duplicate_column THEN NULL; END;
             BEGIN
                 ALTER TABLE log_table ADD COLUMN IF NOT EXISTS api_cost_usd NUMERIC(12,6);
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
             EXCEPTION WHEN duplicate_column THEN NULL; END;
         END $$;
         """
