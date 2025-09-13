@@ -27,7 +27,8 @@ from .utils import (
     supports_full_verbosity,
     create_filter_settings_table,
     save_filter_settings,
-    get_filter_settings
+    get_filter_settings,
+    estimate_cost_usd,
 )
 
 # Now you can import from utils directly, e.g.:

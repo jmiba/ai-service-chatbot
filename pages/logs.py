@@ -290,5 +290,99 @@ if authenticated:
         
     with tab3:
         st.subheader("System Performance Metrics")
-        # Add system metrics here
-        st.info("System metrics dashboard - coming soon!")
+        st.caption("OpenAI usage, tokens, and estimated costs (from log_table)")
+
+        # Date range filter
+        today = datetime.now().date()
+        default_start = today - timedelta(days=30)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            start_date = st.date_input("Start date", value=default_start)
+        with col_b:
+            end_date = st.date_input("End date", value=today)
+
+        conn = get_connection()
+        cursor = conn.cursor(cursor_factory=DictCursor)
+
+        # Pull usage/cost rows
+        cursor.execute(
+            """
+            SELECT timestamp::date AS day,
+                   model,
+                   COALESCE(usage_input_tokens, 0) AS input_tokens,
+                   COALESCE(usage_output_tokens, 0) AS output_tokens,
+                   COALESCE(usage_total_tokens, 0) AS total_tokens,
+                   COALESCE(usage_reasoning_tokens, 0) AS reasoning_tokens,
+                   COALESCE(api_cost_usd, 0.0) AS cost_usd
+            FROM log_table
+            WHERE timestamp::date BETWEEN %s AND %s
+        """,
+            (start_date, end_date)
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        # Summaries
+        total_in = sum(r["input_tokens"] for r in rows)
+        total_out = sum(r["output_tokens"] for r in rows)
+        total_reason = sum(r["reasoning_tokens"] for r in rows)
+        total_cost = sum(float(r["cost_usd"]) for r in rows)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Input tokens", f"{total_in:,}")
+        c2.metric("Output tokens", f"{total_out:,}")
+        c3.metric("Reasoning tokens", f"{total_reason:,}")
+        c4.metric("Estimated cost (USD)", f"${total_cost:,.2f}")
+
+        # Prepare daily aggregates
+        from collections import defaultdict
+        daily_tokens = defaultdict(lambda: {"input":0, "output":0, "total":0, "reason":0, "cost":0.0})
+        for r in rows:
+            d = r["day"]
+            daily = daily_tokens[d]
+            daily["input"] += r["input_tokens"]
+            daily["output"] += r["output_tokens"]
+            daily["total"] += r["total_tokens"]
+            daily["reason"] += r["reasoning_tokens"]
+            daily["cost"] += float(r["cost_usd"])
+
+        if daily_tokens:
+            # Build chart-friendly data
+            days_sorted = sorted(daily_tokens.keys())
+            chart_data = {
+                "day": days_sorted,
+                "input_tokens": [daily_tokens[d]["input"] for d in days_sorted],
+                "output_tokens": [daily_tokens[d]["output"] for d in days_sorted],
+                "total_tokens": [daily_tokens[d]["total"] for d in days_sorted],
+                "cost_usd": [daily_tokens[d]["cost"] for d in days_sorted],
+            }
+            st.line_chart(chart_data, x="day", y=["input_tokens","output_tokens","total_tokens"], use_container_width=True)
+            st.area_chart({"day": chart_data["day"], "cost_usd": chart_data["cost_usd"]}, x="day", y="cost_usd", use_container_width=True)
+
+        # Breakdown by model
+        model_agg = defaultdict(lambda: {"input":0, "output":0, "total":0, "reason":0, "cost":0.0})
+        for r in rows:
+            m = r["model"] or "(unknown)"
+            model_agg[m]["input"] += r["input_tokens"]
+            model_agg[m]["output"] += r["output_tokens"]
+            model_agg[m]["total"] += r["total_tokens"]
+            model_agg[m]["reason"] += r["reasoning_tokens"]
+            model_agg[m]["cost"] += float(r["cost_usd"])
+
+        if model_agg:
+            st.markdown("### By model")
+            table = [
+                {
+                    "model": m,
+                    "input_tokens": v["input"],
+                    "output_tokens": v["output"],
+                    "total_tokens": v["total"],
+                    "reasoning_tokens": v["reason"],
+                    "cost_usd": round(v["cost"], 4),
+                }
+                for m, v in sorted(model_agg.items(), key=lambda kv: kv[1]["cost"], reverse=True)
+            ]
+            st.dataframe(table, use_container_width=True, hide_index=True)
+
+        st.info("Costs are estimated from stored usage and pricing; configure st.secrets['pricing'] to override prices.")

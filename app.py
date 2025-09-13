@@ -13,7 +13,7 @@ from utils import (
     get_connection, create_prompt_versions_table, create_log_table,
     initialize_default_prompt_if_empty, get_latest_prompt, render_sidebar,
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
-    supports_reasoning_effort, get_kb_entries
+    supports_reasoning_effort, get_kb_entries, estimate_cost_usd
 )
 
 # -------------------------------------
@@ -65,16 +65,26 @@ def load_css(file_path):
     with open(BASE_DIR / file_path) as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-def log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, error_code=None, request_classification=None, evaluation_notes=None):
+def log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, error_code=None, request_classification=None, evaluation_notes=None,
+                    model=None, usage_input_tokens=None, usage_output_tokens=None, usage_total_tokens=None, usage_reasoning_tokens=None, api_cost_usd=None):
     # Debug: Print session_id to console for troubleshooting
     print(f"🔍 log_interaction called with session_id: {session_id} (type: {type(session_id)})")
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO log_table (timestamp, session_id, user_input, assistant_response, error_code, citation_count, citations, confidence, request_classification, evaluation_notes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (datetime.now(), session_id, user_input, assistant_response, error_code, citation_count, citation_json, confidence, request_classification, evaluation_notes))
+                    INSERT INTO log_table (
+                        timestamp, session_id, user_input, assistant_response, error_code,
+                        citation_count, citations, confidence, request_classification, evaluation_notes,
+                        model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_reasoning_tokens, api_cost_usd
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    datetime.now(), session_id, user_input, assistant_response, error_code,
+                    citation_count, citation_json, confidence, request_classification, evaluation_notes,
+                    model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_reasoning_tokens, api_cost_usd
+                ))
                 conn.commit()
                 print(f"✅ Successfully logged interaction with session_id: {session_id}")
     except psycopg2.Error as e:
@@ -550,6 +560,34 @@ def _get_attr(obj, name, default=None):
         return obj.get(name, default)
     return getattr(obj, name, default)
 
+# Extract usage fields from final response (for logging/costs)
+def _get_usage_from_final(final_obj):
+    """Best-effort extraction of usage fields from a Responses API object or dict."""
+    def ga(o, name, default=None):
+        if isinstance(o, dict):
+            return o.get(name, default)
+        return getattr(o, name, default)
+    usage = ga(final_obj, "usage")
+    if usage is None and isinstance(final_obj, dict):
+        usage = final_obj.get("usage")
+    input_tokens = ga(usage, "input_tokens", None) if usage is not None else None
+    if input_tokens is None:
+        input_tokens = ga(usage, "prompt_tokens", None) if usage is not None else None
+    output_tokens = ga(usage, "output_tokens", None) if usage is not None else None
+    total_tokens = ga(usage, "total_tokens", None) if usage is not None else None
+    # reasoning tokens may be nested
+    reasoning_tokens = None
+    otd = ga(usage, "output_tokens_details", None) if usage is not None else None
+    if otd is not None:
+        reasoning_tokens = ga(otd, "reasoning_tokens", None)
+    return (
+        input_tokens if isinstance(input_tokens, int) else 0,
+        output_tokens if isinstance(output_tokens, int) else 0,
+        total_tokens if isinstance(total_tokens, int) else ((input_tokens or 0) + (output_tokens or 0)),
+        reasoning_tokens if isinstance(reasoning_tokens, int) else 0,
+    )
+
+# Iterate items/parts from Responses API final object
 def _iter_content_items(final):
     output = _get_attr(final, "output", []) or []
     for item in output:
@@ -827,6 +865,9 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             return
 
         response_text = _get_attr(final, "output_text", "") or buf
+
+        # Capture usage after final is available
+        input_tok, output_tok, total_tok, reasoning_tok = _get_usage_from_final(final)
 
         # Find and normalize the first text-bearing content part (dict or object)
         normalized_part = None
@@ -1204,6 +1245,9 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     try:
         # Debug: Check session ID before logging
         print(f"🔎 About to log interaction with session_id: {st.session_state.session_id}")
+        # Determine model (from current config)
+        llm_config = get_current_llm_config()
+        cost_usd = estimate_cost_usd(llm_config['model'], input_tok, output_tok)
         log_interaction(
             user_input=user_input,
             assistant_response=cleaned,
@@ -1213,7 +1257,13 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             confidence=confidence,
             error_code=error_code,
             request_classification=request_classification,
-            evaluation_notes=evaluation_notes
+            evaluation_notes=evaluation_notes,
+            model=llm_config['model'],
+            usage_input_tokens=input_tok,
+            usage_output_tokens=output_tok,
+            usage_total_tokens=total_tok,
+            usage_reasoning_tokens=reasoning_tok,
+            api_cost_usd=cost_usd,
         )
     except Exception as log_error:
         # Silently fail for logging - don't interrupt user experience
@@ -1350,7 +1400,7 @@ load_css("css/styles.css")
 
 col1, col2 = st.columns([3, 3])
 with col1:
-    st.image(BASE_DIR / "assets/viadrina-ub-logo.png", width=300)
+    st.image(BASE_DIR / "assets/viadrina-logo.png", width=300)
 with col2:
     st.markdown("# Viadrina Library Assistant")
 st.markdown("---")

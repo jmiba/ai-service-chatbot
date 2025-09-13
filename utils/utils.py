@@ -7,6 +7,47 @@ BASE_DIR = Path(__file__).parent.parent
 
 LOGIN_SVG = (BASE_DIR / "assets" / "key.svg").read_text()
 
+# --- Pricing & cost estimation ---
+# USD per 1K tokens (defaults; can be overridden via st.secrets['pricing'])
+DEFAULT_PRICING = {
+    "gpt-4o": {"input": 0.005, "output": 0.015},          # ~$5/$15 per 1M
+    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},  # ~$0.15/$0.60 per 1M
+    "gpt-4-turbo": {"input": 0.01, "output": 0.03},
+    "gpt-4": {"input": 0.03, "output": 0.06},
+    "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
+}
+
+# Normalize to per-1K pricing in USD
+# If your numbers are per-1M, divide by 1000 when computing below.
+
+def _get_pricing_for_model(model: str):
+    model_l = (model or "").lower()
+    # Allow override via secrets.pricing
+    try:
+        override = st.secrets.get("pricing")
+        if override and isinstance(override, dict):
+            for key, val in override.items():
+                if key.lower() in model_l and isinstance(val, dict):
+                    return {"input": float(val.get("input", 0.0)), "output": float(val.get("output", 0.0))}
+    except Exception:
+        pass
+    for key, val in DEFAULT_PRICING.items():
+        if key in model_l:
+            return val
+    # Fallback to a conservative small cost
+    return {"input": 1.0, "output": 2.0}
+
+
+def estimate_cost_usd(model: str, input_tokens: int = 0, output_tokens: int = 0) -> float:
+    """
+    Estimate API cost in USD using a per-1K token pricing table.
+    Adjust numbers above if your pricing differs.
+    """
+    p = _get_pricing_for_model(model)
+    # prices are per-1K tokens
+    cost = (input_tokens / 1000.0) * p.get("input", 0.0) + (output_tokens / 1000.0) * p.get("output", 0.0)
+    return round(cost, 6)
+
 # Function to get a connection to the Postgres database
 def get_connection():
     try:
@@ -155,39 +196,55 @@ def create_log_table():
             citations JSONB,
             confidence DECIMAL(3,2) DEFAULT 0.0,
             request_classification VARCHAR(50),
-            evaluation_notes TEXT
+            evaluation_notes TEXT,
+            -- New usage/cost/model fields
+            model VARCHAR(100),
+            usage_input_tokens INTEGER,
+            usage_output_tokens INTEGER,
+            usage_total_tokens INTEGER,
+            usage_reasoning_tokens INTEGER,
+            api_cost_usd NUMERIC(12,6)
         );
     """)
     
     # Add new columns to existing table if they don't exist
-    cursor.execute("""
+    cursor.execute(
+        """
         DO $$ 
         BEGIN
             BEGIN
-                ALTER TABLE log_table ADD COLUMN confidence DECIMAL(3,2) DEFAULT 0.0;
-            EXCEPTION
-                WHEN duplicate_column THEN NULL;
-            END;
-            
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS confidence DECIMAL(3,2) DEFAULT 0.0;
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
             BEGIN
-                ALTER TABLE log_table ADD COLUMN request_classification VARCHAR(50);
-            EXCEPTION
-                WHEN duplicate_column THEN NULL;
-            END;
-            
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS request_classification VARCHAR(50);
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
             BEGIN
-                ALTER TABLE log_table ADD COLUMN evaluation_notes TEXT;
-            EXCEPTION
-                WHEN duplicate_column THEN NULL;
-            END;
-            
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS evaluation_notes TEXT;
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
             BEGIN
-                ALTER TABLE log_table ADD COLUMN session_id VARCHAR(36);
-            EXCEPTION
-                WHEN duplicate_column THEN NULL;
-            END;
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS model VARCHAR(100);
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS usage_input_tokens INTEGER;
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS usage_output_tokens INTEGER;
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS usage_total_tokens INTEGER;
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS usage_reasoning_tokens INTEGER;
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN
+                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS api_cost_usd NUMERIC(12,6);
+            EXCEPTION WHEN duplicate_column THEN NULL; END;
         END $$;
-    """)
+        """
+    )
     
     # Create index on session_id for efficient conversation queries
     cursor.execute("""
