@@ -43,29 +43,34 @@ render_sidebar(authenticated)
 st.set_page_config(page_title="Logging & Analytics", layout="wide")
 
 # --- Read logs from DB ---
-def read_logs(limit=200, error_code=None, session_id=None):
+def read_logs(limit=200, error_code=None, session_id=None, request_classification=None):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=DictCursor)
 
-    # Build query based on filters
+    # Build dynamic WHERE clause
+    clauses = []
+    params = []
+
     if error_code and error_code != "All":
-        if session_id and session_id != "All":
-            query = """
-                SELECT * FROM log_table 
-                WHERE error_code = %s AND session_id = %s 
-                ORDER BY timestamp DESC LIMIT %s
-            """
-            cursor.execute(query, (error_code, session_id, limit))
+        clauses.append("error_code = %s")
+        params.append(error_code)
+
+    if session_id and session_id != "All":
+        clauses.append("session_id = %s")
+        params.append(session_id)
+
+    if request_classification and request_classification != "All":
+        if request_classification == "(unclassified)":
+            clauses.append("request_classification IS NULL")
         else:
-            query = "SELECT * FROM log_table WHERE error_code = %s ORDER BY timestamp DESC LIMIT %s"
-            cursor.execute(query, (error_code, limit))
-    else:
-        if session_id and session_id != "All":
-            query = "SELECT * FROM log_table WHERE session_id = %s ORDER BY timestamp DESC LIMIT %s"
-            cursor.execute(query, (session_id, limit))
-        else:
-            query = "SELECT * FROM log_table ORDER BY timestamp DESC LIMIT %s"
-            cursor.execute(query, (limit,))
+            clauses.append("request_classification = %s")
+            params.append(request_classification)
+
+    where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    query = f"SELECT * FROM log_table{where_sql} ORDER BY timestamp DESC LIMIT %s"
+    params.append(limit)
+
+    cursor.execute(query, tuple(params))
 
     rows = cursor.fetchall()
     cursor.close()
@@ -138,9 +143,26 @@ if authenticated:
         selected_session = st.selectbox("Filter by session", options=session_options, format_func=_format_session)
         selected_session_id = None if selected_session == "All" else selected_session["session_id"]
 
+        # New: Filter by topic (request_classification)
+        try:
+            conn_fc = get_connection()
+            cur_fc = conn_fc.cursor(cursor_factory=DictCursor)
+            cur_fc.execute("""
+                SELECT DISTINCT COALESCE(request_classification, '(unclassified)') AS topic
+                FROM log_table
+                ORDER BY topic
+            """)
+            topic_rows = cur_fc.fetchall()
+            cur_fc.close(); conn_fc.close()
+            topic_options = ["All"] + [r["topic"] for r in topic_rows]
+        except Exception:
+            topic_options = ["All"]
+        selected_topic = st.selectbox("Filter by topic", options=topic_options)
+        selected_topic_val = None if selected_topic == "All" else selected_topic
+
         group_by_session = st.toggle("Group by session", value=False, help="Show logs grouped by session with a per-session expander")
 
-        logs = read_logs(limit=200, error_code=filter_code, session_id=selected_session_id)
+        logs = read_logs(limit=200, error_code=filter_code, session_id=selected_session_id, request_classification=selected_topic_val)
         st.header("View Interaction Logs")
         st.markdown(f"### Showing {len(logs)} log entries")
 
@@ -162,7 +184,7 @@ if authenticated:
                 header = f"Session {sid} — {n} interactions, {fmt_dt(first_seen, '%Y-%m-%d %H:%M')} → {fmt_dt(last_seen, '%Y-%m-%d %H:%M')}, errors: {error_count}"
                 with st.expander(header, expanded=False):
                     for entry in entries_sorted:
-                        st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}", unsafe_allow_html=False)
+                        st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}, **Topic:** `{entry.get('request_classification') or '(unclassified)'}`", unsafe_allow_html=False)
                         with st.container():
                             st.info(f"{entry['user_input']}", icon=":material/face:")
                             if entry.get('error_code') == "E03":
@@ -191,7 +213,7 @@ if authenticated:
         else:
             # Flat list (existing behavior)
             for entry in logs:
-                st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}", unsafe_allow_html=False)
+                st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}, **Topic:** `{entry.get('request_classification') or '(unclassified)'}`", unsafe_allow_html=False)
                 with st.expander("View Details", expanded=False):
                     st.info(f"{entry['user_input']}", icon=":material/face:")
                     if entry.get('error_code') == "E03":
@@ -429,7 +451,7 @@ if authenticated:
                 st.markdown(f"#### Session {sid} — timeline")
                 detailed = read_logs(limit=1000, session_id=sid)
                 for entry in sorted(detailed, key=lambda e: e["timestamp"]):
-                    st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`")
+                    st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Topic:** `{entry.get('request_classification') or '(unclassified)'}`")
                     with st.container():
                         st.info(f"{entry['user_input']}", icon=":material/face:")
                         st.success(f"{entry['assistant_response']}", icon=":material/robot_2:")
