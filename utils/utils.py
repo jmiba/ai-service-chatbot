@@ -2,46 +2,55 @@ import psycopg2
 import streamlit as st
 import hashlib
 from pathlib import Path
+import json
+from functools import lru_cache
 
 BASE_DIR = Path(__file__).parent.parent
 
 LOGIN_SVG = (BASE_DIR / "assets" / "key.svg").read_text()
 
 # --- Pricing & cost estimation ---
-# USD per 1K tokens (defaults; can be overridden via st.secrets['pricing'])
-DEFAULT_PRICING = {
-    "gpt-4o": {"input": 0.005, "output": 0.015},          # ~$5/$15 per 1M
-    "gpt-4o-mini": {"input": 0.00015, "output": 0.00060},  # ~$0.15/$0.60 per 1M
-    "gpt-4-turbo": {"input": 0.01, "output": 0.03},
-    "gpt-4": {"input": 0.03, "output": 0.06},
-    "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
-}
+# Source: config/pricing.json (per-1K tokens)
 
-# Normalize to per-1K pricing in USD
-# If your numbers are per-1M, divide by 1000 when computing below.
+@lru_cache(maxsize=1)
+def _load_pricing_config():
+    path = BASE_DIR / "config" / "pricing.json"
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Pricing file not found: {path}")
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in pricing file {path}: {e}")
+
+    # Validate schema
+    if not isinstance(data, dict) or "models" not in data or not isinstance(data["models"], dict):
+        raise ValueError("Invalid pricing.json schema: expected top-level 'models' object.")
+    return data
 
 def _get_pricing_for_model(model: str):
-    model_l = (model or "").lower()
-    # Allow override via secrets.pricing
+    if not model:
+        raise ValueError("Model name is required for pricing lookup.")
+    data = _load_pricing_config()
+    models = data["models"]
+
+    # Case-insensitive exact key match only (no fallbacks)
+    lower_map = {k.lower(): v for k, v in models.items()}
+    entry = lower_map.get((model or "").lower())
+    if entry is None:
+        raise KeyError(f"Model '{model}' not found in config/pricing.json 'models'.")
+
     try:
-        override = st.secrets.get("pricing")
-        if override and isinstance(override, dict):
-            for key, val in override.items():
-                if key.lower() in model_l and isinstance(val, dict):
-                    return {"input": float(val.get("input", 0.0)), "output": float(val.get("output", 0.0))}
+        return {"input": float(entry["input"]), "output": float(entry["output"]) }
     except Exception:
-        pass
-    for key, val in DEFAULT_PRICING.items():
-        if key in model_l:
-            return val
-    # Fallback to a conservative small cost
-    return {"input": 1.0, "output": 2.0}
+        raise ValueError(
+            f"Invalid pricing entry for model '{model}' in pricing.json. Expected numeric 'input' and 'output' per 1K tokens."
+        )
 
 
 def estimate_cost_usd(model: str, input_tokens: int = 0, output_tokens: int = 0) -> float:
     """
-    Estimate API cost in USD using a per-1K token pricing table.
-    Adjust numbers above if your pricing differs.
+    Estimate API cost in USD using per-1K token pricing from config/pricing.json.
     """
     p = _get_pricing_for_model(model)
     # prices are per-1K tokens

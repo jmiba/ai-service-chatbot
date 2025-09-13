@@ -1,0 +1,37 @@
+{
+  "models": {
+    "gpt-5": { "input": 0.00125, "output": 0.01000 },
+    "gpt-5-mini": { "input": 0.00025, "output": 0.00200 },
+    "gpt-5-nano": { "input": 0.00005, "output": 0.00040 },
+    "gpt-5-chat-latest": { "input": 0.00125, "output": 0.01000 },
+    "gpt-4.1": { "input": 0.00200, "output": 0.00800 },
+    "gpt-4.1-mini": { "input": 0.00040, "output": 0.00160 },
+    "gpt-4.1-nano": { "input": 0.00010, "output": 0.00040 },
+    "gpt-4o": { "input": 0.00250, "output": 0.01000 },
+    "gpt-4o-2024-05-13": { "input": 0.00500, "output": 0.01500 },
+    "gpt-4o-mini": { "input": 0.00015, "output": 0.00060 },
+    "gpt-realtime": { "input": 0.00400, "output": 0.01600 },
+    "gpt-4o-realtime-preview": { "input": 0.00500, "output": 0.02000 },
+    "gpt-4o-mini-realtime-preview": { "input": 0.00060, "output": 0.00240 },
+    "gpt-audio": { "input": 0.00250, "output": 0.01000 },
+    "gpt-4o-audio-preview": { "input": 0.00250, "output": 0.01000 },
+    "gpt-4o-mini-audio-preview": { "input": 0.00015, "output": 0.00060 },
+    "o1": { "input": 0.01500, "output": 0.06000 },
+    "o1-pro": { "input": 0.15000, "output": 0.60000 },
+    "o3-pro": { "input": 0.02000, "output": 0.08000 },
+    "o3": { "input": 0.00200, "output": 0.00800 },
+    "o3-deep-research": { "input": 0.01000, "output": 0.04000 },
+    "o4-mini": { "input": 0.00110, "output": 0.00440 },
+    "o4-mini-deep-research": { "input": 0.00200, "output": 0.00800 },
+    "o3-mini": { "input": 0.00110, "output": 0.00440 },
+    "o1-mini": { "input": 0.00110, "output": 0.00440 },
+    "codex-mini-latest": { "input": 0.00150, "output": 0.00600 },
+    "gpt-4o-mini-search-preview": { "input": 0.00015, "output": 0.00060 },
+    "gpt-4o-search-preview": { "input": 0.00250, "output": 0.01000 },
+    "computer-use-preview": { "input": 0.00300, "output": 0.01200 }
+  },
+  "vectorization": {
+    "ingest_per_1k_tokens": 0.00013,
+    "storage_per_gb_month": 3.00
+  }
+}
