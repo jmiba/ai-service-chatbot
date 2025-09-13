@@ -52,7 +52,7 @@
     border-radius: 0px !important;
 }
 
-.stExpander > details {
+.stExpander > details,summary {
     border-radius: 0px !important;
 }
 

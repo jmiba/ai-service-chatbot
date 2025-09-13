@@ -8,15 +8,12 @@ import streamlit as st
 import json
 from openai import OpenAI
 from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs
-import time
-from io import BytesIO
+from pathlib import Path
+  
+BASE_DIR = Path(__file__).parent.parent
 
-# Import vector store sync functionality
-try:
-    from pages.vectorize import sync_vector_store, write_last_vector_sync_timestamp
-except ImportError:
-    sync_vector_store = None
-    write_last_vector_sync_timestamp = None
+SCRAPE_SVG = (BASE_DIR / "assets" / "home_storage.svg").read_text()
+
 
 # -----------------------------
 # Auth / sidebar
@@ -822,10 +819,19 @@ def main():
     create_knowledge_base_table()
 
     st.set_page_config(page_title="Content Indexing", layout="wide")
-    st.title("🔧 Content Indexing & Management")
+    #st.title("🔧 Content Indexing & Management")
+    st.markdown(
+        f"""
+        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
+            {SCRAPE_SVG}
+            Content Indexing
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
     
     # Create tabs for different views
-    tab1, tab2 = st.tabs(["📚 Knowledge Base","📄 Indexing Tool"])
+    tab1, tab2 = st.tabs(["Knowledge Base","Indexing Tool"])
     
     with tab2:
         st.header("Scrape webpages")

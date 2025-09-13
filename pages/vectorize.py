@@ -5,7 +5,14 @@ from openai import OpenAI
 from io import BytesIO
 import streamlit as st
 import time
-from functools import lru_cache
+from pathlib import Path
+  
+BASE_DIR = Path(__file__).parent.parent
+
+VECTORIZE_SVG = (BASE_DIR / "assets" / "owl.svg").read_text()
+
+
+
 
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 VECTOR_STORE_ID = st.secrets["VECTOR_STORE_ID"]
@@ -522,10 +529,19 @@ if authenticated:
     output_dir = "exported_markdown"
     os.makedirs(output_dir, exist_ok=True)
     
-    st.title("Vector Store Sync Tool")
+    #st.title("Vector Store Sync Tool")
+    st.markdown(
+        f"""
+        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
+            {VECTORIZE_SVG}
+            Vector Store Management
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
     
     # Quick explanation with performance info
-    with st.expander("ℹ️ How this works", expanded=False):
+    with st.expander("How this works", icon=":material/info:", expanded=False):
         st.markdown("""
         **What is this?** This tool manages the synchronization between your document database and OpenAI's vector store.
         

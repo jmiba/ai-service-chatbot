@@ -1,5 +1,10 @@
 import streamlit as st
 from utils import get_connection, get_latest_prompt, admin_authentication, render_sidebar, create_llm_settings_table, save_llm_settings, get_llm_settings, get_available_openai_models, supports_reasoning_effort, get_supported_verbosity_options, create_filter_settings_table, get_filter_settings, save_filter_settings
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent.parent
+
+SETTINGS_SVG = (BASE_DIR / "assets" / "settings.svg").read_text()
 
 # Must be the first Streamlit call
 st.set_page_config(page_title="LLM Settings", layout="wide")
@@ -69,10 +74,20 @@ render_sidebar(authenticated)
 
 # --- Admin content ---
 if authenticated:
-    st.title("⚙️ LLM Settings")
+    #st.title("LLM Settings")
+    st.markdown(
+        f"""
+        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
+            {SETTINGS_SVG}
+            LLM Settings
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
+
     
     # Create tabs for different views
-    tab1, tab2, tab3 = st.tabs(["📄 System Prompt", "🧠 Language Model", "🔽 Filters"])
+    tab1, tab2, tab3 = st.tabs(["System Prompt", "Language Model", "Filters"])
     
     with tab1:
         st.header("Edit System Prompt")
@@ -83,7 +98,7 @@ if authenticated:
         new_prompt = st.text_area("**System prompt:**", value=current_prompt, height=400)
         new_note = st.text_input("**Edit note (optional):**", value="")
 
-        if st.button("💾 Save Prompt"):
+        if st.button("Save Prompt", icon=":material/save:", type="primary"):
             backup_prompt_to_db(new_prompt, edited_by="admin@viadrina.de", note=new_note)
             st.success("System prompt updated successfully.")
 
@@ -91,14 +106,14 @@ if authenticated:
         
         st.subheader("View Prompt History")
 
-        with st.expander("🕒 Prompt history"):
+        with st.expander("Prompt history", icon=":material/history:", expanded=False):
             for ts, prompt, author, note in get_prompt_history():
                 # Safe timestamp formatting
                 try:
                     ts_str = ts.strftime('%Y-%m-%d %H:%M:%S') if ts else "unknown time"
                 except Exception:
                     ts_str = str(ts) if ts is not None else "unknown time"
-                st.markdown(f"🕒 **{ts_str}** by `{author or 'unknown'}` – {note or ''}")
+                st.markdown(f"**{ts_str}** by `{author or 'unknown'}` – {note or ''}")
                 st.info(prompt)
                 
     with tab2:
@@ -114,7 +129,7 @@ if authenticated:
         # Show model count and refresh option
         col_refresh, col_count = st.columns([3, 1])
         with col_refresh:
-            if st.button("🔄 Refresh Models", help="Reload available models from OpenAI API"):
+            if st.button("Refresh Models", icon=":material/refresh:", help="Reload available models from OpenAI API"):
                 st.cache_data.clear()
                 st.rerun()
         with col_count:
@@ -153,7 +168,7 @@ if authenticated:
             
             # Show advanced controls for GPT-5 models
             if supports_reasoning_effort(model):
-                st.info("🧠 Advanced AI Model - This model supports reasoning effort and full verbosity control")
+                st.info("Advanced AI Model - This model supports reasoning effort and full verbosity control", icon=":material/rocket:")
                 
                 col1, col2 = st.columns(2)
                 
@@ -167,9 +182,9 @@ if authenticated:
                     
                     # Show reasoning effort explanation with latency warnings
                     effort_explanations = {
-                        "low": "⚡ Fast reasoning - Quick responses (~25s), lower cost",
-                        "medium": "⚖️ Balanced reasoning - Good quality-speed balance (~35s)", 
-                        "high": "🎯 Deep reasoning - Best quality, much slower responses (~85s) 💰"
+                        "low": "Fast reasoning - Quick responses (~25s), lower cost",
+                        "medium": "Balanced reasoning - Good quality-speed balance (~35s)", 
+                        "high": "Deep reasoning - Best quality, much slower responses (~85s)"
                     }
                     
                     if reasoning_effort == "high":
@@ -186,10 +201,10 @@ if authenticated:
                         help="Controls how detailed and comprehensive responses are"
                     )
             else:
-                st.info("ℹ️ Standard Model - Advanced controls available with GPT-5 models")
+                st.info("Standard Model - Advanced controls available with GPT-5 models", icon=":material/info:")
                 supported_verbosity = get_supported_verbosity_options(model) or ["medium"]
                 if len(supported_verbosity) == 1:
-                    st.caption("🔧 Response Verbosity: Medium (only option supported by this model)")
+                    st.caption("Response Verbosity: Medium (only option supported by this model)")
                     text_verbosity = "medium"
                 else:
                     text_verbosity = st.selectbox(
@@ -215,7 +230,7 @@ if authenticated:
             # Save button inside the form
             col_save, col_info = st.columns([1, 2])
             with col_save:
-                submitted_llm = st.form_submit_button("💾 Save LLM Settings", type="primary")
+                submitted_llm = st.form_submit_button("Save LLM Settings", icon=":material/save:" ,type="primary")
             with col_info:
                 if current_settings['updated_at']:
                     st.caption(f"Last updated: {current_settings['updated_at'].strftime('%Y-%m-%d %H:%M:%S')} by {current_settings['updated_by']}")
@@ -231,13 +246,13 @@ if authenticated:
                         text_verbosity=text_verbosity,
                         updated_by="admin@viadrina.de"
                     )
-                    st.success("✅ Language model settings saved successfully!")
+                    st.success("Language model settings saved successfully!", icon=":material/check_circle:")
                     st.rerun()  # Refresh to show updated settings
                 except Exception as e:
-                    st.error(f"❌ Error saving settings: {str(e)}")
+                    st.error(f"Error saving settings: {str(e)}", icon=":material/error:")
             
     with tab3:
-        st.header("🔽 Response & Content Filters")
+        st.header("Response & Content Filters")
         
         st.info("Configure automatic filtering and quality controls for chatbot responses")
         

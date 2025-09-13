@@ -1101,12 +1101,12 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # Overwrite the streamed text in the SAME bubble with the enriched version
         content_placeholder.markdown(rendered, unsafe_allow_html=True)
         if sources_md:
-            with st.expander("Show references"):
+            with st.expander("References", icon=":material/info:", expanded=False):
                 st.markdown(sources_md, unsafe_allow_html=True)
 
         # --- Optional debug dump of final (sidebar toggle) ---
         if debug_one and final:
-            with st.expander("🔎 Debug: final.model_dump()", expanded=False):
+            with st.expander("Debug: final.model_dump()", expanded=False):
                 try:
                     dump = final.model_dump()
                     st.json(dump)
@@ -1350,7 +1350,7 @@ load_css("css/styles.css")
 
 col1, col2 = st.columns([3, 3])
 with col1:
-    st.image(BASE_DIR / "assets/viadrina-logo.png", width=300)
+    st.image(BASE_DIR / "assets/viadrina-ub-logo.png", width=300)
 with col2:
     st.markdown("# Viadrina Library Assistant")
 st.markdown("---")
@@ -1374,7 +1374,7 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar= AVATAR_ASSISTANT):
                 st.markdown(msg["rendered"], unsafe_allow_html=True)
                 if msg.get("sources"):
-                    with st.expander("Show references"):
+                    with st.expander("References", icon=":material/info:", expanded=False):
                         st.markdown(msg["sources"], unsafe_allow_html=True)
         else:
             st.chat_message("assistant", avatar= AVATAR_ASSISTANT).markdown(msg["content"])

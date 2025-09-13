@@ -1,6 +1,11 @@
 import psycopg2
 import streamlit as st
 import hashlib
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent.parent
+
+LOGIN_SVG = (BASE_DIR / "assets" / "key.svg").read_text()
 
 # Function to get a connection to the Postgres database
 def get_connection():
@@ -332,7 +337,16 @@ def admin_authentication():
         st.session_state.authenticated = False
 
     if not st.session_state.authenticated:
-        st.title("🔑 Admin Login")
+        #st.title("Admin Login")
+        st.markdown(
+            f"""
+            <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
+                {LOGIN_SVG}
+                Admin Login
+            </h1>
+            """,
+            unsafe_allow_html=True
+        )
         password = st.text_input("Admin Password", type="password")
         if password == st.secrets["ADMIN_PASSWORD"]:
             st.session_state.authenticated = True
@@ -353,12 +367,12 @@ def render_sidebar(authenticated=False, show_debug=False):
     Returns:
         debug_one: Debug state if show_debug=True, otherwise False
     """
-    st.sidebar.page_link("app.py", label="💬 Chat Assistant")
+    st.sidebar.page_link("app.py", label="Chat Assistant", icon=":material/chat_bubble:")
     
     # Debug checkbox right beneath chat assistant (only on main page when authenticated)
     debug_one = False
     if authenticated and show_debug:
-        debug_one = st.sidebar.checkbox("Debug: show response object", value=False, 
+        debug_one = st.sidebar.checkbox("Debug", value=False, 
                                        help="Shows final.model_dump() for the next assistant reply.")
         
         # Show session ID for debugging
@@ -367,15 +381,15 @@ def render_sidebar(authenticated=False, show_debug=False):
     
     if authenticated:
         st.sidebar.success("Authenticated as admin.")
-        st.sidebar.page_link("pages/admin.py", label="⚙️ LLM Settings")
-        st.sidebar.page_link("pages/logs.py", label="📊 Logs & Analytics")
-        st.sidebar.page_link("pages/scrape.py", label="🌐 Content Indexing")
-        st.sidebar.page_link("pages/vectorize.py", label="🗄️ Vector Store Management")
+        st.sidebar.page_link("pages/admin.py", label="LLM Settings", icon=":material/settings:")
+        st.sidebar.page_link("pages/logs.py", label="Logs & Analytics", icon=":material/search_activity:")
+        st.sidebar.page_link("pages/scrape.py", label="Content Indexing", icon=":material/home_storage:")
+        st.sidebar.page_link("pages/vectorize.py", label="Vector Store", icon=":material/owl:")
         #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
         
-        st.sidebar.button("🔓 Logout", on_click=lambda: st.session_state.update({"authenticated": False}))
+        st.sidebar.button("Logout", on_click=lambda: st.session_state.update({"authenticated": False}), icon=":material/logout:")
     else:
-        st.sidebar.page_link("pages/admin.py", label="🔑 Admin Login")
+        st.sidebar.page_link("pages/admin.py", label="Admin Login", icon=":material/key:")
     
     return debug_one
 

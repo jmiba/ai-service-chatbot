@@ -2,8 +2,12 @@ import streamlit as st
 from psycopg2.extras import DictCursor
 from datetime import datetime, timedelta
 import json
-import pandas as pd
+from pathlib import Path
 from utils import get_connection, admin_authentication, render_sidebar
+
+BASE_DIR = Path(__file__).parent.parent
+
+LOG_SVG = (BASE_DIR / "assets" / "search_activity.svg").read_text()
 
 authenticated = admin_authentication()
 render_sidebar(authenticated)
@@ -37,28 +41,37 @@ def delete_logs():
     conn.close()
 
 if authenticated:
-    st.title("📊 Logging & Analytics")
+    #st.title("📊 Logging & Analytics")
+    st.markdown(
+        f"""
+        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
+            {LOG_SVG}
+            Logging & Analytics
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
     # Create tabs for different views
-    tab1, tab2, tab3 = st.tabs(["📄 Interaction Logs", "🔗 Session Analytics", "📈 System Metrics"])
+    tab1, tab2, tab3 = st.tabs(["Interaction Logs", "Session Analytics", "System Metrics"])
     
     with tab1:
         # Admin-only content
         filter_code = st.selectbox("Filter by error code", options=["All", "E00", "E01", "E02"])
         logs = read_logs(limit=200, error_code=filter_code)
-        st.title("📄 View Interaction Logs")
+        st.header("View Interaction Logs")
 
         st.markdown(f"### Showing {len(logs)} log entries")
 
         for entry in logs:
-            st.markdown(f"🕒 **{entry['timestamp']}**, 🔖 **Code:** `{entry.get('error_code') or "OK"}`, 📚 **Citations:** {entry.get('citation_count', 0)}", unsafe_allow_html=False)
+            st.markdown(f"**{entry['timestamp']}**, **Code:** `{entry.get('error_code') or "OK"}`, **Citations:** {entry.get('citation_count', 0)}", unsafe_allow_html=False)
             with st.expander("View Details", expanded=False):
-                st.info(f"{entry['user_input']}")
-                if entry.get('error_code') == "E01":
-                    st.error(f"{entry['assistant_response']}")
+                st.info(f"{entry['user_input']}", icon=":material/face:")
+                if entry.get('error_code') == "E03":
+                    st.error(f"{entry['assistant_response']}", icon=":material/robot_2:")
                 elif entry.get('error_code') == "E02":
-                    st.warning(f"{entry['assistant_response']}")
+                    st.warning(f"{entry['assistant_response']}", icon=":material/robot_2:")
                 else:
-                    st.success(f"{entry['assistant_response']}")
+                    st.success(f"{entry['assistant_response']}", icon=":material/robot_2:")
                 if entry.get('citations'):
                     citations = entry.get('citations')
                     
@@ -81,11 +94,11 @@ if authenticated:
 
             st.markdown("---")
 
-        if st.button("🗑️ Delete All Logs"):
+        if st.button("Delete All Logs", icon=":material/delete_forever:"):
             delete_logs()
             st.success("All logs have been deleted.")
 
-        if st.button("🔓 Logout"):
+        if st.button("Logout", icon=":material/logout:"):
             st.session_state["authenticated"] = False
             st.rerun()
         
@@ -99,15 +112,11 @@ if authenticated:
         # Session statistics
         cursor.execute("""
             SELECT 
-                COUNT(DISTINCT session_id) as total_sessions,
-                COUNT(*) as total_interactions,
-                AVG(interaction_count) as avg_interactions_per_session
-            FROM (
-                SELECT session_id, COUNT(*) as interaction_count 
-                FROM log_table 
-                WHERE session_id IS NOT NULL 
-                GROUP BY session_id
-            ) session_stats
+                COUNT(DISTINCT session_id) AS total_sessions,
+                COUNT(*) AS total_interactions,
+                COUNT(*)::numeric / NULLIF(COUNT(DISTINCT session_id), 0) AS avg_interactions_per_session
+            FROM log_table
+            WHERE session_id IS NOT NULL
         """)
         
         stats = cursor.fetchone()
