@@ -9,6 +9,34 @@ BASE_DIR = Path(__file__).parent.parent
 
 LOG_SVG = (BASE_DIR / "assets" / "search_activity.svg").read_text()
 
+# Helfer: Datums-/Zeitformatierung
+def fmt_dt(value, fmt="%Y-%m-%d %H:%M:%S") -> str:
+    if value is None:
+        return "—"
+    # Already a datetime
+    if isinstance(value, datetime):
+        try:
+            return value.strftime(fmt)
+        except Exception:
+            return str(value)
+    # Try to parse ISO strings
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return "—"
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+            return dt.strftime(fmt)
+        except Exception:
+            return value
+    # Fallback
+    try:
+        return str(value)
+    except Exception:
+        return "—"
+
 authenticated = admin_authentication()
 render_sidebar(authenticated)
 
@@ -64,7 +92,7 @@ def get_session_overview(limit=500):
             COUNT(*) AS interactions,
             MIN(timestamp) AS first_seen,
             MAX(timestamp) AS last_seen,
-            SUM(CASE WHEN error_code IS NOT NULL THEN 1 ELSE 0 END) AS errors
+            SUM(CASE WHEN error_code = 'E03' THEN 1 ELSE 0 END) AS errors
         FROM log_table
         WHERE session_id IS NOT NULL
         GROUP BY session_id
@@ -103,7 +131,7 @@ if authenticated:
             if o == "All":
                 return "All sessions"
             try:
-                last = o["last_seen"].strftime("%Y-%m-%d %H:%M") if o["last_seen"] else "—"
+                last = fmt_dt(o["last_seen"], "%Y-%m-%d %H:%M")
                 return f"{o['session_id']} ({o['interactions']} msgs • last {last})"
             except Exception:
                 return str(o)
@@ -130,11 +158,11 @@ if authenticated:
                 n = len(entries_sorted)
                 first_seen = entries_sorted[0]["timestamp"] if n else None
                 last_seen = entries_sorted[-1]["timestamp"] if n else None
-                error_count = sum(1 for e in entries_sorted if e.get("error_code"))
-                header = f"Session {sid} — {n} interactions, {first_seen} → {last_seen}, errors: {error_count}"
+                error_count = sum(1 for e in entries_sorted if (e.get("error_code") == "E03"))
+                header = f"Session {sid} — {n} interactions, {fmt_dt(first_seen, '%Y-%m-%d %H:%M')} → {fmt_dt(last_seen, '%Y-%m-%d %H:%M')}, errors: {error_count}"
                 with st.expander(header, expanded=False):
                     for entry in entries_sorted:
-                        st.markdown(f"**{entry['timestamp']}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}", unsafe_allow_html=False)
+                        st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}", unsafe_allow_html=False)
                         with st.container():
                             st.info(f"{entry['user_input']}", icon=":material/face:")
                             if entry.get('error_code') == "E03":
@@ -163,7 +191,7 @@ if authenticated:
         else:
             # Flat list (existing behavior)
             for entry in logs:
-                st.markdown(f"**{entry['timestamp']}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}", unsafe_allow_html=False)
+                st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}", unsafe_allow_html=False)
                 with st.expander("View Details", expanded=False):
                     st.info(f"{entry['user_input']}", icon=":material/face:")
                     if entry.get('error_code') == "E03":
@@ -235,8 +263,8 @@ if authenticated:
                 {
                     "session_id": r["session_id"],
                     "interactions": r["interactions"],
-                    "first_seen": r["first_seen"],
-                    "last_seen": r["last_seen"],
+                    "first_seen": fmt_dt(r["first_seen"]),
+                    "last_seen": fmt_dt(r["last_seen"]),
                     "errors": r["errors"],
                 }
                 for r in rows
@@ -254,7 +282,7 @@ if authenticated:
                 st.markdown(f"#### Session {sid} — timeline")
                 detailed = read_logs(limit=1000, session_id=sid)
                 for entry in sorted(detailed, key=lambda e: e["timestamp"]):
-                    st.markdown(f"**{entry['timestamp']}**, **Code:** `{entry.get('error_code') or 'OK'}`")
+                    st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`")
                     with st.container():
                         st.info(f"{entry['user_input']}", icon=":material/face:")
                         st.success(f"{entry['assistant_response']}", icon=":material/robot_2:")
