@@ -275,7 +275,7 @@ if authenticated:
             cursor.close()
             conn.close()
 
-        st.markdown("### Topics (request_classification)")
+        st.markdown("### Topics")
         if topic_rows:
             try:
                 import pandas as pd
@@ -336,6 +336,71 @@ if authenticated:
                     st.write(topic_rows)
         else:
             st.info("No topic data available yet.")
+
+        # --- Topics table: interactions vs sessions ---
+        st.markdown("### Topics — Interactions and Sessions")
+        try:
+            from psycopg2.extras import DictCursor as _DictCursor
+            conn2 = get_connection()
+            cur2 = conn2.cursor(cursor_factory=_DictCursor)
+            cur2.execute(
+                """
+                SELECT COALESCE(request_classification, '(unclassified)') AS topic,
+                       COUNT(*)::int AS interactions,
+                       COUNT(DISTINCT session_id)::int AS sessions_with_topic
+                FROM log_table
+                GROUP BY topic
+                ORDER BY interactions DESC
+                """
+            )
+            agg_rows = cur2.fetchall()
+            # Totals (for shares)
+            cur2.execute(
+                """
+                SELECT COUNT(*)::int AS total_interactions,
+                       COUNT(DISTINCT session_id)::int AS total_sessions
+                FROM log_table
+                WHERE session_id IS NOT NULL
+                """
+            )
+            totals = cur2.fetchone() or {"total_interactions": 0, "total_sessions": 0}
+            cur2.close(); conn2.close()
+
+            import pandas as pd
+            df = pd.DataFrame(agg_rows)
+            if not {'topic','interactions','sessions_with_topic'}.issubset(df.columns):
+                # handle tuple rows
+                if len(df.columns) >= 3:
+                    df.columns = ['topic','interactions','sessions_with_topic'] + list(df.columns[3:])
+                else:
+                    st.info("No topic data available yet.")
+                
+            if not df.empty:
+                ti = int(totals.get('total_interactions', 0) or 0)
+                ts = int(totals.get('total_sessions', 0) or 0)
+                # Compute shares
+                df['share_of_interactions_%'] = df['interactions'].apply(lambda x: (x/ti*100.0) if ti else 0.0)
+                df['share_of_sessions_%'] = df['sessions_with_topic'].apply(lambda x: (x/ts*100.0) if ts else 0.0)
+                df['interactions_per_session'] = df.apply(lambda r: (r['interactions']/r['sessions_with_topic']) if r['sessions_with_topic'] else 0.0, axis=1)
+                # Format for display
+                display_df = df[['topic','interactions','sessions_with_topic','share_of_interactions_%','share_of_sessions_%','interactions_per_session']].copy()
+                display_df.rename(columns={
+                    'topic':'Topic',
+                    'interactions':'Interactions',
+                    'sessions_with_topic':'Sessions with topic',
+                    'share_of_interactions_%':'Share of interactions (%)',
+                    'share_of_sessions_%':'Share of sessions (%)',
+                    'interactions_per_session':'Interactions/session'
+                }, inplace=True)
+                # Round numeric columns
+                display_df['Share of interactions (%)'] = display_df['Share of interactions (%)'].round(1)
+                display_df['Share of sessions (%)'] = display_df['Share of sessions (%)'].round(1)
+                display_df['Interactions/session'] = display_df['Interactions/session'].round(2)
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No topic data available yet.")
+        except Exception as e:
+            st.warning(f"Could not build topics table: {e}")
         
         # Sessions overview table
         st.markdown("### Sessions Overview")
