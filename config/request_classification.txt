@@ -1,0 +1,16 @@
+# Classification for incoming requests. Make sure "other" exists.
+library hours
+book or media search
+general research help
+account info
+facility info
+policy question
+technical support
+teaching support
+research data management
+digital scholarship
+campus life
+psychological support
+studying support
+service feedback
+other

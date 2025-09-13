@@ -61,6 +61,31 @@ BASE_DIR = Path(__file__).parent
 AVATAR_ASSISTANT = str(BASE_DIR / "assets/robot_2_24dp_4B77D1_FILL0_wght400_GRAD0_opsz24.svg")
 AVATAR_USER = str(BASE_DIR / "assets/face_24dp_F5B908_FILL0_wght400_GRAD0_opsz24.svg")
 
+# --- Config: request classification options ---
+@lru_cache(maxsize=1)
+def get_allowed_request_classifications():
+    """Load allowed request_classification values from config/request_classification.txt.
+    One value per line; lines starting with # are comments. Ensures 'other' is present."""
+    default = [
+        'library_hours', 'book_search', 'research_help', 'account_info',
+        'facility_info', 'policy_question', 'technical_support', 'other'
+    ]
+    try:
+        path = BASE_DIR / 'config' / 'request_classification.txt'
+        txt = path.read_text(encoding='utf-8')
+        raw = [ln.strip() for ln in txt.splitlines()]
+        vals = [ln for ln in raw if ln and not ln.startswith('#')]
+        # de-duplicate while preserving order
+        seen = set(); clean = []
+        for v in vals:
+            if v not in seen:
+                clean.append(v); seen.add(v)
+        if 'other' not in clean:
+            clean.append('other')
+        return clean or default
+    except Exception:
+        return default
+
 def load_css(file_path):
     with open(BASE_DIR / file_path) as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
@@ -1166,14 +1191,14 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         
         IMPORTANT: Return ONLY a valid JSON object with this exact structure:
         {{
-            "request_classification": "one of: library_hours, book_search, research_help, account_info, facility_info, policy_question, technical_support, other",
+            "request_classification": "one of: {allowed_topics}",
             "confidence": 0.0-1.0,
             "error_code": 0-3,
             "evaluation_notes": "brief explanation"
         }}
         
         Error codes: 0=perfect response, 1=minor issues, 2=significant gaps, 3=unable to answer properly
-        """.format(citation_count=len(citation_map))
+        """.format(citation_count=len(citation_map), allowed_topics=", ".join(get_allowed_request_classifications()))
 
         # Get current LLM configuration from database
         llm_config = get_current_llm_config()
