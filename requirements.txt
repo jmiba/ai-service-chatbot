@@ -1,8 +1,8 @@
-streamlit
-openai
-psycopg2-binary
-beautifulsoup4
-requests
-markdownify
-pandas
-altair
+streamlit>=1.36
+openai>=1.56
+psycopg2-binary>=2.9
+beautifulsoup4>=4.12
+requests>=2.31
+markdownify>=0.11
+pandas>=2.2
+altair>=5.3
