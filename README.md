@@ -68,7 +68,7 @@ streamlit run app.py
 
 ### Web Search (Admin → Filters)
 - Allowed Domains (optional)
-  - Provide one or more domains (e.g., `europa-uni.de`) to restrict search
+  - Provide one or more domains (e.g., `arXiv.org`) to restrict search
   - If the list is empty, the app sends no filters and web search runs unrestricted (when enabled)
 - User Location (optional fields)
   - type: `approximate` or `precise`
@@ -76,14 +76,13 @@ streamlit run app.py
   - city: free text (e.g., `Frankfurt (Oder)`, `New York`)
   - region: free text
   - timezone: IANA name (e.g., `Europe/Berlin`, `America/New_York`)
-- Not supported by the Responses web_search tool: locale filter, exclude-only domains.
 
 Example tool payload the app generates (simplified):
 ```json
 {
   "type": "web_search",
   "filters": {
-    "allowed_domains": ["europa-uni.de"]
+    "allowed_domains": ["arXiv.org", "jstor.org", "data.europa.eu", "harvard.edu"]
   },
   "user_location": {
     "type": "approximate",
