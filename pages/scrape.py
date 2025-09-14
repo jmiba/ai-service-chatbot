@@ -527,11 +527,14 @@ def scrape(url,
     try:
         head = requests.head(norm_url, allow_redirects=True, timeout=10)
         ctype = head.headers.get("Content-Type", "")
-        if "text/html" not in ctype and "application/xhtml+xml" not in ctype:
+        # Only skip when HEAD explicitly reports a non-HTML content type.
+        # If the header is missing/ambiguous, continue to GET instead of skipping prematurely.
+        if ctype and ("text/html" not in ctype and "application/xhtml+xml" not in ctype):
             if log_callback:
-                log_callback(f"{'  ' * depth}🚫 Skipping non-HTML: {norm_url} ({ctype})")
+                log_callback(f"{'  ' * depth}🚫 Skipping non-HTML (HEAD): {norm_url} ({ctype})")
             return
     except requests.RequestException:
+        # No HEAD? Proceed to GET.
         pass
 
     # GET the page
