@@ -7,7 +7,7 @@ BASE_DIR = Path(__file__).parent.parent
 SETTINGS_SVG = (BASE_DIR / "assets" / "settings.svg").read_text()
 
 # Must be the first Streamlit call
-st.set_page_config(page_title="LLM Settings", layout="wide")
+st.set_page_config(page_title="LLM & API Settings", layout="wide")
 
 # Initialize LLM settings table
 def _ensure_prompt_versions_table():
@@ -79,12 +79,11 @@ render_sidebar(authenticated)
 
 # --- Admin content ---
 if authenticated:
-    #st.title("LLM Settings")
     st.markdown(
         f"""
         <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
             {SETTINGS_SVG}
-            LLM Settings
+            LLM & API Settings
         </h1>
         """,
         unsafe_allow_html=True
@@ -275,9 +274,8 @@ if authenticated:
                 st.error(f"Error saving categories: {e}")
 
     with tab4:
-        st.header("Response & Content Filters")
-        
-        st.info("Configure automatic filtering and quality controls for chatbot responses")
+        st.header("Web Search Filters")
+        st.info("Configure domain allow-list and user location for the OpenAI web search tool")
         
         # Load current filter settings
         try:
@@ -286,214 +284,84 @@ if authenticated:
             st.error(f"Error loading filter settings: {e}")
             current_filter_settings = {}
         
-        # Wrap filter settings in a form to reduce reruns
         with st.form("filter_settings_form", clear_on_submit=False):
-            # Content Quality Filters
-            st.subheader("📊 Quality Control")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                confidence_threshold = st.slider(
-                    "Minimum Confidence Threshold", 
-                    min_value=0.0, 
-                    max_value=1.0, 
-                    value=current_filter_settings.get('confidence_threshold', 0.7), 
-                    step=0.05,
-                    help="Responses below this confidence level will be flagged or require manual review"
+            enabled = st.toggle(
+                "Enable Web Search",
+                value=current_filter_settings.get('web_search_enabled', True),
+                help="Turn web search tool on/off"
+            )
+
+            # Allowed domains (empty means web search will not run)
+            domains_text = st.text_area(
+                "Allowed Domains (one per line or comma-separated)",
+                value="\n".join(current_filter_settings.get('web_domains', []) or []),
+                height=120,
+                help="Provide one or more domains (e.g., europa-uni.de). Leave empty to disable web search at runtime."
+            )
+
+            # User Location
+            st.subheader("User Location")
+            col_ul1, col_ul2, col_ul3 = st.columns([1,1,2])
+            with col_ul1:
+                ul_type = st.selectbox(
+                    "Type",
+                    options=["approximate","precise"],
+                    index=["approximate","precise"].index(current_filter_settings.get('web_userloc_type','approximate')),
+                    help="How precise the user location is"
                 )
-                
-                min_citations = st.number_input(
-                    "Minimum Citations Required",
-                    min_value=0,
-                    max_value=10,
-                    value=current_filter_settings.get('min_citations', 1),
-                    help="Require at least this many citations for factual responses"
+            with col_ul2:
+                ul_country = st.text_input(
+                    "Country",
+                    value=current_filter_settings.get('web_userloc_country',''),
+                    placeholder="US, DE, ..."
                 )
-            
-            with col2:
-                max_response_length = st.number_input(
-                    "Max Response Length (characters)", 
-                    min_value=100, 
-                    max_value=5000, 
-                    value=current_filter_settings.get('max_response_length', 2000), 
-                    step=100,
-                    help="Truncate responses longer than this limit"
+            with col_ul3:
+                ul_city = st.text_input(
+                    "City",
+                    value=current_filter_settings.get('web_userloc_city',''),
+                    placeholder="New York, Berlin, ..."
                 )
-                
-                enable_fact_checking = st.checkbox(
-                    "Enable Fact-Checking Alerts",
-                    value=current_filter_settings.get('enable_fact_checking', True),
-                    help="Flag responses that might contain unverified claims"
+
+            # Additional optional fields
+            col_ul4, col_ul5 = st.columns([1,2])
+            with col_ul4:
+                ul_region = st.text_input(
+                    "Region (optional)",
+                    value=current_filter_settings.get('web_userloc_region',''),
+                    placeholder="Brandenburg, CA, ..."
                 )
-            
-            # Content Filtering
-            st.subheader("🛡️ Content Moderation")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                academic_integrity_check = st.checkbox(
-                    "Academic Integrity Detection",
-                    value=current_filter_settings.get('academic_integrity_check', True),
-                    help="Detect and handle potential homework/exam questions appropriately"
+            with col_ul5:
+                ul_timezone = st.text_input(
+                    "Timezone (optional)",
+                    value=current_filter_settings.get('web_userloc_timezone',''),
+                    placeholder="Europe/Berlin, America/New_York"
                 )
-                
-                language_consistency = st.checkbox(
-                    "Language Consistency Check",
-                    value=current_filter_settings.get('language_consistency', True),
-                    help="Ensure responses match the language of the input query"
-                )
-            
-            with col2:
-                topic_restriction = st.selectbox(
-                    "Topic Restriction Level",
-                    options=["None", "University-related only", "Academic only", "Strict policy"],
-                    index=["None", "University-related only", "Academic only", "Strict policy"].index(
-                        current_filter_settings.get('topic_restriction', 'University-related only')
-                    ),
-                    help="Limit discussions to appropriate topics for a university chatbot"
-                )
-                
-                inappropriate_content_filter = st.checkbox(
-                    "Inappropriate Content Filter",
-                    value=current_filter_settings.get('inappropriate_content_filter', True),
-                    help="Block or flag potentially harmful or offensive content"
-                )
-            
-            # User Experience
-            st.subheader("👥 User Experience")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                user_type_adaptation = st.selectbox(
-                    "Response Adaptation",
-                    options=["Standard", "Student-friendly", "Faculty-focused", "Staff-oriented"],
-                    index=["Standard", "Student-friendly", "Faculty-focused", "Staff-oriented"].index(
-                        current_filter_settings.get('user_type_adaptation', 'Standard')
-                    ),
-                    help="Adapt response style based on intended audience"
-                )
-            
-            with col2:
-                citation_style = st.selectbox(
-                    "Citation Format",
-                    options=["Inline", "Numbered", "Academic (APA-style)", "Simple links"],
-                    index=["Inline", "Numbered", "Academic (APA-style)", "Simple links"].index(
-                        current_filter_settings.get('citation_style', 'Academic (APA-style)')
-                    ),
-                    help="How to format source citations in responses"
-                )
-            
-            # Advanced Filters
-            with st.expander("🔬 Advanced Filtering Options"):
-                enable_sentiment_analysis = st.checkbox(
-                    "Sentiment Analysis",
-                    value=current_filter_settings.get('enable_sentiment_analysis', False),
-                    help="Analyze emotional tone of queries and responses"
-                )
-                
-                enable_keyword_blocking = st.checkbox(
-                    "Keyword-based Blocking",
-                    value=current_filter_settings.get('enable_keyword_blocking', False),
-                    help="Block responses containing specific keywords"
-                )
-                
-                if enable_keyword_blocking:
-                    blocked_keywords = st.text_area(
-                        "Blocked Keywords (one per line)",
-                        value=current_filter_settings.get('blocked_keywords', ''),
-                        help="Responses containing these keywords will be blocked"
-                    )
-                else:
-                    blocked_keywords = ""
-                
-                enable_response_caching = st.checkbox(
-                    "Response Caching",
-                    value=current_filter_settings.get('enable_response_caching', True),
-                    help="Cache similar responses to improve performance"
-                )
-            
-            # Filter Summary
-            st.subheader("📋 Current Filter Configuration")
-            
-            filter_summary = f"""
-            **Quality Control:**
-            - Confidence threshold: {confidence_threshold:.1%}
-            - Minimum citations: {min_citations}
-            - Max response length: {max_response_length:,} characters
-            - Fact-checking: {'Enabled' if enable_fact_checking else 'Disabled'}
-            
-            **Content Moderation:**
-            - Academic integrity check: {'Enabled' if academic_integrity_check else 'Disabled'}
-            - Language consistency: {'Enabled' if language_consistency else 'Disabled'}
-            - Topic restriction: {topic_restriction}
-            - Inappropriate content filter: {'Enabled' if inappropriate_content_filter else 'Disabled'}
-            
-            **User Experience:**
-            - Response adaptation: {user_type_adaptation}
-            - Citation style: {citation_style}
-            """
-            
-            st.info(filter_summary)
-            
-            # Save Filter Settings inside the form
-            submitted_filters = st.form_submit_button("💾 Save Filter Settings", type="primary")
+
+            submitted_filters = st.form_submit_button("Save Web Search Settings", type="primary", icon=":material/save:")
             if submitted_filters:
-                # Collect all filter settings
-                filter_settings = {
-                    'confidence_threshold': confidence_threshold,
-                    'min_citations': min_citations,
-                    'max_response_length': max_response_length,
-                    'enable_fact_checking': enable_fact_checking,
-                    'academic_integrity_check': academic_integrity_check,
-                    'language_consistency': language_consistency,
-                    'topic_restriction': topic_restriction,
-                    'inappropriate_content_filter': inappropriate_content_filter,
-                    'user_type_adaptation': user_type_adaptation,
-                    'citation_style': citation_style,
-                    'enable_sentiment_analysis': enable_sentiment_analysis,
-                    'enable_keyword_blocking': enable_keyword_blocking,
-                    'blocked_keywords': blocked_keywords if enable_keyword_blocking else '',
-                    'enable_response_caching': enable_response_caching
+                # basic validations
+                if ul_country and len(ul_country.strip()) not in (0,2):
+                    st.error("Country should be a 2-letter code (ISO 3166-1 alpha-2), e.g., 'US', 'DE'.")
+                    st.stop()
+
+                settings = {
+                    'web_search_enabled': enabled,
+                    'web_domains': domains_text,
+                    'web_userloc_type': ul_type,
+                    'web_userloc_country': (ul_country or '').upper(),
+                    'web_userloc_city': ul_city,
+                    'web_userloc_region': ul_region,
+                    'web_userloc_timezone': ul_timezone,
                 }
-                
                 try:
-                    save_filter_settings(filter_settings, updated_by=(st.session_state.get("admin_email") or "Admin"))
-                    st.success("✅ Filter settings saved successfully!")
-                    st.caption("Filters will be applied to all new conversations")
+                    save_filter_settings(settings, updated_by=(st.session_state.get("admin_email") or "admin@viadrina.de"))
+                    st.success("Web search settings saved!", icon=":material/check_circle:")
                 except Exception as e:
-                    st.error(f"❌ Error saving filter settings: {e}")
+                    st.error(f"Error saving settings: {e}", icon=":material/error:")
+
+        st.caption("These settings affect only the web_search tool; file_search remains unchanged.")
         
         # Reset button outside the form
-        if st.button("🔄 Reset to Defaults"):
+        if st.button("Reset to Defaults", icon=":material/cached:",):
             st.rerun()
-        
-        # Implementation Status
-        st.subheader("🔧 Implementation Status")
-        
-        implementation_status = {
-            "Confidence threshold": "✅ Fully implemented - Blocks responses below threshold",
-            "Citation counting": "✅ Fully implemented - Tracks and validates citations", 
-            "Response length limiting": "✅ Fully implemented - Truncates overly long responses",
-            "Academic integrity detection": "✅ Fully implemented - Pattern-based homework detection",
-            "Language detection": "✅ Fully implemented - Basic German/English detection",
-            "Topic restriction": "✅ Fully implemented - Keyword-based university focus",
-            "Content moderation": "✅ Basic implementation - Inappropriate keyword filtering",
-            "Citation formatting": "✅ Fully implemented - Multiple citation styles (APA, numbered, etc.)",
-            "User adaptation": "✅ Fully implemented - Student/Faculty/Staff response modes",
-            "Response caching": "✅ Framework ready - Database integration complete",
-            "Advanced sentiment analysis": "🚧 Framework ready - Requires ML model integration",
-            "Advanced keyword blocking": "🚧 Framework ready - Custom word lists supported"
-        }
-        
-        for feature, status in implementation_status.items():
-            if "✅" in status:
-                st.success(f"{feature}: {status}")
-            elif "🚧" in status:
-                st.info(f"{feature}: {status}")
-            else:
-                st.error(f"{feature}: {status}")
-        
-        st.caption("💡 All core filtering features are fully operational and ready for production use!")
+

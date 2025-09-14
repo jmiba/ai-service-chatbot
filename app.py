@@ -14,7 +14,8 @@ from utils import (
     initialize_default_prompt_if_empty, get_latest_prompt, render_sidebar,
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
     supports_reasoning_effort, get_kb_entries, estimate_cost_usd,
-    create_request_classifications_table, get_request_classifications
+    create_request_classifications_table, get_request_classifications,
+    get_filter_settings
 )
 
 # -------------------------------------
@@ -650,7 +651,7 @@ def coerce_text_part(part):
     return {"text": text_str, "annotations": annotations}
 
 # ---------- Streamed handling ----------
-def handle_stream_and_render(user_input, system_instructions, client, retrieval_filters=None, debug_one=False):
+def handle_stream_and_render(user_input, system_instructions, client, retrieval_filters=None, debug_one=False, web_tool_extras=None):
     """
     Responses API (streaming) with status indicator to avoid chat duplication:
       - opens the assistant bubble immediately
@@ -663,21 +664,37 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         st.error("Missing VECTOR_STORE_ID in Streamlit secrets. Please add it to run File Search.")
         st.stop()
 
+    # Build tools with optional web_search based on settings
     tool_cfg = [
         {
             "type": "file_search",
             "vector_store_ids": [st.secrets["VECTOR_STORE_ID"]],
             # "max_num_results": 4,  # tune for latency/recall
-        },
-        {
-            "type": "web_search"},
+        }
     ]
+    web_enabled = True
+    if web_tool_extras and isinstance(web_tool_extras, dict):
+        web_enabled = bool(web_tool_extras.get("web_search_enabled", True))
+    # Only add web_search if allowed_domains are configured to satisfy API
+    has_allowed = bool(retrieval_filters and isinstance(retrieval_filters, dict) and retrieval_filters.get('allowed_domains'))
+    if web_enabled and has_allowed:
+        tool_cfg.append({"type": "web_search"})
+
     if retrieval_filters is not None:
-        # Apply filters only to the web_search tool
+        # Apply filters only to the web search tool
         for tool in tool_cfg:
             if tool.get("type") == "web_search":
                 tool["filters"] = retrieval_filters
                 break    
+    # Attach user_location if provided
+    if web_tool_extras and isinstance(web_tool_extras, dict):
+        ul = web_tool_extras.get("user_location")
+        if ul:
+            for tool in tool_cfg:
+                if tool.get("type") == "web_search":
+                    tool["user_location"] = ul
+                    break
+
     # Build conversation context (last 10 exchanges to stay within limits)
     def build_conversation_context():
         conversation = [{"role": "system", "content": system_instructions}]
@@ -952,7 +969,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         for idx_link, lm in enumerate(group_links):
                             anchor = lm.group(1).strip()
                             url = lm.group(2).strip()
-                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                             display_anchor = "" if looks_like_url else anchor
                             start_idx = sum(len(p) for p in rebuilt)
                             rebuilt.append(display_anchor)
@@ -979,7 +996,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     rebuilt.append(pre)
                     anchor = m.group(1).strip()
                     url = m.group(2).strip()
-                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                     display_anchor = "" if looks_like_url else anchor
                     start_idx = sum(len(p) for p in rebuilt)
                     rebuilt.append(display_anchor)
@@ -1070,7 +1087,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     for idx_link, lm in enumerate(group_links):
                         anchor = lm.group(1).strip()
                         url = lm.group(2).strip()
-                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za:z]{2,})$', anchor.strip(), re.I))
+                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-Za:z]{2,})$', anchor.strip(), re.I))
                         display_anchor = "" if looks_like_url else anchor
                         start_idx = sum(len(p) for p in rebuilt)
                         rebuilt.append(display_anchor)
@@ -1096,7 +1113,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 rebuilt.append(pre)
                 anchor = m.group(1).strip()
                 url = m.group(2).strip()
-                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                 display_anchor = "" if looks_like_url else anchor
                 start_idx = sum(len(p) for p in rebuilt)
                 rebuilt.append(display_anchor)
@@ -1448,6 +1465,34 @@ if user_input:
 
     # Optional: scope retrieval (adjust to your ingestion metadata)
     # retrieval_filters = {"department": "library", "year": {"$in": [2023, 2024, 2025]}}
-    retrieval_filters = None
+    # Build web_search filters from admin settings
+    fs = get_filter_settings()
+    web_filters = {}
+    tool_extras = {}
+    if fs:
+        # enable flag
+        tool_extras['web_search_enabled'] = bool(fs.get('web_search_enabled', True))
+        # required: allowed_domains
+        domains = fs.get('web_domains') or []
+        if domains:
+            web_filters['allowed_domains'] = domains
+        # user_location
+        ul_type = (fs.get('web_userloc_type') or '').strip()
+        ul_country = (fs.get('web_userloc_country') or '').strip()
+        ul_city = (fs.get('web_userloc_city') or '').strip()
+        ul_region = (fs.get('web_userloc_region') or '').strip()
+        ul_timezone = (fs.get('web_userloc_timezone') or '').strip()
+        if ul_type:
+            loc = {
+                'type': ul_type,
+                'country': ul_country or None,
+                'city': ul_city or None,
+            }
+            if ul_region:
+                loc['region'] = ul_region
+            if ul_timezone:
+                loc['timezone'] = ul_timezone
+            tool_extras['user_location'] = loc
+    retrieval_filters = web_filters or None
 
-    handle_stream_and_render(user_input, CUSTOM_INSTRUCTIONS, client, retrieval_filters, debug_one=debug_one)
+    handle_stream_and_render(user_input, CUSTOM_INSTRUCTIONS, client, retrieval_filters, debug_one=debug_one, web_tool_extras=tool_extras)

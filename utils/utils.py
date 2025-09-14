@@ -469,7 +469,7 @@ def render_sidebar(authenticated=False, show_debug=False):
     
     if authenticated:
         st.sidebar.success("Authenticated as admin.")
-        st.sidebar.page_link("pages/admin.py", label="LLM Settings", icon=":material/settings:")
+        st.sidebar.page_link("pages/admin.py", label="Settings", icon=":material/settings:")
         st.sidebar.page_link("pages/logs.py", label="Logs & Analytics", icon=":material/search_activity:")
         st.sidebar.page_link("pages/scrape.py", label="Content Indexing", icon=":material/home_storage:")
         st.sidebar.page_link("pages/vectorize.py", label="Vector Store", icon=":material/owl:")
@@ -787,143 +787,162 @@ def get_llm_settings():
 
 # Filter Settings Management Functions
 def create_filter_settings_table():
-    """Create table for storing response and content filter settings"""
+    """Create table for storing web search filter settings (locale, domains, user_location, enable flag)."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS filter_settings (
             id SERIAL PRIMARY KEY,
-            confidence_threshold DECIMAL(3,2) DEFAULT 0.70,
-            min_citations INTEGER DEFAULT 1,
-            max_response_length INTEGER DEFAULT 2000,
-            enable_fact_checking BOOLEAN DEFAULT TRUE,
-            academic_integrity_check BOOLEAN DEFAULT TRUE,
-            language_consistency BOOLEAN DEFAULT TRUE,
-            topic_restriction VARCHAR(50) DEFAULT 'University-related only',
-            inappropriate_content_filter BOOLEAN DEFAULT TRUE,
-            user_type_adaptation VARCHAR(50) DEFAULT 'Standard',
-            citation_style VARCHAR(50) DEFAULT 'Academic (APA-style)',
-            enable_sentiment_analysis BOOLEAN DEFAULT FALSE,
-            enable_keyword_blocking BOOLEAN DEFAULT FALSE,
-            blocked_keywords TEXT DEFAULT '',
-            enable_response_caching BOOLEAN DEFAULT TRUE,
+            web_search_enabled BOOLEAN DEFAULT TRUE,
+            web_locale TEXT DEFAULT 'de-DE',
+            web_domains TEXT[] DEFAULT ARRAY[]::TEXT[],
+            web_domains_mode VARCHAR(16) DEFAULT 'include',
+            web_userloc_type TEXT DEFAULT 'approximate',
+            web_userloc_country TEXT,
+            web_userloc_city TEXT,
+            web_userloc_region TEXT,
+            web_userloc_timezone TEXT,
             updated_by VARCHAR(100),
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
-    """)
-    
-    # Insert default settings if table is empty
+        """
+    )
+    # migrate columns if upgrading from older schema
+    cursor.execute(
+        """
+        DO $$ BEGIN
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_search_enabled BOOLEAN DEFAULT TRUE; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_locale TEXT DEFAULT 'de-DE'; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_domains TEXT[] DEFAULT ARRAY[]::TEXT[]; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_domains_mode VARCHAR(16) DEFAULT 'include'; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_type TEXT DEFAULT 'approximate'; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_country TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_city TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_region TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_timezone TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS updated_by VARCHAR(100); EXCEPTION WHEN duplicate_column THEN NULL; END;
+            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW(); EXCEPTION WHEN duplicate_column THEN NULL; END;
+        END $$;
+        """
+    )
     cursor.execute("SELECT COUNT(*) FROM filter_settings")
     if cursor.fetchone()[0] == 0:
-        cursor.execute("""
-            INSERT INTO filter_settings (updated_by) VALUES (%s)
-        """, ('system',))
-    
+        cursor.execute(
+            "INSERT INTO filter_settings (web_search_enabled, web_locale, web_domains, web_domains_mode, web_userloc_type, web_userloc_country, web_userloc_city, web_userloc_region, web_userloc_timezone, updated_by) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (True, 'de-DE', [], 'include', 'approximate', None, None, None, None, 'system')
+        )
     conn.commit()
     cursor.close()
     conn.close()
 
+
 def save_filter_settings(settings, updated_by="admin"):
-    """Save filter settings to database"""
+    """Save web search filter settings (enable flag, locale, domains, and user_location) to DB"""
     conn = get_connection()
     cursor = conn.cursor()
-    
-    # Update the single row (we only keep one active configuration)
-    cursor.execute("""
+
+    enabled = bool(settings.get('web_search_enabled', True))
+    web_locale = (settings.get('web_locale') or 'de-DE').strip()
+
+    # Normalize domains: split, strip scheme/path, drop empties, dedupe
+    domains_raw = settings.get('web_domains')
+    if isinstance(domains_raw, str):
+        parts = [p.strip() for p in domains_raw.replace(',', '\n').splitlines()]
+        web_domains = [d for d in parts if d]
+    else:
+        web_domains = [str(d).strip() for d in (domains_raw or []) if str(d).strip()]
+
+    def _normalize_domain(d: str) -> str:
+        s = d.strip()
+        if '://' in s:
+            s = s.split('://', 1)[1]
+        s = s.split('/', 1)[0]
+        if s.startswith('www.'):
+            s = s[4:]
+        return s.lower()
+
+    web_domains = [_normalize_domain(d) for d in web_domains if _normalize_domain(d)]
+    seen = set(); web_domains_norm = []
+    for d in web_domains:
+        if d not in seen:
+            web_domains_norm.append(d); seen.add(d)
+
+    # Force mode to 'include' to satisfy API requirement for allowed_domains
+    mode = 'include'
+
+    ul_type = (settings.get('web_userloc_type') or 'approximate').strip()
+    ul_country = (settings.get('web_userloc_country') or '').strip() or None
+    ul_city = (settings.get('web_userloc_city') or '').strip() or None
+    ul_region = (settings.get('web_userloc_region') or '').strip() or None
+    ul_timezone = (settings.get('web_userloc_timezone') or '').strip() or None
+
+    cursor.execute(
+        """
         UPDATE filter_settings SET 
-            confidence_threshold = %s,
-            min_citations = %s,
-            max_response_length = %s,
-            enable_fact_checking = %s,
-            academic_integrity_check = %s,
-            language_consistency = %s,
-            topic_restriction = %s,
-            inappropriate_content_filter = %s,
-            user_type_adaptation = %s,
-            citation_style = %s,
-            enable_sentiment_analysis = %s,
-            enable_keyword_blocking = %s,
-            blocked_keywords = %s,
-            enable_response_caching = %s,
+            web_search_enabled = %s,
+            web_locale = %s,
+            web_domains = %s,
+            web_domains_mode = %s,
+            web_userloc_type = %s,
+            web_userloc_country = %s,
+            web_userloc_city = %s,
+            web_userloc_region = %s,
+            web_userloc_timezone = %s,
             updated_by = %s,
             updated_at = NOW()
         WHERE id = (SELECT MIN(id) FROM filter_settings)
-    """, (
-        settings.get('confidence_threshold', 0.70),
-        settings.get('min_citations', 1),
-        settings.get('max_response_length', 2000),
-        settings.get('enable_fact_checking', True),
-        settings.get('academic_integrity_check', True),
-        settings.get('language_consistency', True),
-        settings.get('topic_restriction', 'University-related only'),
-        settings.get('inappropriate_content_filter', True),
-        settings.get('user_type_adaptation', 'Standard'),
-        settings.get('citation_style', 'Academic (APA-style)'),
-        settings.get('enable_sentiment_analysis', False),
-        settings.get('enable_keyword_blocking', False),
-        settings.get('blocked_keywords', ''),
-        settings.get('enable_response_caching', True),
-        updated_by
-    ))
-    
-    conn.commit()
-    cursor.close()
-    conn.close()
+        """,
+        (enabled, web_locale, web_domains_norm, mode, ul_type, ul_country, ul_city, ul_region, ul_timezone, updated_by)
+    )
+
+    conn.commit(); cursor.close(); conn.close()
+
 
 def get_filter_settings():
-    """Get current filter settings from database"""
+    """Get current web search filter settings from database"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT confidence_threshold, min_citations, max_response_length, 
-               enable_fact_checking, academic_integrity_check, language_consistency,
-               topic_restriction, inappropriate_content_filter, user_type_adaptation,
-               citation_style, enable_sentiment_analysis, enable_keyword_blocking,
-               blocked_keywords, enable_response_caching, updated_by, updated_at
+    cursor.execute(
+        """
+        SELECT web_search_enabled, web_locale, web_domains, web_domains_mode,
+               web_userloc_type, web_userloc_country, web_userloc_city,
+               web_userloc_region, web_userloc_timezone,
+               updated_by, updated_at
         FROM filter_settings
         ORDER BY updated_at DESC
         LIMIT 1
-    """)
-    result = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    
-    if result:
+        """
+    )
+    row = cursor.fetchone(); cursor.close(); conn.close()
+    if row:
+        mode = row[3] or 'include'
+        if mode not in ('include',):
+            mode = 'include'
         return {
-            'confidence_threshold': float(result[0]),
-            'min_citations': result[1],
-            'max_response_length': result[2],
-            'enable_fact_checking': result[3],
-            'academic_integrity_check': result[4],
-            'language_consistency': result[5],
-            'topic_restriction': result[6],
-            'inappropriate_content_filter': result[7],
-            'user_type_adaptation': result[8],
-            'citation_style': result[9],
-            'enable_sentiment_analysis': result[10],
-            'enable_keyword_blocking': result[11],
-            'blocked_keywords': result[12],
-            'enable_response_caching': result[13],
-            'updated_by': result[14],
-            'updated_at': result[15]
+            'web_search_enabled': bool(row[0]) if row[0] is not None else True,
+            'web_locale': row[1] or 'de-DE',
+            'web_domains': row[2] or [],
+            'web_domains_mode': mode,
+            'web_userloc_type': row[4] or 'approximate',
+            'web_userloc_country': row[5] or '',
+            'web_userloc_city': row[6] or '',
+            'web_userloc_region': row[7] or '',
+            'web_userloc_timezone': row[8] or '',
+            'updated_by': row[9],
+            'updated_at': row[10]
         }
     else:
-        # Return defaults if no settings found
         return {
-            'confidence_threshold': 0.70,
-            'min_citations': 1,
-            'max_response_length': 2000,
-            'enable_fact_checking': True,
-            'academic_integrity_check': True,
-            'language_consistency': True,
-            'topic_restriction': 'University-related only',
-            'inappropriate_content_filter': True,
-            'user_type_adaptation': 'Standard',
-            'citation_style': 'Academic (APA-style)',
-            'enable_sentiment_analysis': False,
-            'enable_keyword_blocking': False,
-            'blocked_keywords': '',
-            'enable_response_caching': True,
+            'web_search_enabled': True,
+            'web_locale': 'de-DE',
+            'web_domains': [],
+            'web_domains_mode': 'include',
+            'web_userloc_type': 'approximate',
+            'web_userloc_country': '',
+            'web_userloc_city': '',
+            'web_userloc_region': '',
+            'web_userloc_timezone': '',
             'updated_by': 'system',
             'updated_at': None
         }
