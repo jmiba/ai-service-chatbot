@@ -675,9 +675,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     web_enabled = True
     if web_tool_extras and isinstance(web_tool_extras, dict):
         web_enabled = bool(web_tool_extras.get("web_search_enabled", True))
-    # Only add web_search if allowed_domains are configured to satisfy API
-    has_allowed = bool(retrieval_filters and isinstance(retrieval_filters, dict) and retrieval_filters.get('allowed_domains'))
-    if web_enabled and has_allowed:
+    # Add web_search when enabled; filters are attached only if present
+    if web_enabled:
         tool_cfg.append({"type": "web_search"})
 
     if retrieval_filters is not None:
@@ -1472,7 +1471,7 @@ if user_input:
     if fs:
         # enable flag
         tool_extras['web_search_enabled'] = bool(fs.get('web_search_enabled', True))
-        # required: allowed_domains
+        # allowed_domains: only include if provided; otherwise no restrictions
         domains = fs.get('web_domains') or []
         if domains:
             web_filters['allowed_domains'] = domains
@@ -1493,6 +1492,7 @@ if user_input:
             if ul_timezone:
                 loc['timezone'] = ul_timezone
             tool_extras['user_location'] = loc
-    retrieval_filters = web_filters or None
+    # If no filters defined, pass None so tool has no restrictions
+    retrieval_filters = web_filters if web_filters else None
 
     handle_stream_and_render(user_input, CUSTOM_INSTRUCTIONS, client, retrieval_filters, debug_one=debug_one, web_tool_extras=tool_extras)
