@@ -37,6 +37,10 @@ try:
 except Exception as e:
     st.error(f"Error initializing settings tables: {e}")
 
+# Helper to get admin email for audit fields
+def _updated_by_default():
+    return st.session_state.get("admin_email") or st.secrets.get("ADMIN_EMAIL") or "Admin"
+
 def backup_prompt_to_db(current_prompt, edited_by=None, note=None):
     try:
         conn = get_connection()
@@ -85,10 +89,9 @@ if authenticated:
         """,
         unsafe_allow_html=True
     )
-
     
     # Create tabs for different views
-    tab1, tab2, tab3 = st.tabs(["System Prompt", "Language Model", "Filters"])
+    tab1, tab2, tab3, tab4 = st.tabs(["System Prompt", "Language Model", "Request Categories", "Filters"])
     
     with tab1:
         st.header("Edit System Prompt")
@@ -100,7 +103,7 @@ if authenticated:
         new_note = st.text_input("**Edit note (optional):**", value="")
 
         if st.button("Save Prompt", icon=":material/save:", type="primary"):
-            backup_prompt_to_db(new_prompt, edited_by="admin@viadrina.de", note=new_note)
+            backup_prompt_to_db(new_prompt, edited_by=(st.session_state.get("admin_email") or "Admin"), note=new_note)
             st.success("System prompt updated successfully.")
 
         st.caption(f"Length: {len(new_prompt)} characters")
@@ -245,33 +248,33 @@ if authenticated:
                         parallel_tool_calls=parallel_tool_calls,
                         reasoning_effort=reasoning_effort,
                         text_verbosity=text_verbosity,
-                        updated_by="admin@viadrina.de"
+                        updated_by=(st.session_state.get("admin_email") or "Admin")
                     )
                     st.success("Language model settings saved successfully!", icon=":material/check_circle:")
                     st.rerun()  # Refresh to show updated settings
                 except Exception as e:
                     st.error(f"Error saving settings: {str(e)}", icon=":material/error:")
         
-        st.divider()
-        st.subheader("Request Classifications")
-        st.caption("These categories are used for request classification and analytics. One per line. 'other' is always included.")
+    with tab3:
+        st.subheader("Request Categorization")
+        st.caption("These categories are used for the classification of interactions and analytics. One per line. The fall-back catergory 'other' will be added automatically.")
         try:
             current_cats = get_request_classifications()
         except Exception:
             current_cats = []
         cats_text = "\n".join(current_cats)
         with st.form("request_classifications_form"):
-            new_cats_text = st.text_area("Categories", value=cats_text, height=180, help="Enter one category per line")
+            new_cats_text = st.text_area("Categories", value=cats_text, height=400, help="Enter one category per line")
             submitted_cats = st.form_submit_button("Save Categories", icon=":material/save:", type="primary")
         if submitted_cats:
             new_cats = [ln.strip() for ln in (new_cats_text or '').splitlines() if ln.strip()]
             try:
-                save_request_classifications(new_cats, updated_by="admin@viadrina.de")
+                save_request_classifications(new_cats, updated_by=(st.session_state.get("admin_email") or "Admin"))
                 st.success("Request classifications saved.")
             except Exception as e:
                 st.error(f"Error saving categories: {e}")
 
-    with tab3:
+    with tab4:
         st.header("Response & Content Filters")
         
         st.info("Configure automatic filtering and quality controls for chatbot responses")
@@ -457,7 +460,7 @@ if authenticated:
                 }
                 
                 try:
-                    save_filter_settings(filter_settings, updated_by="admin@viadrina.de")
+                    save_filter_settings(filter_settings, updated_by=(st.session_state.get("admin_email") or "Admin"))
                     st.success("✅ Filter settings saved successfully!")
                     st.caption("Filters will be applied to all new conversations")
                 except Exception as e:

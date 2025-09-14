@@ -930,8 +930,8 @@ def get_filter_settings():
 
 # Request Classification Settings (DB-backed)
 DEFAULT_REQUEST_CLASSIFICATIONS = [
-    'library_hours', 'book_search', 'research_help', 'account_info',
-    'facility_info', 'policy_question', 'technical_support', 'other'
+    'library hours', 'book search', 'research help', 'account info',
+    'facility info', 'policy question', 'technical support', 'other'
 ]
 
 def create_request_classifications_table():
