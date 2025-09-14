@@ -2,7 +2,7 @@
 
 An AI-powered Streamlit app using OpenAI Responses API. It answers university- and library-related questions with Retrieval-Augmented Generation (RAG), web search, and rich citations. Includes an admin UI for settings, prompt versioning, filters, analytics, and scraping/vectorization workflows.
 
-![Viadrina Library Assistant](assets/viadrina-logo.png)
+![Viadrina Library Assistant](assets/viadrina-ub-logo.png)
 
 ## 🌐 Live Demo
 
