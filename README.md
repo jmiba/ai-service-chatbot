@@ -164,3 +164,7 @@ MIT — see `LICENSE`.
 - Open a GitHub issue
 - Streamlit docs: https://docs.streamlit.io/
 - OpenAI docs: https://platform.openai.com/docs/
+
+---
+
+**Built with ❤️ for the Viadrina University Library**
