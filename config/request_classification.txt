@@ -11,6 +11,7 @@ research data management
 digital scholarship
 campus life
 staff info
+institution info
 psychological support
 studying support
 service feedback

@@ -29,6 +29,10 @@ from .utils import (
     save_filter_settings,
     get_filter_settings,
     estimate_cost_usd,
+    # Export request classification helpers
+    create_request_classifications_table,
+    get_request_classifications,
+    save_request_classifications,
 )
 
 # Now you can import from utils directly, e.g.:

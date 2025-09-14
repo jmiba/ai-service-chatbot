@@ -928,3 +928,99 @@ def get_filter_settings():
             'updated_at': None
         }
 
+# Request Classification Settings (DB-backed)
+DEFAULT_REQUEST_CLASSIFICATIONS = [
+    'library_hours', 'book_search', 'research_help', 'account_info',
+    'facility_info', 'policy_question', 'technical_support', 'other'
+]
+
+def create_request_classifications_table():
+    """Create table to store request classification categories as a single TEXT[] row."""
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS request_classifications (
+            id SERIAL PRIMARY KEY,
+            categories TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+            updated_by TEXT,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """
+    )
+    # Seed defaults if empty
+    cur.execute("SELECT COUNT(*) FROM request_classifications")
+    if cur.fetchone()[0] == 0:
+        cur.execute(
+            "INSERT INTO request_classifications (categories, updated_by) VALUES (%s, %s)",
+            (DEFAULT_REQUEST_CLASSIFICATIONS, 'system')
+        )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+def get_request_classifications():
+    """Return the most recently updated list of categories from DB (fallback to defaults)."""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT categories FROM request_classifications ORDER BY updated_at DESC, id DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        cats = list(row[0]) if row and row[0] else []
+        # Ensure 'other' exists
+        if 'other' not in cats:
+            cats.append('other')
+        # Deduplicate while preserving order
+        seen = set(); ordered = []
+        for c in cats:
+            if c and c not in seen:
+                ordered.append(c); seen.add(c)
+        return ordered or DEFAULT_REQUEST_CLASSIFICATIONS
+    except Exception:
+        return DEFAULT_REQUEST_CLASSIFICATIONS
+
+def save_request_classifications(categories, updated_by='admin'):
+    """Persist categories (TEXT[]) to DB, keeping a single active row (update the oldest row)."""
+    # Normalize list: strip, drop empties, dedupe, ensure 'other'
+    norm = []
+    seen = set()
+    for c in categories or []:
+        c2 = (c or '').strip()
+        if not c2:
+            continue
+        if c2 not in seen:
+            norm.append(c2); seen.add(c2)
+    if 'other' not in seen:
+        norm.append('other')
+
+    conn = get_connection()
+    cur = conn.cursor()
+    # Ensure table exists
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS request_classifications (
+            id SERIAL PRIMARY KEY,
+            categories TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+            updated_by TEXT,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """
+    )
+    # If a row exists, update it; else insert
+    cur.execute("SELECT id FROM request_classifications ORDER BY id ASC LIMIT 1")
+    row = cur.fetchone()
+    if row:
+        cur.execute(
+            "UPDATE request_classifications SET categories=%s, updated_by=%s, updated_at=NOW() WHERE id=%s",
+            (norm, updated_by, row[0])
+        )
+    else:
+        cur.execute(
+            "INSERT INTO request_classifications (categories, updated_by) VALUES (%s, %s)",
+            (norm, updated_by)
+        )
+    conn.commit(); cur.close(); conn.close()
+

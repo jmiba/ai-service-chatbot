@@ -1,5 +1,5 @@
 import streamlit as st
-from utils import get_connection, get_latest_prompt, admin_authentication, render_sidebar, create_llm_settings_table, save_llm_settings, get_llm_settings, get_available_openai_models, supports_reasoning_effort, get_supported_verbosity_options, create_filter_settings_table, get_filter_settings, save_filter_settings
+from utils import get_connection, get_latest_prompt, admin_authentication, render_sidebar, create_llm_settings_table, save_llm_settings, get_llm_settings, get_available_openai_models, supports_reasoning_effort, get_supported_verbosity_options, create_filter_settings_table, get_filter_settings, save_filter_settings, create_request_classifications_table, get_request_classifications, save_request_classifications
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.parent
@@ -32,6 +32,7 @@ def _ensure_prompt_versions_table():
 try:
     create_llm_settings_table()
     create_filter_settings_table()
+    create_request_classifications_table()
     _ensure_prompt_versions_table()
 except Exception as e:
     st.error(f"Error initializing settings tables: {e}")
@@ -250,7 +251,26 @@ if authenticated:
                     st.rerun()  # Refresh to show updated settings
                 except Exception as e:
                     st.error(f"Error saving settings: {str(e)}", icon=":material/error:")
-            
+        
+        st.divider()
+        st.subheader("Request Classifications")
+        st.caption("These categories are used for request classification and analytics. One per line. 'other' is always included.")
+        try:
+            current_cats = get_request_classifications()
+        except Exception:
+            current_cats = []
+        cats_text = "\n".join(current_cats)
+        with st.form("request_classifications_form"):
+            new_cats_text = st.text_area("Categories", value=cats_text, height=180, help="Enter one category per line")
+            submitted_cats = st.form_submit_button("Save Categories", icon=":material/save:", type="primary")
+        if submitted_cats:
+            new_cats = [ln.strip() for ln in (new_cats_text or '').splitlines() if ln.strip()]
+            try:
+                save_request_classifications(new_cats, updated_by="admin@viadrina.de")
+                st.success("Request classifications saved.")
+            except Exception as e:
+                st.error(f"Error saving categories: {e}")
+
     with tab3:
         st.header("Response & Content Filters")
         

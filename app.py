@@ -13,7 +13,8 @@ from utils import (
     get_connection, create_prompt_versions_table, create_log_table,
     initialize_default_prompt_if_empty, get_latest_prompt, render_sidebar,
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
-    supports_reasoning_effort, get_kb_entries, estimate_cost_usd
+    supports_reasoning_effort, get_kb_entries, estimate_cost_usd,
+    create_request_classifications_table, get_request_classifications
 )
 
 # -------------------------------------
@@ -64,27 +65,19 @@ AVATAR_USER = str(BASE_DIR / "assets/face_24dp_F5B908_FILL0_wght400_GRAD0_opsz24
 # --- Config: request classification options ---
 @lru_cache(maxsize=1)
 def get_allowed_request_classifications():
-    """Load allowed request_classification values from config/request_classification.txt.
-    One value per line; lines starting with # are comments. Ensures 'other' is present."""
-    default = [
-        'library_hours', 'book_search', 'research_help', 'account_info',
-        'facility_info', 'policy_question', 'technical_support', 'other'
-    ]
+    """Load allowed request_classification values from database; ensure 'other' exists."""
     try:
-        path = BASE_DIR / 'config' / 'request_classification.txt'
-        txt = path.read_text(encoding='utf-8')
-        raw = [ln.strip() for ln in txt.splitlines()]
-        vals = [ln for ln in raw if ln and not ln.startswith('#')]
+        cats = get_request_classifications()
         # de-duplicate while preserving order
         seen = set(); clean = []
-        for v in vals:
+        for v in cats:
             if v not in seen:
                 clean.append(v); seen.add(v)
         if 'other' not in clean:
             clean.append('other')
-        return clean or default
+        return clean or ['other']
     except Exception:
-        return default
+        return ['library_hours','book_search','research_help','account_info','facility_info','policy_question','technical_support','other']
 
 def load_css(file_path):
     with open(BASE_DIR / file_path) as f:
@@ -1077,7 +1070,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     for idx_link, lm in enumerate(group_links):
                         anchor = lm.group(1).strip()
                         url = lm.group(2).strip()
-                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-Za:z]{2,})$', anchor.strip(), re.I))
+                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-Za:z]{2,})$', anchor.strip(), re.I))
                         display_anchor = "" if looks_like_url else anchor
                         start_idx = sum(len(p) for p in rebuilt)
                         rebuilt.append(display_anchor)
@@ -1103,7 +1096,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 rebuilt.append(pre)
                 anchor = m.group(1).strip()
                 url = m.group(2).strip()
-                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                 display_anchor = "" if looks_like_url else anchor
                 start_idx = sum(len(p) for p in rebuilt)
                 rebuilt.append(display_anchor)
@@ -1341,6 +1334,7 @@ try:
         initialize_default_prompt_if_empty(DEFAULT_PROMPT)
         create_log_table()
         create_llm_settings_table()  # Initialize LLM settings table
+        create_request_classifications_table()  # Initialize request classifications
         #print("✅ Database initialization completed successfully.")
     else:
         # Show database configuration instructions when no database is available
