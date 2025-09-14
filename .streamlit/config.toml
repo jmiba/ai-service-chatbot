@@ -1,9 +1,9 @@
 [theme]
-primaryColor = "#004c97"          # e.g. TU-style blue
+primaryColor = "#243f82"          # e.g. Viadrina-style blue
 backgroundColor = "#ffffff"
 secondaryBackgroundColor = "#f0f2f6"
 textColor = "#000000"
-font = "sans serif" 
+font = "Arial, Helvetica, sans-serif" 
 
 [client]
 showSidebarNavigation = false

@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 import json
 from functools import lru_cache
+import uuid
 
 BASE_DIR = Path(__file__).parent.parent
 
@@ -439,6 +440,22 @@ def render_sidebar(authenticated=False, show_debug=False):
         debug_one: Debug state if show_debug=True, otherwise False
     """
     st.sidebar.page_link("app.py", label="Chat Assistant", icon=":material/chat_bubble:")
+    
+    # New chat
+    if st.sidebar.button(
+        "New chat",
+        type="secondary",
+        help="Start a fresh session",
+        icon=":material/add_comment:",
+        use_container_width=True,
+        key="sidebar_new_chat_button",
+    ):
+        st.session_state.messages = []
+        st.session_state.session_id = str(uuid.uuid4())
+        try:
+            st.switch_page("app.py")
+        except Exception:
+            st.rerun()
     
     # Debug checkbox right beneath chat assistant (only on main page when authenticated)
     debug_one = False

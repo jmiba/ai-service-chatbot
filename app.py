@@ -986,7 +986,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     rebuilt.append(pre)
                     anchor = m.group(1).strip()
                     url = m.group(2).strip()
-                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                     display_anchor = "" if looks_like_url else anchor
                     start_idx = sum(len(p) for p in rebuilt)
                     rebuilt.append(display_anchor)
@@ -1421,14 +1421,6 @@ with col1:
 with col2:
     st.markdown("# Viadrina Library Assistant")
 st.markdown("---")
-
-# New chat control (handle in-line to avoid rerun-in-callback warning)
-col_btn_left, col_btn_right = st.columns([6, 1])
-with col_btn_right:
-    if st.button("New chat", type="secondary", help="Start a fresh session (new session_id)"):
-        st.session_state.messages = []
-        st.session_state.session_id = str(uuid.uuid4())
-        # Streamlit will automatically rerun after the button click
 
 # replay chat history
 if "messages" not in st.session_state:
