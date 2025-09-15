@@ -134,7 +134,7 @@ def get_existing_markdown(conn, url):
             return result[0]
         return None
 
-def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, markdown_hash, recordset, page_type, deleted, vector_file_id=None):
+def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, markdown_hash, recordset, page_type, no_upload, vector_file_id=None):
     # NOTE: 'url' is assumed to be the normalized URL.
     markdown_hash = compute_sha256(markdown_content)
     with conn.cursor() as cur:
@@ -142,7 +142,7 @@ def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary,
             INSERT INTO documents (
                 url, title, safe_title, crawl_date, lang, summary, tags,
                 markdown_content, markdown_hash, recordset, vector_file_id, old_file_id,
-                updated_at, page_type, deleted
+                updated_at, page_type, no_upload
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s,
@@ -163,11 +163,11 @@ def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary,
                 old_file_id = documents.vector_file_id,
                 updated_at = NOW(),
                 page_type = EXCLUDED.page_type,
-                deleted = EXCLUDED.deleted
+                no_upload = documents.no_upload
         """, (
             url, title, safe_title, crawl_date, lang, summary, tags,
             markdown_content, markdown_hash, recordset, vector_file_id, None,
-            page_type, deleted
+            page_type, no_upload
         ))
         conn.commit()
 
@@ -731,7 +731,7 @@ def scrape(url,
 
                 if conn:
                     # IMPORTANT: we save by the normalized URL
-                    save_document_to_db(conn, norm_url, title, safe_title, crawl_date, lang, summary, tags, markdown, current_hash, recordset, page_type, deleted=False)
+                    save_document_to_db(conn, norm_url, title, safe_title, crawl_date, lang, summary, tags, markdown, current_hash, recordset, page_type, no_upload=False)
                     if log_callback:
                         log_callback(f"{'  ' * depth}💾 Saved {norm_url} to database with recordset '{recordset}'")
                     
