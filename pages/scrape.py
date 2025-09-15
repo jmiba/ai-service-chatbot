@@ -14,7 +14,12 @@ BASE_DIR = Path(__file__).parent.parent
 
 SCRAPE_SVG = (BASE_DIR / "assets" / "home_storage.svg").read_text()
 HEADERS = {"User-Agent": "Viadrina-Indexer/1.0 (+https://www.europa-uni.de/)"}
-
+admin_email = st.secrets["ADMIN_EMAIL"]
+HEADERS = {
+    "User-Agent": (
+        f"Mozilla/5.0 (compatible; Viadrina-Indexer/1.0; +mailto:{admin_email})"
+    )
+}
 
 # -----------------------------
 # Auth / sidebar
@@ -1047,7 +1052,7 @@ def main():
                         "Default": {
                             "depth": 2,
                             "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
-                            "include_lang_prefixes": ["/de/"]
+                            "include_lang_prefixes": []
                         },
                         "Blog": {
                             "depth": 2,
