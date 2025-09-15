@@ -1464,7 +1464,7 @@ def main():
                 filtered = [entry for entry in filtered if entry[10] is not None]  # vector_file_id is not None
         # Apply exclusion filter using no_upload (index 12)
         if selected_exclusion_status != "All":
-            if selected_exclusion_status == "Excluded (no_upload)":
+            if selected_exclusion_status == "Excluded":
                 filtered = [entry for entry in filtered if len(entry) > 12 and bool(entry[12])]
             else:  # Included
                 filtered = [entry for entry in filtered if len(entry) > 12 and not bool(entry[12])]
@@ -1495,10 +1495,11 @@ def main():
                 tags_str = " ".join(f"#{tag}" for tag in tags)
                 
                 # Create status indicators
-                vector_status = "✅ Vectorized" if vector_file_id and not no_upload else "⏳ Waiting for sync"
+                vector_status = "✅ Vectorized" if vector_file_id else "⏳ Waiting for sync"
                 vector_id_display = f"`{vector_file_id}`" if vector_file_id else "`None`"
+                excluded_badge = " · 🚫 Excluded" if no_upload else ""
                 
-                st.markdown(f"**{title or '(no title)'}** (ID {id}) - [{url}]({url}) - {vector_status} {vector_id_display} - **Page Type:** {page_type}")
+                st.markdown(f"**{title or '(no title)'}** (ID {id}) - [{url}]({url}) - {vector_status} {vector_id_display} - **Page Type:** {page_type}{excluded_badge}")
                 with st.expander(f"**{safe_title}.md** - {recordset} ({crawl_date}) (`{tags_str}`)\n\n**Summary:** {summary or '(no summary)'} (**Language:** {lang})"): 
                     st.info(markdown or "(no content)")
                 
