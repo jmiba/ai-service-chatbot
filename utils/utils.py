@@ -170,14 +170,14 @@ def get_kb_entries(limit=None):
     try:
         if limit is not None:
             cursor.execute("""
-                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type
+                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type, no_upload
                 FROM documents
                 ORDER BY updated_at DESC
                 LIMIT %s
             """, (limit,))
         else:
             cursor.execute("""
-                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type
+                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type, no_upload
                 FROM documents
                 ORDER BY updated_at DESC
             """)
@@ -476,10 +476,10 @@ def render_sidebar(authenticated=False, show_debug=False):
     """)
     if authenticated:
         st.sidebar.success("Authenticated as admin.")
-        st.sidebar.page_link("pages/admin.py", label="Settings", icon=":material/settings:")
         st.sidebar.page_link("pages/logs.py", label="Logs & Analytics", icon=":material/search_activity:")
         st.sidebar.page_link("pages/scrape.py", label="Content Indexing", icon=":material/home_storage:")
         st.sidebar.page_link("pages/vectorize.py", label="Vector Store", icon=":material/owl:")
+        st.sidebar.page_link("pages/admin.py", label="Settings", icon=":material/settings:")
         #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
         
         st.sidebar.button("Logout", on_click=lambda: st.session_state.update({"authenticated": False}), icon=":material/logout:")
@@ -487,7 +487,7 @@ def render_sidebar(authenticated=False, show_debug=False):
             st.caption("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
     else:
         with st.sidebar.container(key="sidebar_bottom"):
-            st.page_link("pages/admin.py", label="Admin Login", icon=":material/key:")
+            st.page_link("pages/logs.py", label="Admin Login", icon=":material/key:")
             st.caption("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
         
     

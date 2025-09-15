@@ -1010,20 +1010,20 @@ def main():
                 col_save, col_delete, col_spacer = st.columns([1, 1, 2])
                 
                 with col_save:
-                    if st.button(f"💾 Save Config {i+1}", key=f"save_config_{i}", type="primary"):
+                    if st.button(f"Save Config {i+1}", icon=":material/save:", key=f"save_config_{i}", type="primary"):
                         try:
                             save_url_configs(st.session_state.url_configs)
-                            st.success(f"✅ Configuration {i+1} saved!")
+                            st.success(f"Configuration {i+1} saved!", icon=":material/check_circle:")
                         except Exception as e:
                             st.error(f"Failed to save configuration {i+1}: {e}")
                             
                 with col_delete:
-                    if st.button(f"🗑️ Delete Config {i+1}", key=f"delete_config_{i}", type="secondary"):
+                    if st.button(f"Delete Config {i+1}", icon=":material/delete:", key=f"delete_config_{i}", type="secondary"):
                         # Remove this specific configuration
                         st.session_state.url_configs.pop(i)
                         try:
                             save_url_configs(st.session_state.url_configs)
-                            st.success(f"✅ Configuration {i+1} deleted and saved!")
+                            st.success(f"Configuration {i+1} deleted and saved!", icon=":material/check_circle:")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to save after deletion: {e}")
@@ -1444,6 +1444,13 @@ def main():
             index=0,
             help="Filter entries based on whether they have been vectorized and synced to the vector store"
         )
+        # New: filter by exclusion from vector store (no_upload)
+        selected_exclusion_status = st.selectbox(
+            "Filter by vector store exclusion",
+            options=["All", "Excluded", "Included"],
+            index=0,
+            help="Filter entries that are excluded from vectorization (no_upload flag)"
+        )
 
         filtered = entries
         if selected_recordset != "All":
@@ -1455,6 +1462,12 @@ def main():
                 filtered = [entry for entry in filtered if entry[10] is None]  # vector_file_id is None
             elif selected_vector_status == "Vectorized (synced)":
                 filtered = [entry for entry in filtered if entry[10] is not None]  # vector_file_id is not None
+        # Apply exclusion filter using no_upload (index 12)
+        if selected_exclusion_status != "All":
+            if selected_exclusion_status == "Excluded (no_upload)":
+                filtered = [entry for entry in filtered if len(entry) > 12 and bool(entry[12])]
+            else:  # Included
+                filtered = [entry for entry in filtered if len(entry) > 12 and not bool(entry[12])]
 
         try:
             if not filtered:
@@ -1468,38 +1481,60 @@ def main():
                 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Total Entries", total_entries)
+                    st.metric("Total Entries", total_entries, border=True)
                 with col2:
-                    st.metric("Filtered Results", filtered_entries)
+                    st.metric("Filtered Results", filtered_entries, border=True)
                 with col3:
-                    st.metric("⏳ Non-vectorized", non_vectorized_total)
+                    st.metric("Non-vectorized", non_vectorized_total, border=True)
                 with col4:
-                    st.metric("✅ Vectorized", vectorized_total)
+                    st.metric("Vectorized", vectorized_total, border=True)
                 
                 st.markdown("---")
             
-            for id, url, title, safe_title, crawl_date, lang, summary, tags, markdown, recordset, vector_file_id, page_type in filtered:
+            for id, url, title, safe_title, crawl_date, lang, summary, tags, markdown, recordset, vector_file_id, page_type, no_upload in filtered:
                 tags_str = " ".join(f"#{tag}" for tag in tags)
                 
                 # Create status indicators
-                vector_status = "✅ Vectorized" if vector_file_id else "⏳ Waiting for sync"
+                vector_status = "✅ Vectorized" if vector_file_id and not no_upload else "⏳ Waiting for sync"
                 vector_id_display = f"`{vector_file_id}`" if vector_file_id else "`None`"
                 
                 st.markdown(f"**{title or '(no title)'}** (ID {id}) - [{url}]({url}) - {vector_status} {vector_id_display} - **Page Type:** {page_type}")
                 with st.expander(f"**{safe_title}.md** - {recordset} ({crawl_date}) (`{tags_str}`)\n\n**Summary:** {summary or '(no summary)'} (**Language:** {lang})"): 
                     st.info(markdown or "(no content)")
-                    
-                if st.button(f"🗑️ Delete Record {id}", key=f"delete_button_{id}"):
-                    try:
-                        conn = get_connection()
-                        with conn.cursor() as cur:
-                            cur.execute("DELETE FROM documents WHERE id = %s", (id,))
-                            conn.commit()
-                        conn.close()
-                        st.success(f"Record {id} deleted successfully.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to delete record {id}: {e}")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    # Toggle include/exclude from vector store depending on current state
+                    toggle_label = (
+                        f"Include Record {id} in Vector Store" if no_upload else f"Exclude Record {id} from Vector Store"
+                    )
+                    toggle_icon = ":material/check_circle:" if no_upload else ":material/block:"
+                    if st.button(toggle_label, key=f"toggle_upload_{id}", icon=toggle_icon, type="secondary"):
+                        try:
+                            conn = get_connection()
+                            with conn.cursor() as cur:
+                                cur.execute("UPDATE documents SET no_upload = %s WHERE id = %s", (not no_upload, id))
+                                conn.commit()
+                            conn.close()
+                            if no_upload:
+                                st.success(f"Record {id} included in vector store.")
+                            else:
+                                st.success(f"Record {id} excluded from vector store.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to update vector store inclusion for record {id}: {e}")
+                with col2:    
+                    if st.button(f"Delete Record {id}", key=f"delete_button_{id}", icon=":material/delete:", type="secondary"):
+                        try:
+                            conn = get_connection()
+                            with conn.cursor() as cur:
+                                cur.execute("DELETE FROM documents WHERE id = %s", (id,))
+                                conn.commit()
+                            conn.close()
+                            st.success(f"Record {id} deleted successfully.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to delete record {id}: {e}")
 
         except Exception as e:
             st.error(f"Failed to load entries: {e}")
@@ -1520,7 +1555,7 @@ def main():
                     st.error(f"Failed to delete documents in recordset '{selected_recordset}': {e}")
         else:
             total_docs_count = len(filtered)
-            if st.button(f"🗑️ Delete All Records ({total_docs_count} docs)"):
+            if st.button(f"Delete All Records ({total_docs_count} docs)", type="secondary", icon=":material/delete_forever:"):
                 try:
                     delete_docs()
                     st.success("All documents have been deleted.")
