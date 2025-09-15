@@ -947,120 +947,130 @@ if authenticated:
     # Quick action: clean excluded now
     st.markdown("#### 🚫 Clean Excluded Now")
     st.caption("Deletes vector store files for documents marked as excluded (no_upload = TRUE) and clears DB references.")
-    if st.button("🚫 Clean Excluded Files", key="clean_excluded_now"):
-        with st.spinner("Cleaning excluded files..."):
-            try:
-                conn = get_connection(); cur = conn.cursor()
-                cur.execute("SELECT id, vector_file_id FROM documents WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL")
-                rows = cur.fetchall()
-                excluded_file_ids = {r[1] for r in rows if r[1]}
-                excluded_ids = [r[0] for r in rows]
-                cur.close()
+    # Count excluded docs that still have vector files
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM documents WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL")
+        (excluded_live_count,) = cur.fetchone()
+        cur.close(); conn.close()
+    except Exception:
+        excluded_live_count = 0
 
-                if excluded_file_ids:
-                    delete_file_ids(VECTOR_STORE_ID, excluded_file_ids, label="excluded")
-                
-                if excluded_ids:
-                    cur2 = conn.cursor()
-                    cur2.execute(
-                        """
-                        UPDATE documents
-                        SET vector_file_id = NULL,
-                            old_file_id = NULL,
-                            updated_at = NOW()
-                        WHERE id = ANY(%s)
-                        """,
-                        (excluded_ids,)
-                    )
-                    conn.commit(); cur2.close()
-                conn.close()
-                
-                # Clear cache and refresh page
-                _vs_files_cache["data"] = None
-                st.success("✅ Cleaned excluded files and cleared references.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Failed to clean excluded files: {e}")
+    if excluded_live_count > 0:
+        if st.button(f"Clean Excluded Files ({excluded_live_count})", key="clean_excluded_now", icon=":material/mop:"):
+            with st.spinner("Cleaning excluded files..."):
+                try:
+                    conn = get_connection(); cur = conn.cursor()
+                    cur.execute("SELECT id, vector_file_id FROM documents WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL")
+                    rows = cur.fetchall()
+                    excluded_file_ids = {r[1] for r in rows if r[1]}
+                    excluded_ids = [r[0] for r in rows]
+                    cur.close()
 
-        # Show file management options only if there are files to manage
-        if vs_file_count > 0:
-            # Recompute combined pending cleanup count for the info summary
-            try:
-                vs_ids = {f.id for f in vs_files}
-                conn = get_connection(); cur = conn.cursor()
-                cur.execute("SELECT vector_file_id FROM documents WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL")
-                excluded_live_ids = {row[0] for row in cur.fetchall()}
-                cur.close(); conn.close()
-                combined_pending_cleanup_count = len(((pending_replacement_ids | excluded_live_ids) & vs_ids))
-                live_display_count = len(current_ids - excluded_live_ids)
-            except Exception:
-                combined_pending_cleanup_count = len(pending_replacement_ids)
-                live_display_count = len(current_ids)
-            
-            st.info(f"📁 **Vector Store contains {vs_file_count} files** ({live_display_count} live, {combined_pending_cleanup_count} pending cleanup, {len(true_orphan_ids)} orphans)")
-            
-            # Cleanup options - organized by priority and safety
-            st.markdown("#### 🧹 Vector Store Cleanup")
-            st.caption("Clean up unnecessary files to save storage space and keep the vector store organized.")
-            
-            # Row 1: Safe cleanup operations
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if len(true_orphan_ids) > 0:
-                    st.markdown("**🗑️ Remove Orphaned Files**")
-                    st.write(f"🔍 Found {len(true_orphan_ids)} files in vector store that no longer exist in the database")
-                    st.caption("Safe to delete - these files are no longer referenced by any documents")
-                    if st.button("🗑️ Delete Orphans", key="delete_orphans"):
-                        with st.spinner("Deleting orphans..."):
-                            try:
-                                delete_file_ids(VECTOR_STORE_ID, true_orphan_ids, label="orphan")
-                                st.success("✅ Deleted all orphaned files from the vector store.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Failed to delete orphans: {e}")
-                else:
-                    st.markdown("**🗑️ Remove Orphaned Files**")
-                    st.write("✅ No orphaned files found")
-                    st.caption("All vector store files are properly referenced in the database")
-            
-            with col2:
-                if len(pending_replacement_ids) > 0:
-                    st.markdown("**♻️ Clean Up Old Versions**")
-                    st.write(f"🔄 Found {len(pending_replacement_ids)} old file versions after content updates")
-                    st.caption("Safe to delete - these are old versions that have been replaced with updated content")
-                    if st.button("♻️ Clean Up Old Versions", key="finalize_replacements"):
-                        with st.spinner("Cleaning up old versions..."):
-                            try:
-                                delete_file_ids(VECTOR_STORE_ID, pending_replacement_ids, label="old version")
-                                clear_old_file_ids(pending_replacement_ids)
-                                st.success("✅ Cleaned up old file versions and updated database references.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Failed to clean up old versions: {e}")
-                else:
-                    st.markdown("**♻️ Clean Up Old Versions**")
-                    st.write("✅ No old versions to clean up")
-                    st.caption("All file replacements have been properly finalized")
-            
-            # Dangerous operation separated and clearly marked
-            st.markdown("---")
-            st.markdown("#### ⚠️ Nuclear Option")
-            st.error("**⚠️ DANGER**: This will permanently delete ALL files in the vector store!")
-            st.caption("Only use this if you want to completely rebuild the vector store from scratch.")
-            
-            col_danger1, col_danger2, col_danger3 = st.columns([1, 1, 2])
-            with col_danger2:
-                if st.button("� Delete Everything", 
-                            type="secondary", 
-                            help="⚠️ This will permanently delete all files in the vector store"):
-                    with st.spinner("Deleting all files..."):
+                    if excluded_file_ids:
+                        delete_file_ids(VECTOR_STORE_ID, excluded_file_ids, label="excluded")
+                    
+                    if excluded_ids:
+                        cur2 = conn.cursor()
+                        cur2.execute(
+                            """
+                            UPDATE documents
+                            SET vector_file_id = NULL,
+                                old_file_id = NULL,
+                                updated_at = NOW()
+                            WHERE id = ANY(%s)
+                            """,
+                            (excluded_ids,)
+                        )
+                        conn.commit(); cur2.close()
+                    conn.close()
+                    
+                    # Clear cache and refresh page
+                    _vs_files_cache["data"] = None
+                    st.success("✅ Cleaned excluded files and cleared references.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to clean excluded files: {e}")
+    else:
+        st.caption("No excluded vector files to clean.")
+
+    # Show file management options only if there are files to manage
+    if vs_file_count > 0:
+        # Recompute combined pending cleanup count for the info summary
+        try:
+            vs_ids = {f.id for f in vs_files}
+            conn = get_connection(); cur = conn.cursor()
+            cur.execute("SELECT vector_file_id FROM documents WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL")
+            excluded_live_ids = {row[0] for row in cur.fetchall()}
+            cur.close(); conn.close()
+            combined_pending_cleanup_count = len(((pending_replacement_ids | excluded_live_ids) & vs_ids))
+            live_display_count = len(current_ids - excluded_live_ids)
+        except Exception:
+            combined_pending_cleanup_count = len(pending_replacement_ids)
+            live_display_count = len(current_ids)
+        
+        st.info(f"📁 **Vector Store contains {vs_file_count} files** ({live_display_count} live, {combined_pending_cleanup_count} pending cleanup, {len(true_orphan_ids)} orphans)")
+        
+        # Cleanup options - organized by priority and safety
+        st.markdown("#### 🧹 Vector Store Cleanup")
+        st.caption("Clean up unnecessary files to save storage space and keep the vector store organized.")
+        
+        # Row 1: Safe cleanup operations
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if len(true_orphan_ids) > 0:
+                st.markdown("**🗑️ Remove Orphaned Files**")
+                st.write(f"🔍 Found {len(true_orphan_ids)} files in vector store that no longer exist in the database")
+                st.caption("Safe to delete - these files are no longer referenced by any documents")
+                if st.button("🗑️ Delete Orphans", key="delete_orphans"):
+                    with st.spinner("Deleting orphans..."):
                         try:
-                            delete_all_files_in_vector_store(VECTOR_STORE_ID)
-                            st.success("✅ All files deleted from the vector store.")
+                            delete_file_ids(VECTOR_STORE_ID, true_orphan_ids, label="orphan")
+                            st.success("✅ Deleted all orphaned files from the vector store.")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"❌ Failed to delete files: {e}")
+                            st.error(f"❌ Failed to delete orphans: {e}")
+            else:
+                st.markdown("**🗑️ Remove Orphaned Files**")
+                st.write("✅ No orphaned files found")
+                st.caption("All vector store files are properly referenced in the database")
+        
+        with col2:
+            if len(pending_replacement_ids) > 0:
+                st.markdown("**♻️ Clean Up Old Versions**")
+                st.write(f"🔄 Found {len(pending_replacement_ids)} old file versions after content updates")
+                st.caption("Safe to delete - these are old versions that have been replaced with updated content")
+                if st.button("♻️ Clean Up Old Versions", key="finalize_replacements"):
+                    with st.spinner("Cleaning up old versions..."):
+                        try:
+                            delete_file_ids(VECTOR_STORE_ID, pending_replacement_ids, label="old version")
+                            clear_old_file_ids(pending_replacement_ids)
+                            st.success("✅ Cleaned up old file versions and updated database references.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Failed to clean up old versions: {e}")
+            else:
+                st.markdown("**♻️ Clean Up Old Versions**")
+                st.write("✅ No old versions to clean up")
+                st.caption("All file replacements have been properly finalized")
+        
+        # Dangerous operation separated and clearly marked
+        st.markdown("---")
+        st.markdown("#### ⚠️ Nuclear Option")
+        st.error("**⚠️ DANGER**: This will permanently delete ALL files in the vector store!")
+        st.caption("Only use this if you want to completely rebuild the vector store from scratch.")
+        
+        col_danger1, col_danger2, col_danger3 = st.columns([1, 1, 2])
+        with col_danger2:
+            if st.button("🗑️ Delete Everything", type="secondary", help="This will permanently delete all files in the vector store"):
+                with st.spinner("Deleting all files..."):
+                    try:
+                        delete_all_files_in_vector_store(VECTOR_STORE_ID)
+                        st.success("✅ All files deleted from the vector store.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Failed to delete files: {e}")
     else:
         st.info("📭 Vector store is empty - no files to manage.")
 

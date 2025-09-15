@@ -1381,7 +1381,7 @@ def main():
                         if i < len(llm_analysis_results):
                             st.divider()        # Improved frontier display
             if frontier_seen:
-                with st.expander(f"📋 View Processed URLs ({len(frontier_seen)} total)", expanded=False):
+                with st.expander(f"View Processed URLs ({len(frontier_seen)} total)", expanded=False, icon=":material/visibility:"):
                     # Group URLs by domain for better readability
                     from collections import defaultdict
                     url_groups = defaultdict(list)
@@ -1416,15 +1416,35 @@ def main():
         try:
             conn = get_connection()
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM documents WHERE vector_file_id IS NULL")
-                pending_vector_sync = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    SELECT 
+                        COUNT(*) FILTER (WHERE vector_file_id IS NULL AND (no_upload IS FALSE OR no_upload IS NULL)) AS pending_sync,
+                        COUNT(*) FILTER (WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL) AS excluded_needing_cleanup
+                    FROM documents
+                    """
+                )
+                row = cur.fetchone()
+                pending_vector_sync = row[0]
+                excluded_needing_cleanup = row[1]
             conn.close()
                 
-            if pending_vector_sync > 0:
-                st.warning(f"⏳ **{pending_vector_sync} pages** are waiting for vector store synchronization. "
-                        f"These pages have been processed by LLM but haven't been vectorized yet.")
+            if pending_vector_sync > 0 and excluded_needing_cleanup > 0:
+                st.warning(
+                    f"**{pending_vector_sync} page(s)** are waiting for vector store synchronization, "
+                    f"and **{excluded_needing_cleanup} excluded page(s)** still have vector files that need cleanup.", icon=":material/warning:"
+                )
+            elif pending_vector_sync > 0:
+                st.warning(
+                    f"**{pending_vector_sync} page(s)** are waiting for vector store synchronization. "
+                    f"These pages have been processed by LLM but haven't been vectorized yet.", icon=":material/warning:"
+                )
+            elif excluded_needing_cleanup > 0:
+                st.info(
+                    f"**{excluded_needing_cleanup} excluded page(s)** still have vector files and need cleanup (run Vectorize).", icon=":material/info:"
+                )
             else:
-                st.info("✅ All pages in the database are synchronized with the vector store.")
+                st.info("All pages are synchronized and no excluded files need cleanup.", icon=":material/check_circle:")
         except Exception as e:
             st.error(f"Could not check vector sync status: {e}")
 
@@ -1544,7 +1564,7 @@ def main():
         st.markdown("### Delete All Records")
         if selected_recordset != "All":
             recordset_docs_count = len([entry for entry in filtered if entry[9] == selected_recordset])
-            if st.button(f"🗑️ Delete All Records in '{selected_recordset}' ({recordset_docs_count} docs)"):
+            if st.button(f"Delete All Records in '{selected_recordset}' ({recordset_docs_count} docs)", icon =":material/delete_forever:", type="secondary"):
                 try:
                     conn = get_connection()
                     with conn.cursor() as cur:
