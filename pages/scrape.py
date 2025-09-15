@@ -13,6 +13,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent
 
 SCRAPE_SVG = (BASE_DIR / "assets" / "home_storage.svg").read_text()
+HEADERS = {"User-Agent": "Viadrina-Indexer/1.0 (+https://www.europa-uni.de/)"}
 
 
 # -----------------------------
@@ -523,23 +524,27 @@ def scrape(url,
     visited_norm.add(norm_url)
     frontier_seen.append(norm_url)
 
-    # HEAD pre-check (best-effort)
+    # HEAD pre-check (advisory)
     try:
-        head = requests.head(norm_url, allow_redirects=True, timeout=10)
+        head = requests.head(norm_url, headers=HEADERS, allow_redirects=True, timeout=10)
         ctype = head.headers.get("Content-Type", "")
-        # Only skip when HEAD explicitly reports a non-HTML content type.
-        # If the header is missing/ambiguous, continue to GET instead of skipping prematurely.
-        if ctype and ("text/html" not in ctype and "application/xhtml+xml" not in ctype):
+        # Only trust HEAD to skip when URL clearly looks like a file (by extension)
+        looks_like_file = re.search(
+            r'\.(pdf|docx?|xlsx?|pptx?|zip|rar|tar\.gz|7z|jpg|jpeg|png|gif|svg|mp4|webm)$',
+            urlparse(norm_url).path,
+            re.I
+        )
+        if looks_like_file and ctype and ("text/html" not in ctype and "application/xhtml+xml" not in ctype):
             if log_callback:
-                log_callback(f"{'  ' * depth}🚫 Skipping non-HTML (HEAD): {norm_url} ({ctype})")
+                log_callback(f"{'  ' * depth}🚫 Skipping non-HTML (HEAD suggests file): {norm_url} ({ctype})")
             return
     except requests.RequestException:
-        # No HEAD? Proceed to GET.
+        # No HEAD? Just proceed.
         pass
 
     # GET the page
     try:
-        response = requests.get(norm_url, timeout=15)
+        response = requests.get(norm_url, headers=HEADERS, timeout=15)
         
         # Check HTTP status code - skip 404s and other error pages
         if response.status_code == 404:

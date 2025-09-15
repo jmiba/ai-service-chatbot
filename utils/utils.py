@@ -484,11 +484,11 @@ def render_sidebar(authenticated=False, show_debug=False):
         
         st.sidebar.button("Logout", on_click=lambda: st.session_state.update({"authenticated": False}), icon=":material/logout:")
         with st.sidebar.container(key="sidebar_bottom"):
-            st.write("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
+            st.caption("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
     else:
         with st.sidebar.container(key="sidebar_bottom"):
             st.page_link("pages/admin.py", label="Admin Login", icon=":material/key:")
-            st.write("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
+            st.caption("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
         
     
     return debug_one
