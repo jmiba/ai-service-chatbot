@@ -147,38 +147,6 @@ def create_knowledge_base_table():
             no_upload BOOLEAN DEFAULT FALSE
         );
     """)
-
-    # Migration: rename old column 'deleted' -> 'no_upload' if present
-    cursor.execute(
-        """
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'documents' AND column_name = 'deleted'
-            ) AND NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'documents' AND column_name = 'no_upload'
-            ) THEN
-                ALTER TABLE documents RENAME COLUMN deleted TO no_upload;
-            END IF;
-        EXCEPTION WHEN undefined_table THEN
-            NULL;
-        END $$;
-        """
-    )
-
-    # Ensure no_upload column exists (for fresh or partially migrated DBs)
-    cursor.execute(
-        """
-        DO $$
-        BEGIN
-            BEGIN
-                ALTER TABLE documents ADD COLUMN IF NOT EXISTS no_upload BOOLEAN DEFAULT FALSE;
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-        END $$;
-        """
-    )
     
     # Step 2: Create a non-unique index on recordset for performance (optional but recommended)
     cursor.execute("""
