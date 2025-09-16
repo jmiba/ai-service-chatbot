@@ -10,9 +10,13 @@
   border-radius: 50% !important;
 }
 
-/* Exempt current toggle markup (uses four corner classes on the track) */
-div[class*="st-gd"][class*="st-ge"][class*="st-gf"][class*="st-gg"],
-div[class*="st-gd"][class*="st-ge"][class*="st-gf"][class*="st-gg"] > * {
+/* Keep rounded corners for Streamlit checkbox (st.checkbox) */
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child,
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child > div,
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child::before,
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child::after,
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child > div::before,
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child > div::after {
   border-radius: 9999px !important;
 }
 
