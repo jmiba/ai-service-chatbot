@@ -132,7 +132,7 @@ if authenticated:
     
     with tab1:
         # Admin-only content
-        filter_code = st.selectbox("Filter by error code", options=["All", "E00", "E01", "E02"])
+        filter_code = st.selectbox("Filter by code", options=["All", "E00", "E01", "E02", "E03"])
 
         # New: Filter by session_id and group view
         session_rows = get_session_overview(limit=1000)

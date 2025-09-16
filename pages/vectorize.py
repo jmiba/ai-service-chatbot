@@ -1,5 +1,5 @@
 import os
-from utils import get_connection, admin_authentication, render_sidebar, compute_sha256
+from utils import get_connection, admin_authentication, render_sidebar, get_document_status_counts
 import datetime
 from openai import OpenAI
 from io import BytesIO
@@ -7,12 +7,10 @@ import streamlit as st
 import time
 from pathlib import Path
   
-BASE_DIR = Path(__file__).parent.parent
-
-VECTORIZE_SVG = (BASE_DIR / "assets" / "owl.svg").read_text()
-
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 VECTOR_STORE_ID = st.secrets["VECTOR_STORE_ID"]
+BASE_DIR = Path(__file__).parent.parent
+VECTORIZE_SVG = (BASE_DIR / "assets" / "owl.svg").read_text()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -618,30 +616,14 @@ if authenticated:
     
     # --- Enhanced Status Dashboard ---
     try:
-        # Get comprehensive counts with single optimized query
-        conn = get_connection()
-        cur = conn.cursor()
-        
-        # Single query to get all counts at once (much faster than 5 separate queries)
-        cur.execute("""
-            SELECT 
-                COUNT(*) as total_docs,
-                COUNT(CASE WHEN vector_file_id IS NOT NULL THEN 1 END) as vectorized_docs,
-                COUNT(CASE WHEN vector_file_id IS NULL AND (no_upload IS FALSE OR no_upload IS NULL) THEN 1 END) as non_vectorized_docs,
-                COUNT(CASE WHEN vector_file_id IS NULL AND old_file_id IS NULL AND (no_upload IS FALSE OR no_upload IS NULL) THEN 1 END) as new_unsynced_count,
-                COUNT(CASE 
-                        WHEN (vector_file_id IS NULL AND old_file_id IS NOT NULL AND (no_upload IS FALSE OR no_upload IS NULL)) 
-                             OR (no_upload IS TRUE AND vector_file_id IS NOT NULL)
-                        THEN 1 END) as pending_resync_count,
-                COUNT(CASE WHEN no_upload IS TRUE THEN 1 END) as excluded_docs
-            FROM documents
-        """)
-        
-        result = cur.fetchone()
-        total_docs, vectorized_docs, non_vectorized_docs, new_unsynced_count, pending_resync_count, excluded_docs = result
-        
-        cur.close()
-        conn.close()
+        # Get comprehensive counts with single optimized query (now centralized in utils)
+        counts = get_document_status_counts()
+        total_docs = counts["total_docs"]
+        vectorized_docs = counts["vectorized_docs"]
+        non_vectorized_docs = counts["non_vectorized_docs"]
+        new_unsynced_count = counts["new_unsynced_count"]
+        pending_resync_count = counts["pending_resync_count"]
+        excluded_docs = counts["excluded_docs"]
         
         # Display basic metrics dashboard (fast loading)
         st.header("Document Status")
@@ -833,31 +815,19 @@ if authenticated:
                 # Display the captured output in terminal style
                 display_sync_log(log_container, output_buffer)
                 
-                status_text.info("🔄 **Finalizing synchronization...**")
+                status_text.info("**Finalizing synchronization...**", icon=":material/clock_loader_90:")
                 progress_bar.progress(80)
                 
                 # Get updated counts after sync
-                conn = get_connection()
-                cur = conn.cursor()
-                cur.execute("""
-                    SELECT 
-                        COUNT(CASE WHEN vector_file_id IS NULL AND old_file_id IS NULL AND (no_upload IS FALSE OR no_upload IS NULL) THEN 1 END) as new_unsynced_count,
-                        COUNT(CASE 
-                                WHEN (vector_file_id IS NULL AND old_file_id IS NOT NULL AND (no_upload IS FALSE OR no_upload IS NULL)) 
-                                     OR (no_upload IS TRUE AND vector_file_id IS NOT NULL)
-                                THEN 1 END) as pending_resync_count,
-                        COUNT(CASE WHEN vector_file_id IS NOT NULL THEN 1 END) as vectorized_docs
-                    FROM documents
-                """)
-                updated_counts = cur.fetchone()
-                updated_new_count, updated_resync_count, updated_vectorized = updated_counts
-                cur.close()
-                conn.close()
+                counts = get_document_status_counts()
+                updated_new_count = counts["new_unsynced_count"]
+                updated_resync_count = counts["pending_resync_count"]
+                updated_vectorized = counts["vectorized_docs"]
                 
                 progress_bar.progress(100)
                 
                 # Success message with detailed results
-                st.success("✅ **Synchronization completed successfully!**")
+                st.success("**Synchronization completed successfully!**", icon=":material/check_circle:")
                 
                 # Show sync summary in an info box
                 with st.container():

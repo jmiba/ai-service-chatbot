@@ -1055,3 +1055,23 @@ def save_request_classifications(categories, updated_by='admin'):
         )
     conn.commit(); cur.close(); conn.close()
 
+def get_document_status_counts() -> dict[str, int]:
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            COUNT(*) AS total_docs,
+            COUNT(*) FILTER (WHERE vector_file_id IS NOT NULL) AS vectorized_docs,
+            COUNT(*) FILTER (WHERE vector_file_id IS NULL AND (no_upload IS FALSE OR no_upload IS NULL)) AS non_vectorized_docs,
+            COUNT(*) FILTER (WHERE vector_file_id IS NULL AND old_file_id IS NULL AND (no_upload IS FALSE OR no_upload IS NULL)) AS new_unsynced_count,
+            COUNT(*) FILTER (
+                WHERE (vector_file_id IS NULL AND old_file_id IS NOT NULL AND (no_upload IS FALSE OR no_upload IS NULL))
+                   OR (no_upload IS TRUE AND vector_file_id IS NOT NULL)
+            ) AS pending_resync_count,
+            COUNT(*) FILTER (WHERE no_upload IS TRUE) AS excluded_docs
+        FROM documents
+    """)
+    row = cur.fetchone()
+    cur.close(); conn.close()
+    keys = ("total_docs","vectorized_docs","non_vectorized_docs","new_unsynced_count","pending_resync_count","excluded_docs")
+    return dict(zip(keys, row))

@@ -33,6 +33,7 @@ from .utils import (
     create_request_classifications_table,
     get_request_classifications,
     save_request_classifications,
+    get_document_status_counts,
 )
 
 # Now you can import from utils directly, e.g.:

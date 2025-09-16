@@ -7,7 +7,7 @@ from markdownify import markdownify as md
 import streamlit as st
 import json
 from openai import OpenAI
-from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs
+from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs, get_document_status_counts
 from pathlib import Path
   
 BASE_DIR = Path(__file__).parent.parent
@@ -1418,40 +1418,25 @@ def main():
         st.markdown("*View, search, and manage your indexed content*")
 
         # Add summary of pages waiting for vector sync
-        try:
-            conn = get_connection()
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT 
-                        COUNT(*) FILTER (WHERE vector_file_id IS NULL AND (no_upload IS FALSE OR no_upload IS NULL)) AS pending_sync,
-                        COUNT(*) FILTER (WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL) AS excluded_needing_cleanup
-                    FROM documents
-                    """
-                )
-                row = cur.fetchone()
-                pending_vector_sync = row[0]
-                excluded_needing_cleanup = row[1]
-            conn.close()
-                
-            if pending_vector_sync > 0 and excluded_needing_cleanup > 0:
-                st.warning(
-                    f"**{pending_vector_sync} page(s)** are waiting for vector store synchronization, "
-                    f"and **{excluded_needing_cleanup} excluded page(s)** still have vector files that need cleanup.", icon=":material/warning:"
-                )
-            elif pending_vector_sync > 0:
-                st.warning(
-                    f"**{pending_vector_sync} page(s)** are waiting for vector store synchronization. "
-                    f"These pages have been processed by LLM but haven't been vectorized yet.", icon=":material/warning:"
-                )
-            elif excluded_needing_cleanup > 0:
-                st.info(
-                    f"**{excluded_needing_cleanup} excluded page(s)** still have vector files and need cleanup (run Vectorize).", icon=":material/info:"
-                )
-            else:
-                st.info("All pages are synchronized and no excluded files need cleanup.", icon=":material/check_circle:")
-        except Exception as e:
-            st.error(f"Could not check vector sync status: {e}")
+        pending_vector_sync = len([entry for entry in entries if entry[10] is None and entry[12] is not True])
+        excluded_needing_cleanup = len([entry for entry in entries if entry[10] is not None and entry[12] is True])
+        
+        if pending_vector_sync > 0 and excluded_needing_cleanup > 0:
+            st.warning(
+                f"**{pending_vector_sync} page(s)** are waiting for vector store synchronization, "
+                f"and **{excluded_needing_cleanup} excluded page(s)** still have vector files that need cleanup.", icon=":material/warning:"
+            )
+        elif pending_vector_sync > 0:
+            st.warning(
+                f"**{pending_vector_sync} page(s)** are waiting for vector store synchronization. "
+                f"These pages have been processed by LLM but haven't been vectorized yet.", icon=":material/warning:"
+            )
+        elif excluded_needing_cleanup > 0:
+            st.warning(
+                f"**{excluded_needing_cleanup} excluded page(s)** still have vector files and need cleanup (run Vectorize).", icon=":material/warning:"
+            )
+        else:
+            st.info("All pages are synchronized and no excluded files need cleanup.", icon=":material/check_circle:")
 
         selected_recordset = st.selectbox(
             "Filter by recordset",
