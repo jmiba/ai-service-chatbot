@@ -1429,8 +1429,8 @@ col1, col2 = st.columns([3, 3])
 with col1:
     st.image(BASE_DIR / "assets/viadrina-ub-logo.png", width=300)
 with col2:
-    st.markdown("# Viadrina Library Assistant")
-st.markdown("---")
+    st.markdown('<div id="chatbot-title"><h1>Viadrina Library Assistant</h1></div>', unsafe_allow_html=True)
+st.markdown('<div id="special-hr"><hr></div>', unsafe_allow_html=True)
 
 # replay chat history
 if "messages" not in st.session_state:

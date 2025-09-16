@@ -111,6 +111,11 @@ def get_session_overview(limit=500):
     conn.close()
     return rows
 
+def load_css(file_path):
+    with open(BASE_DIR / file_path) as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+load_css("css/styles.css")
 if authenticated:
     #st.title("📊 Logging & Analytics")
     st.markdown(
@@ -213,8 +218,7 @@ if authenticated:
         else:
             # Flat list (existing behavior)
             for entry in logs:
-                st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}, **Topic:** `{entry.get('request_classification') or '(unclassified)'}`", unsafe_allow_html=False)
-                with st.expander("View Details", expanded=False):
+                with st.expander(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}, **Topic:** `{entry.get('request_classification') or '(unclassified)'}`", expanded=False):
                     st.info(f"{entry['user_input']}", icon=":material/face:")
                     if entry.get('error_code') == "E03":
                         st.error(f"{entry['assistant_response']}", icon=":material/robot_2:")
@@ -238,7 +242,6 @@ if authenticated:
                             file_name = citation.get("file_name", "Unknown")
                             markdown_list += f"* [{title}]({url}) (Vector Store File: {file_name}, ID: `{file_id}`)\n"
                         st.success(markdown_list)
-                st.markdown("---")
 
         if st.button("Delete All Logs", icon=":material/delete_forever:"):
             delete_logs()

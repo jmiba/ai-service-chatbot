@@ -11,9 +11,6 @@ BASE_DIR = Path(__file__).parent.parent
 
 VECTORIZE_SVG = (BASE_DIR / "assets" / "owl.svg").read_text()
 
-
-
-
 OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 VECTOR_STORE_ID = st.secrets["VECTOR_STORE_ID"]
 
@@ -558,6 +555,12 @@ def read_last_export_timestamp():
 def write_last_export_timestamp(ts):
     with open("last_export.txt", "w") as f:
         f.write(ts.isoformat())
+        
+def load_css(file_path):
+    with open(BASE_DIR / file_path) as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+load_css("css/styles.css")
 
 if authenticated:
     # Admin-only content
@@ -641,38 +644,39 @@ if authenticated:
         conn.close()
         
         # Display basic metrics dashboard (fast loading)
-        st.markdown("### 📊 Document Status")
+        st.header("Document Status")
         
         col1, col2, col3, col4, col5, col6 = st.columns(6)
         with col1:
-            st.metric("📄 Total Documents", total_docs)
+            st.metric("Total Documents", total_docs, border=True)
         with col2:
-            st.metric("✅ Vectorized", vectorized_docs)
+            st.metric("Vectorized", vectorized_docs, border=True)
         with col3:
-            st.metric("⏳ Non-vectorized", non_vectorized_docs)
+            st.metric("Excluded", excluded_docs, border=True)
         with col4:
-            st.metric("📝 New (unsynced)", new_unsynced_count)
+            st.metric("Non-vectorized", non_vectorized_docs, border=True)
         with col5:
-            st.metric("🔄 Need re-sync", pending_resync_count)
+            st.metric("New (unsynced)", new_unsynced_count, border=True)
         with col6:
-            st.metric("🚫 Excluded", excluded_docs)
+            st.metric("Need re-sync", pending_resync_count, border=True)
+        
         
         # Status messages
         if new_unsynced_count > 0:
-            st.warning(f"🟡 **{new_unsynced_count} newly scraped documents** need to be added to the vector store.")
+            st.warning(f"**{new_unsynced_count} newly scraped documents** need to be added to the vector store.", icon=":material/warning:")
         
         if pending_resync_count > 0:
-            st.info(f"🔄 **{pending_resync_count} documents** need re-sync (content changes or exclusion cleanup).")
+            st.info(f"**{pending_resync_count} documents** need re-sync (content changes or exclusion cleanup).", icon=":material/cached:")
             
         if new_unsynced_count == 0 and pending_resync_count == 0:
             try:
                 last_vs_sync = read_last_vector_sync_timestamp()
                 if last_vs_sync:
-                    st.success(f"✅ **All documents are synchronized!** Last sync: {last_vs_sync.isoformat(timespec='seconds')}")
+                    st.success(f"**All documents are synchronized!** Last sync: {last_vs_sync.isoformat(timespec='seconds')}", icon=":material/check_circle:")
                 else:
-                    st.success("✅ **All documents are synchronized!**")
+                    st.success("**All documents are synchronized!**", icon=":material/check_circle:")
             except:
-                st.success("✅ **All documents are synchronized!**")
+                st.success("**All documents are synchronized!**", icon=":material/check_circle:")
         
         st.markdown("---")
         
@@ -683,7 +687,7 @@ if authenticated:
             show_vector_mgmt = st.checkbox("🔧 Show vector store management", help="Load detailed vector store statistics (uses caching for better performance)")
         
         with vector_mgmt_col2:
-            if st.button("🔄 Refresh Cache", help="Force refresh vector store data cache"):
+            if st.button("Refresh Cache", help="Force refresh vector store data cache", icon=":material/refresh:"):
                 _vs_files_cache["data"] = None  # Clear cache
                 st.success("Cache cleared!")
                 st.rerun()
@@ -733,7 +737,7 @@ if authenticated:
                         st.info(f"♻️ **{len(combined_pending_cleanup_ids)} files** pending cleanup (old versions or excluded docs).")
                         
                 except Exception as e:
-                    st.error(f"❌ Failed to load vector store details: {e}")
+                    st.error(f"Failed to load vector store details: {e}", icon=":material/error:")
                     vs_file_count = 0
                     current_ids = set()
                     pending_replacement_ids = set()
@@ -745,23 +749,8 @@ if authenticated:
             pending_replacement_ids = set()
             true_orphan_ids = set()
 
-        # # Display metrics dashboard
-        # st.markdown("### 📊 Synchronization Status")
-        
-        # col1, col2, col3, col4, col5 = st.columns(5)
-        # with col1:
-        #     st.metric("📄 Total Documents", total_docs)
-        # with col2:
-        #     st.metric("✅ Vectorized", vectorized_docs)
-        # with col3:
-        #     st.metric("⏳ Non-vectorized", non_vectorized_docs)
-        # with col4:
-        #     st.metric("📝 New (unsynced)", new_unsynced_count)
-        # with col5:
-        #     st.metric("🔄 Need re-sync", pending_resync_count)
-
     except Exception as e:
-        st.error(f"❌ Failed to compute sync status: {e}")
+        st.error(f"Failed to compute sync status: {e}", icon=":material/error:")
         # Set defaults on error
         new_unsynced_count = 0
         pending_resync_count = 0
@@ -775,30 +764,30 @@ if authenticated:
         
         # Status messages based on counts
         if new_unsynced_count > 0:
-            st.warning(f"🟡 **{new_unsynced_count} newly scraped documents** need to be added to the vector store.")
+            st.warning(f"**{new_unsynced_count} newly scraped documents** need to be added to the vector store.", icon=":material/warning:")
         
         if pending_resync_count > 0:
-            st.info(f"🔄 **{pending_resync_count} documents** need re-sync (content changes or exclusion cleanup).")
+            st.info(f"**{pending_resync_count} documents** need re-sync (content changes or exclusion cleanup).", icon=":material/cached:")
             
         if len(true_orphan_ids) > 0:
-            st.warning(f"🧹 **{len(true_orphan_ids)} orphaned files** in vector store are no longer in the database.")
+            st.warning(f"🧹 **{len(true_orphan_ids)} orphaned files** in vector store are no longer in the database.", icon=":material/warning:")
             
         if len(pending_replacement_ids) > 0:
-            st.info(f"♻️ **{len(pending_replacement_ids)} old files** can be cleaned up after successful replacements.")
+            st.info(f"**{len(pending_replacement_ids)} old files** can be cleaned up after successful replacements.", icon=":material/cached:")
             
         if new_unsynced_count == 0 and pending_resync_count == 0:
             last_vs_sync = read_last_vector_sync_timestamp()
             if last_vs_sync:
-                st.success(f"✅ **All documents are synchronized!** Last sync: {last_vs_sync.isoformat(timespec='seconds')}")
+                st.success(f"**All documents are synchronized!** Last sync: {last_vs_sync.isoformat(timespec='seconds')}", icon=":material/check_circle:")
             else:
-                st.success("✅ **All documents are synchronized!**")
+                st.success("**All documents are synchronized!**", icon=":material/check_circle:")
                 
     except Exception as e:
-        st.error(f"❌ Failed to compute sync status: {e}")
+        st.error(f"Failed to compute sync status: {e}", icon=":material/error:")
 
     # --- Detailed preview of unsynced docs ---
     if new_unsynced_count > 0:
-        with st.expander(f"📋 Preview of {min(10, new_unsynced_count)} newest unsynced documents"):
+        with st.expander(f"Preview of {min(10, new_unsynced_count)} newest unsynced documents", icon=":material/preview:"):
             try:
                 rows_preview = list_new_unsynced_docs(limit=10)
                 for _id, _title, _updated_at in rows_preview:
@@ -815,11 +804,11 @@ if authenticated:
     st.markdown("### 🔧 Vector Store Management")
 
     # Sync button with better context
-    sync_button_text = "🔄 Sync Documents with Vector Store"
+    sync_button_text = "Sync Documents with Vector Store"
     if new_unsynced_count > 0 or pending_resync_count > 0:
         sync_button_text += f" ({new_unsynced_count + pending_resync_count} pending)"
     
-    if st.button(sync_button_text):
+    if st.button(sync_button_text, type="primary", icon=":material/sync:"):
         # Create containers for status and terminal output
         status_container = st.container()
         progress_bar = st.progress(0)

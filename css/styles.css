@@ -1,5 +1,21 @@
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
+/* No rounded corners for elements according to CD */
+* {
+  border-radius: 0 !important;
+}
+
+/* Exempt Streamlit spinner */
+.stSpinner, .stSpinner * {
+  border-radius: 50% !important;
+}
+
+/* Exempt current toggle markup (uses four corner classes on the track) */
+div[class*="st-gd"][class*="st-ge"][class*="st-gf"][class*="st-gg"],
+div[class*="st-gd"][class*="st-ge"][class*="st-gf"][class*="st-gg"] > * {
+  border-radius: 9999px !important;
+}
+
 .ref-icon {
     display: inline-block;
     font-family: 'Material Icons';
@@ -10,56 +26,13 @@
     color: #3F4C7B;
 }
 
-.stChatInput textarea {
-    border-radius: 0px !important;
-    padding: 10px;
-}
-.stChatInput > div{
-    border-radius: 0px !important;
-    padding-left: 0px !important;
+#special-hr hr {
+  margin-top: -20px !important;
 }
 
-.user-message {
-    background-color: #e0f7fa;
-    border-radius: 0px;
-    padding: 10px;
-    margin: 5px 0;
-}
-
-.assistant-message {
-    background-color: #f1f8e9;
-    border-radius: 0px;
-    padding: 10px;
-    margin: 5px 0;
-}
-
-.stMarkdown h1 {
+#chatbot-title h1 {
     font-size: 2rem;
-    font-weight: 200;
+    font-weight: 100;
     margin-top: 60px;
     text-align: right;
-}
-
-.stMarkdown hr {
-    margin-top: -20px !important;
-}
-
-.stMarkdown ul > li {
-        margin: 0.2em 0px 0em 1.15em !important;
-}
-
-.stChatMessage, .stChatMessage > div {
-    border-radius: 0px !important;
-}
-
-.stExpander > details,summary {
-    border-radius: 0px !important;
-}
-
-/* Make list items inside reference expander align icon, badge, and text on one line */
-.stExpander ul li > p {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin: 0; /* remove extra p-margin for tighter alignment */
 }

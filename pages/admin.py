@@ -73,6 +73,12 @@ def get_prompt_history(limit=10):
 def _load_available_models_cached():
     return get_available_openai_models()
 
+def load_css(file_path):
+    with open(BASE_DIR / file_path) as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+load_css("css/styles.css")
+
 # --- Authentication ---
 authenticated = admin_authentication()
 render_sidebar(authenticated)

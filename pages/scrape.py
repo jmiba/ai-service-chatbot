@@ -824,6 +824,11 @@ def scrape(url,
         if log_callback:
             log_callback(f"{'  ' * depth}🔗 Link discovery: Found {len(links_found)} total links, processed {links_processed} valid links")
 
+def load_css(file_path):
+    with open(BASE_DIR / file_path) as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+load_css("css/styles.css")
 # -----------------------------
 # Streamlit UI
 # -----------------------------
@@ -894,20 +899,20 @@ def main():
                 # Display metrics
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("📄 Total Pages", total_pages)
+                    st.metric("📄 Total Pages", total_pages, border=True)
                 with col2:
                     sync_color = "🟢" if pending_sync == 0 else "🟡"
-                    st.metric(f"{sync_color} Pending Sync", pending_sync)
+                    st.metric(f"{sync_color} Pending Sync", pending_sync, border=True)
                 with col3:
                     config_color = "🟢" if total_configs > 0 else "🔴"
-                    st.metric(f"{config_color} Configurations", total_configs)
+                    st.metric(f"{config_color} Configurations", total_configs, border=True)
                 with col4:
                     # Vector synchronization is handled in the separate 'Vectorize' page
                     if pending_sync > 0:
                         st.info(f"⏳ There are {pending_sync} documents waiting for vector store synchronization.\n"
                                 "Run the 'Vectorize' page to perform batch vector synchronization (keeps scraping responsive).")
                     else:
-                        st.success("✅ All synced")
+                        st.success("All synced", icon=":material/check_circle:")
                         
                 # Show status summary
                 if total_pages == 0:
@@ -915,7 +920,7 @@ def main():
                 elif pending_sync > 0:
                     st.warning(f"⏳ **{pending_sync} pages** are waiting for vector store synchronization.")
                 else:
-                    st.success(f"✅ **System healthy** - All {total_pages} pages are indexed and synchronized.")
+                    st.success(f"**System healthy** - All {total_pages} pages are indexed and synchronized.", icon=":material/check_circle:")
                     
             except Exception as e:
                 st.error(f"Could not load system status: {e}")
@@ -1359,9 +1364,9 @@ def main():
             
             if not dry_run:
                 if processed_pages_count > 0:
-                    st.success(f"✅ {processed_pages_count} pages are ready for vector store synchronization")
+                    st.success(f"{processed_pages_count} pages are ready for vector store synchronization", icon=":material/check_circle:")
                 else:
-                    st.info("ℹ️ No new pages were processed (all pages may have been skipped or already exist)")
+                    st.info("ℹNo new pages were processed (all pages may have been skipped or already exist)", icon=":material/info:")
             else:
                 if dry_run_llm_eligible_count > 0:
                     st.info(f"🧪 **Dry Run Results**: {dry_run_llm_eligible_count} pages would be processed by LLM in a real run")
@@ -1370,7 +1375,7 @@ def main():
             
             # Display LLM Analysis Results
             if llm_analysis_results and not dry_run:
-                with st.expander(f"🤖 LLM Analysis Results ({len(llm_analysis_results)} pages)", expanded=True):
+                with st.expander(f"LLM Analysis Results ({len(llm_analysis_results)} pages)", expanded=True, icon=":material/insights:"):
                     for i, result in enumerate(llm_analysis_results, 1):
                         st.markdown(f"**{i}. {result['title']}**")
                         st.markdown(f"🔗 *{result['url']}*")
