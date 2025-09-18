@@ -188,3 +188,4 @@ secrets.toml
 
 # MacOS
 .DS_Store
+last_vector_sync.txt
