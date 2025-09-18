@@ -1450,7 +1450,7 @@ def main():
         )
         selected_vector_status = st.selectbox(
             "Filter by vectorization status",
-            options=["All", "Non-vectorized (waiting for sync)", "Vectorized (synced)"],
+            options=["All", "Non-vectorized", "Vectorized (synced)"],
             index=0,
             help="Filter entries based on whether they have been vectorized and synced to the vector store"
         )
@@ -1459,7 +1459,7 @@ def main():
             "Filter by vector store exclusion",
             options=["All", "Excluded", "Included"],
             index=0,
-            help="Filter entries that are excluded from vectorization (no_upload flag)"
+            help="Filter entries that are excluded from vectorization"
         )
 
         filtered = entries
@@ -1468,7 +1468,7 @@ def main():
         if selected_page_type != "All":
             filtered = [entry for entry in filtered if entry[11] == selected_page_type]
         if selected_vector_status != "All":
-            if selected_vector_status == "Non-vectorized (waiting for sync)":
+            if selected_vector_status == "Non-vectorized":
                 filtered = [entry for entry in filtered if entry[10] is None]  # vector_file_id is None
             elif selected_vector_status == "Vectorized (synced)":
                 filtered = [entry for entry in filtered if entry[10] is not None]  # vector_file_id is not None
@@ -1486,18 +1486,21 @@ def main():
                 # Show count summary
                 total_entries = len(entries)
                 filtered_entries = len(filtered)
-                non_vectorized_total = len([entry for entry in entries if entry[10] is None])
+                non_vectorized_total = len([entry for entry in entries if entry[10] is None and entry[12] is not True])
                 vectorized_total = len([entry for entry in entries if entry[10] is not None])
+                excluded = len([entry for entry in entries if len(entry) > 12 and bool(entry[12])])
                 
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 with col1:
                     st.metric("Total Entries", total_entries, border=True)
                 with col2:
                     st.metric("Filtered Results", filtered_entries, border=True)
                 with col3:
-                    st.metric("Non-vectorized", non_vectorized_total, border=True)
+                    st.metric("Vectorized", vectorized_total, border=True)  
                 with col4:
-                    st.metric("Vectorized", vectorized_total, border=True)
+                    st.metric("Excluded from Vector Store", excluded, border=True)
+                with col5:
+                    st.metric("Non-vectorized", non_vectorized_total, border=True)
                 
                 st.markdown("---")
             
@@ -1505,47 +1508,46 @@ def main():
                 tags_str = " ".join(f"#{tag}" for tag in tags)
                 
                 # Create status indicators
-                vector_status = "✅ Vectorized" if vector_file_id else "⏳ Waiting for sync"
+                vector_status = "✅ Vectorized" if vector_file_id and not no_upload == True else "⏳ Waiting for sync" if not vector_file_id and not no_upload == True else "🚫 Excluded"
                 vector_id_display = f"`{vector_file_id}`" if vector_file_id else "`None`"
-                excluded_badge = " · 🚫 Excluded" if no_upload else ""
                 
-                st.markdown(f"**{title or '(no title)'}** (ID {id}) - [{url}]({url}) - {vector_status} {vector_id_display} - **Page Type:** {page_type}{excluded_badge}")
-                with st.expander(f"**{safe_title}.md** - {recordset} ({crawl_date}) (`{tags_str}`)\n\n**Summary:** {summary or '(no summary)'} (**Language:** {lang})"): 
+                with st.expander(f"**{title or '(no title)'}** (ID {id}) - [{url}]({url}) - {vector_status} {vector_id_display} - **Page Type:** {page_type}"):
+                    st.markdown(f"**{safe_title}.md** - {recordset} ({crawl_date}) (`{tags_str}`)\n\n**Summary:** {summary or '(no summary)'} (**Language:** {lang})")
                     st.info(markdown or "(no content)")
                 
-                col1, col2 = st.columns(2)
-                with col1:
-                    # Toggle include/exclude from vector store depending on current state
-                    toggle_label = (
-                        f"Include Record {id} in Vector Store" if no_upload else f"Exclude Record {id} from Vector Store"
-                    )
-                    toggle_icon = ":material/check_circle:" if no_upload else ":material/block:"
-                    if st.button(toggle_label, key=f"toggle_upload_{id}", icon=toggle_icon, type="secondary"):
-                        try:
-                            conn = get_connection()
-                            with conn.cursor() as cur:
-                                cur.execute("UPDATE documents SET no_upload = %s WHERE id = %s", (not no_upload, id))
-                                conn.commit()
-                            conn.close()
-                            if no_upload:
-                                st.success(f"Record {id} included in vector store.")
-                            else:
-                                st.success(f"Record {id} excluded from vector store.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to update vector store inclusion for record {id}: {e}")
-                with col2:    
-                    if st.button(f"Delete Record {id}", key=f"delete_button_{id}", icon=":material/delete:", type="secondary"):
-                        try:
-                            conn = get_connection()
-                            with conn.cursor() as cur:
-                                cur.execute("DELETE FROM documents WHERE id = %s", (id,))
-                                conn.commit()
-                            conn.close()
-                            st.success(f"Record {id} deleted successfully.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to delete record {id}: {e}")
+                    col1, col2, col3, col4 = st.columns([1,2,2,1])
+                    with col2:
+                        # Toggle include/exclude from vector store depending on current state
+                        toggle_label = (
+                            f"Include Record {id} in Vector Store" if no_upload else f"Exclude Record {id} from Vector Store"
+                        )
+                        toggle_icon = ":material/check_circle:" if no_upload else ":material/block:"
+                        if st.button(toggle_label, key=f"toggle_upload_{id}", icon=toggle_icon, type="secondary"):
+                            try:
+                                conn = get_connection()
+                                with conn.cursor() as cur:
+                                    cur.execute("UPDATE documents SET no_upload = %s WHERE id = %s", (not no_upload, id))
+                                    conn.commit()
+                                conn.close()
+                                if no_upload:
+                                    st.success(f"Record {id} included in vector store.")
+                                else:
+                                    st.success(f"Record {id} excluded from vector store.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to update vector store inclusion for record {id}: {e}")
+                    with col3:    
+                        if st.button(f"Delete Record {id} from Knowledge Base", key=f"delete_button_{id}", icon=":material/delete:", type="secondary"):
+                            try:
+                                conn = get_connection()
+                                with conn.cursor() as cur:
+                                    cur.execute("DELETE FROM documents WHERE id = %s", (id,))
+                                    conn.commit()
+                                conn.close()
+                                st.success(f"Record {id} deleted successfully.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to delete record {id}: {e}")
 
         except Exception as e:
             st.error(f"Failed to load entries: {e}")
