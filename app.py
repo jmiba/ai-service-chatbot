@@ -15,7 +15,9 @@ from utils import (
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
     supports_reasoning_effort, get_kb_entries, estimate_cost_usd,
     create_request_classifications_table, get_request_classifications,
-    get_filter_settings
+    get_filter_settings,
+    # NEW: ensure filter_settings table exists on app startup
+    create_filter_settings_table
 )
 
 # -------------------------------------
@@ -1351,6 +1353,7 @@ try:
         create_log_table()
         create_llm_settings_table()  # Initialize LLM settings table
         create_request_classifications_table()  # Initialize request classifications
+        create_filter_settings_table()  # Initialize filter settings table
         #print("✅ Database initialization completed successfully.")
     else:
         # Show database configuration instructions when no database is available
@@ -1468,6 +1471,11 @@ if user_input:
     fs = get_filter_settings()
     web_filters = {}
     tool_extras = {}
+    try:
+        fs = get_filter_settings()
+    except Exception as e:
+        print(f"⚠️ Could not load filter_settings (using defaults): {e}")
+        fs = {}
     if fs:
         # enable flag
         tool_extras['web_search_enabled'] = bool(fs.get('web_search_enabled', True))
