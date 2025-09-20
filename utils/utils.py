@@ -6,6 +6,8 @@ import json
 from functools import lru_cache
 import uuid
 
+from .db_migrations import run_migrations
+
 BASE_DIR = Path(__file__).parent.parent
 
 LOGIN_SVG = (BASE_DIR / "assets" / "key.svg").read_text()
@@ -123,47 +125,8 @@ def create_database_if_not_exists():
 
 # Function to create the knowledge_base table if it doesn't exist
 def create_knowledge_base_table():
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # Step 1: Create the documents table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS documents (
-            id SERIAL PRIMARY KEY,
-            url TEXT UNIQUE NOT NULL,
-            title TEXT,
-            safe_title TEXT,
-            crawl_date DATE,
-            lang TEXT,
-            summary TEXT,
-            tags TEXT[], -- PostgreSQL supports arrays
-            markdown_content TEXT,
-            markdown_hash TEXT,
-            recordset TEXT,
-            vector_file_id VARCHAR(255),
-            old_file_id VARCHAR(255),
-            updated_at TIMESTAMP DEFAULT NOW(),
-            page_type VARCHAR(50),
-            no_upload BOOLEAN DEFAULT FALSE,
-            is_stale BOOLEAN DEFAULT FALSE
-        );
-    """)
-
-    # Step 2: Create a non-unique index on recordset for performance (optional but recommended)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_documents_recordset
-        ON documents(recordset);
-    """)
-
-    # Ensure new columns exist when upgrading
-    cursor.execute("""
-        ALTER TABLE documents
-        ADD COLUMN IF NOT EXISTS is_stale BOOLEAN DEFAULT FALSE
-    """)
-
-    conn.commit()
-    cursor.close()
-    conn.close()
+    """Ensure the database schema is up to date."""
+    run_migrations(get_connection)
     
     
 # Function to get knowledge base entries
