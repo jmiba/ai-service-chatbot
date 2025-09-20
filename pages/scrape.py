@@ -1211,31 +1211,54 @@ def main():
         st.header("Add Knowledge Base Entry Manually")
         st.caption("Create documents directly in the knowledge base. Entries are stored under **Internal documents** and summarized automatically.")
 
-        with st.expander("Markdown formatting tips", expanded=False):
-            st.markdown(
-                """
-                - Start with a short heading that states the topic, e.g. `# Resetting Passwords`.
-                - Use paragraphs or bullet lists for individual concepts; keep each paragraph focused.
-                - Include question/answer pairs only when they reflect how teammates will query the knowledge base.
-                - Provide examples in fenced code blocks (```bash ...```), and highlight important callouts with bold or block quotes.
-                - Keep chunks concise (2-4 short paragraphs) so vector embeddings align with a single intent.
-                - Add metadata inline if needed, e.g. `**Audience:** Support` or `**Updated:** 2024-09-01`.
-                """
+        success_payload = st.session_state.pop("manual_entry_success", None)
+        if success_payload:
+            st.success(
+                f"Saved **{success_payload['title']}** as `{success_payload['url']}`. Summary, tags, and language were generated automatically."
             )
+
+        st.info(
+            """**Markdown formatting tips**
+
+- Start with a concise heading, e.g. `# Resetting Passwords`.
+- Keep paragraphs or bullet points focused on one concept.
+- Use Q&A blocks only when they mirror how teammates will ask questions.
+- Show examples in fenced code blocks (```bash ...```); use bold or block quotes for callouts.
+- Keep each chunk short (2–4 brief paragraphs) so embeddings capture a single intent.
+- Include inline metadata when useful, e.g. `**Audience:** Support`, `**Updated:** 2024-09-01`.
+"""
+        )
 
         default_date = datetime.utcnow().date()
 
+        manual_defaults = st.session_state.get("manual_entry_defaults", {})
+
         with st.form("manual_kb_entry"):
-            manual_title = st.text_input("Title")
-            manual_safe_title = st.text_input("Safe Title (optional)", help="Used for generated filenames. Leave blank to auto-generate from the title.")
+            manual_title = st.text_input("Title", value=manual_defaults.get("title", ""))
+            manual_safe_title = st.text_input(
+                "Safe Title (optional)",
+                value=manual_defaults.get("safe_title", ""),
+                help="Used for generated filenames. Leave blank to auto-generate from the title."
+            )
             manual_identifier = st.text_input(
                 "Document identifier",
+                value=manual_defaults.get("identifier", ""),
                 help="Optional slug. Stored as internal://internal-documents/<identifier>. Leave blank to derive from the title.",
             )
-            manual_markdown = st.text_area("Markdown Content", height=260)
-            manual_crawl_date = st.date_input("Crawl date", value=default_date)
-            manual_page_type = st.selectbox("Page type", options=["text", "links", "other"], index=0)
-            manual_no_upload = st.checkbox("Exclude from vector store", value=False)
+            manual_markdown = st.text_area("Markdown Content", value=manual_defaults.get("markdown", ""), height=260)
+            manual_crawl_date = st.date_input(
+                "Crawl date",
+                value=manual_defaults.get("crawl_date", default_date)
+            )
+            manual_page_type = st.selectbox(
+                "Page type",
+                options=["text", "links", "other"],
+                index=["text", "links", "other"].index(manual_defaults.get("page_type", "text"))
+            )
+            manual_no_upload = st.checkbox(
+                "Exclude from vector store",
+                value=manual_defaults.get("no_upload", False)
+            )
             submitted_manual = st.form_submit_button("Save entry")
 
         if submitted_manual:
@@ -1300,11 +1323,23 @@ def main():
                     except Exception as exc:
                         st.error(f"Failed to save manual entry: {exc}")
                     else:
-                        st.success("Saved document.")
                         with st.expander("Generated metadata", expanded=True):
                             st.write(f"**Language:** {language}")
                             st.write(f"**Summary:** {summary_text or '(empty)'}")
                             st.write(f"**Tags:** {', '.join(tags_list) if tags_list else '(none)'}")
+                        st.session_state["manual_entry_success"] = {
+                            "title": manual_title_clean,
+                            "url": normalized_manual_url,
+                        }
+                        st.session_state["manual_entry_defaults"] = {
+                            "title": "",
+                            "safe_title": "",
+                            "identifier": "",
+                            "markdown": "",
+                            "crawl_date": default_date,
+                            "page_type": "text",
+                            "no_upload": False,
+                        }
                         rerun_app()
                     finally:
                         if conn:
