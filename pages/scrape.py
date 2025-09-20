@@ -2115,6 +2115,9 @@ def main():
                                     "".join(c if c.isalnum() else "_" for c in (new_title.strip() or "untitled")),
                                 )[:64]
                                 tags_list_new = [t.strip() for t in new_tags_input.split(",") if t.strip()]
+                                resync_needed = bool(
+                                    vector_file_id and not new_no_upload and new_markdown.strip() != (markdown or "").strip()
+                                )
                                 try:
                                     conn = get_connection()
                                     with conn:
@@ -2132,6 +2135,8 @@ def main():
                                                     lang = %s,
                                                     page_type = %s,
                                                     no_upload = %s,
+                                                    vector_file_id = CASE WHEN %s THEN NULL ELSE vector_file_id END,
+                                                    old_file_id = CASE WHEN %s THEN vector_file_id ELSE old_file_id END,
                                                     updated_at = NOW()
                                                 WHERE id = %s
                                                 """,
@@ -2146,6 +2151,8 @@ def main():
                                                     new_lang.strip() or "unknown",
                                                     new_page_type,
                                                     new_no_upload,
+                                                    resync_needed,
+                                                    resync_needed,
                                                     id,
                                                 )
                                             )
