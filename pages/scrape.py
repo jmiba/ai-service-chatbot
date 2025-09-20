@@ -2030,7 +2030,7 @@ def main():
                                 rerun_app()
                     with col2:
                         toggle_label = (
-                            f"Include Record {id} in Vector Store" if no_upload else f"Exclude Record {id} from Vector Store"
+                            f"Include in Vector Store" if no_upload else f"Exclude from Vector Store"
                         )
                         toggle_icon = ":material/check_circle:" if no_upload else ":material/block:"
                         if st.button(toggle_label, key=f"toggle_upload_{id}", icon=toggle_icon, type="secondary"):
@@ -2048,7 +2048,7 @@ def main():
                             except Exception as e:
                                 st.error(f"Failed to update vector store inclusion for record {id}: {e}")
                     with col3:
-                        if st.button(f"Delete Record {id} from Knowledge Base", key=f"delete_button_{id}", icon=":material/delete:", type="secondary"):
+                        if st.button(f"Delete from Knowledge Base", key=f"delete_button_{id}", icon=":material/delete:", type="secondary"):
                             try:
                                 conn = get_connection()
                                 with conn.cursor() as cur:

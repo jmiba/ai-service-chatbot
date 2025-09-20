@@ -483,8 +483,14 @@ def render_sources_list(citation_map):
         rs_text = rs_text.strip()
         rs_html = html.escape(rs_text) if rs_text else ""
 
-        # Link rendering (keep url_with_tooltip behavior as-is)
-        if url:
+        is_internal_doc = False
+        if rs_text:
+            is_internal_doc = rs_text.lower() == "internal documents"
+        if not is_internal_doc and url and url.startswith("internal://"):
+            is_internal_doc = True
+
+        # Link rendering (keep url_with_tooltip behavior as-is unless internal document)
+        if url and not is_internal_doc:
             safe_title = html.escape(title)
             if summary:
                 url_with_tooltip = f'<a href="{url}" title="{summary}" target="_blank" rel="noopener noreferrer">{safe_title}</a>'
