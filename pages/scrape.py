@@ -96,7 +96,7 @@ recordset_latest_urls = defaultdict(set)  # track URLs seen per recordset in the
 
 
 def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
-    """Update `documents.is_stale` based on latest crawl results and return current stale entries."""
+    """Update `documents.is_stale` by confirming which pages disappeared during this crawl."""
     if conn is None:
         return []
 
@@ -104,62 +104,26 @@ def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
         if log_callback:
             log_callback(msg)
 
-    stale_candidates: list[dict] = []
+    visited_by_recordset: dict[str, set[str]] = {
+        (rs_key or "").strip(): set(urls) for rs_key, urls in recordset_latest_urls.items()
+    }
+
+    stale_checks: list[dict] = []
+    seen_ids: set[int] = set()
+
     try:
         with conn.cursor() as cur:
-            if not dry_run:
-                for rs_key, urls in recordset_latest_urls.items():
-                    url_list = list(urls)
-                    cur.execute(
-                        "UPDATE documents SET is_stale = FALSE WHERE recordset = %s AND url = ANY(%s)",
-                        (rs_key, url_list),
-                    )
-                    cur.execute(
-                        "UPDATE documents SET is_stale = TRUE WHERE recordset = %s AND NOT (url = ANY(%s))",
-                        (rs_key, url_list),
-                    )
-                conn.commit()
+            for rs_key, urls in visited_by_recordset.items():
                 cur.execute(
-                    "SELECT id, recordset, url, title, crawl_date FROM documents WHERE is_stale = TRUE ORDER BY updated_at DESC"
+                    "SELECT id, recordset, url, title, crawl_date FROM documents WHERE recordset = %s",
+                    (rs_key,),
                 )
                 rows = cur.fetchall()
                 for doc_id, doc_recordset, doc_url, doc_title, doc_crawl in rows:
-                    stale_candidates.append(
-                        {
-                            "id": doc_id,
-                            "recordset": doc_recordset,
-                            "url": doc_url,
-                            "title": doc_title,
-                            "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
-                        }
-                    )
-            else:
-                seen_ids: set[int] = set()
-                for rs_key, urls in recordset_latest_urls.items():
-                    cur.execute(
-                        "SELECT id, url, title, crawl_date FROM documents WHERE recordset = %s",
-                        (rs_key,),
-                    )
-                    rows = cur.fetchall()
-                    for doc_id, doc_url, doc_title, doc_crawl in rows:
-                        if doc_url not in urls and doc_id not in seen_ids:
-                            stale_candidates.append(
-                                {
-                                    "id": doc_id,
-                                    "recordset": rs_key,
-                                    "url": doc_url,
-                                    "title": doc_title,
-                                    "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
-                                }
-                            )
-                            seen_ids.add(doc_id)
-                cur.execute(
-                    "SELECT id, recordset, url, title, crawl_date FROM documents WHERE is_stale = TRUE"
-                )
-                rows = cur.fetchall()
-                for doc_id, doc_recordset, doc_url, doc_title, doc_crawl in rows:
-                    if doc_id not in seen_ids:
-                        stale_candidates.append(
+                    if doc_url in urls:
+                        seen_ids.add(doc_id)
+                    else:
+                        stale_checks.append(
                             {
                                 "id": doc_id,
                                 "recordset": doc_recordset,
@@ -176,8 +140,53 @@ def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
             pass
         return []
 
-    _log(f"📦 Stale detection complete: {len(stale_candidates)} candidate(s)")
-    return stale_candidates
+    # Ensure pages we actually saw are marked fresh
+    if seen_ids and not dry_run:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE documents SET is_stale = FALSE WHERE id = ANY(%s)",
+                    (list(seen_ids),)
+                )
+        except Exception as exc:
+            _log(f"⚠️ Could not reset stale flag for seen documents: {exc}")
+
+    confirmed_stale: list[dict] = []
+    retained_ids: list[int] = []
+
+    for entry in stale_checks:
+        is_missing, reason = verify_url_deleted(entry["url"], log_callback=_log)
+        if is_missing:
+            entry["reason"] = reason
+            confirmed_stale.append(entry)
+            _log(f"🗑️ Confirmed missing: {entry['url']} ({reason})")
+        else:
+            retained_ids.append(entry["id"])
+            _log(f"✅ Still reachable: {entry['url']}")
+
+    if not dry_run:
+        try:
+            with conn.cursor() as cur:
+                if confirmed_stale:
+                    cur.execute(
+                        "UPDATE documents SET is_stale = TRUE, updated_at = NOW() WHERE id = ANY(%s)",
+                        ([entry["id"] for entry in confirmed_stale],),
+                    )
+                if retained_ids:
+                    cur.execute(
+                        "UPDATE documents SET is_stale = FALSE WHERE id = ANY(%s)",
+                        (retained_ids,),
+                    )
+            conn.commit()
+        except Exception as exc:
+            _log(f"⚠️ Failed to persist stale status updates: {exc}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+    _log(f"📦 Stale detection complete: {len(confirmed_stale)} confirmed missing / {len(stale_checks)} checked")
+    return confirmed_stale
 
 
 def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
@@ -731,6 +740,50 @@ def is_page_not_found(text):
         
     # Require at least one clear error pattern
     return matches > 0
+
+
+def verify_url_deleted(url: str, log_callback=None) -> tuple[bool, str]:
+    """Return (is_deleted, reason) for a URL by checking HTTP status/content."""
+    def _log(msg: str):
+        if log_callback:
+            log_callback(msg)
+
+    head_resp = None
+    try:
+        head_resp = requests.head(url, headers=HEADERS, allow_redirects=True, timeout=10)
+    except requests.RequestException as exc:
+        _log(f"⚠️ HEAD check failed for {url}: {exc}")
+
+    if head_resp is not None:
+        status = head_resp.status_code
+        if status in (404, 410):
+            return True, f"HTTP {status}"
+        if status >= 400 and status not in (405, 501):
+            # Other client/server errors – treat as reachable but note status
+            return False, f"HTTP {status}"
+
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
+    except requests.RequestException as exc:
+        _log(f"⚠️ GET check failed for {url}: {exc}")
+        return False, f"verification failed: {exc}"
+
+    status = response.status_code
+    if status in (404, 410):
+        return True, f"HTTP {status}"
+    if status >= 400:
+        return False, f"HTTP {status}"
+
+    try:
+        text = BeautifulSoup(response.text, 'html.parser').get_text(separator=' ', strip=True)
+    except Exception as exc:
+        _log(f"⚠️ Could not parse HTML from {url}: {exc}")
+        return False, "parse error"
+
+    if is_page_not_found(text):
+        return True, "page content indicates removal"
+
+    return False, "reachable"
 
 def is_empty_markdown(markdown, min_length=50):
     if not markdown or not markdown.strip():

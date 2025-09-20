@@ -10,8 +10,7 @@ from pathlib import Path
 try:
     from streamlit.runtime import exists as streamlit_runtime_exists  # type: ignore
 except (ImportError, ModuleNotFoundError):
-    def streamlit_runtime_exists() -> bool:  # type: ignore
-        return False
+    streamlit_runtime_exists = None  # type: ignore
 
 try:
     from streamlit.runtime.scriptrunner import get_script_run_ctx  # type: ignore
@@ -19,10 +18,28 @@ except (ImportError, ModuleNotFoundError):
     def get_script_run_ctx():  # type: ignore
         return None
 
-HAS_STREAMLIT_CONTEXT = streamlit_runtime_exists() and get_script_run_ctx() is not None
+_script_ctx = get_script_run_ctx()
+if streamlit_runtime_exists:
+    HAS_STREAMLIT_CONTEXT = streamlit_runtime_exists() and _script_ctx is not None
+else:
+    HAS_STREAMLIT_CONTEXT = _script_ctx is not None
 
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-VECTOR_STORE_ID = st.secrets["VECTOR_STORE_ID"]
+
+def _get_required_secret(key: str) -> str:
+    try:
+        value = st.secrets[key]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"Missing Streamlit secret '{key}'. Provide it via STREAMLIT_SECRETS_JSON or secrets.toml."
+        ) from exc
+
+    if not value:
+        raise RuntimeError(f"Streamlit secret '{key}' is set but empty.")
+
+    return value
+
+OPENAI_API_KEY = _get_required_secret("OPENAI_API_KEY")
+VECTOR_STORE_ID = _get_required_secret("VECTOR_STORE_ID")
 BASE_DIR = Path(__file__).parent.parent
 VECTORIZE_SVG = (BASE_DIR / "assets" / "owl.svg").read_text()
 
@@ -681,7 +698,7 @@ if HAS_STREAMLIT_CONTEXT:
             vector_mgmt_col1, vector_mgmt_col2 = st.columns([3, 1])
         
             with vector_mgmt_col1:
-                show_vector_mgmt = st.checkbox("🔧 Show vector store management", help="Load detailed vector store statistics (uses caching for better performance)")
+                show_vector_mgmt = st.checkbox("Show vector store status", help="Load detailed vector store statistics (uses caching for better performance)")
         
             with vector_mgmt_col2:
                 if st.button("Refresh Cache", help="Force refresh vector store data cache", icon=":material/refresh:"):
@@ -699,7 +716,7 @@ if HAS_STREAMLIT_CONTEXT:
                     
                         # Show cache status
                         cache_age = time.time() - _vs_files_cache["timestamp"]
-                        st.caption(f"⚡ Using cached data (age: {cache_age:.0f}s)")
+                        st.caption(f"Using cached data (age: {cache_age:.0f}s)")
                     
                         # Compute excluded live files present in VS and include them in pending cleanup metric
                         vs_ids = {f.id for f in vs_files}
@@ -715,23 +732,23 @@ if HAS_STREAMLIT_CONTEXT:
                         # Live files should exclude excluded docs
                         live_ids_display = current_ids - excluded_live_ids
                     
-                        st.markdown("### 🗂️ Vector Store Details")
+                        st.header("Vector Store Status")
                         col6, col7, col8, col9 = st.columns(4)
                         with col6:
-                            st.metric("📚 VS Files", vs_file_count)
+                            st.metric("VS Files", vs_file_count, border=True)
                         with col7:
-                            st.metric("🔗 Live Files", len(live_ids_display))
+                            st.metric("Live Files", len(live_ids_display), border=True)
                         with col8:
-                            st.metric("♻️ Pending Cleanup", len(combined_pending_cleanup_ids))
+                            st.metric("Pending Cleanup", len(combined_pending_cleanup_ids), border=True)
                         with col9:
-                            st.metric("🧹 Orphans", len(true_orphan_ids))
+                            st.metric("Orphans", len(true_orphan_ids), border=True)
                     
                         # Vector store status messages
                         if len(true_orphan_ids) > 0:
                             st.warning(f"🧹 **{len(true_orphan_ids)} orphaned files** in vector store are no longer in the database.")
                         
                         if len(combined_pending_cleanup_ids) > 0:
-                            st.info(f"♻️ **{len(combined_pending_cleanup_ids)} files** pending cleanup (old versions or excluded docs).")
+                            st.info(f"**{len(combined_pending_cleanup_ids)} files** pending cleanup (old versions or excluded docs).", icon=":material/cached:")
                         
                     except Exception as e:
                         st.error(f"Failed to load vector store details: {e}", icon=":material/error:")
@@ -798,8 +815,14 @@ if HAS_STREAMLIT_CONTEXT:
         else:
             print("✅ No missing file IDs found.")
 
-        st.markdown("### 🔧 Vector Store Management")
-
+    
+        st.markdown("---")
+        st.header("Vector Store File Management")
+        
+        # Action: Sync now
+        st.markdown("#### Sync Knowlede Base Now")
+        st.caption("Uploads new or changed knowledge base entries to vector store and deletes files marked as excluded from vector store.")
+        
         # Sync button with better context
         sync_button_text = "Sync Documents with Vector Store"
         if new_unsynced_count > 0 or pending_resync_count > 0:
@@ -820,7 +843,7 @@ if HAS_STREAMLIT_CONTEXT:
                 output_buffer = io.StringIO()
             
                 try:
-                    status_text.info("📤 **Uploading documents to vector store...**")
+                    status_text.info("**Uploading documents to vector store...**")
                     progress_bar.progress(30)
                 
                     # Capture all print output during sync
@@ -867,10 +890,10 @@ if HAS_STREAMLIT_CONTEXT:
                                      help="Total documents now in vector store")
                     
                         if result and result["uploaded_count"] > 0:
-                            st.info(f"🎉 **{result['uploaded_count']} documents** were successfully uploaded to the vector store and are now available for AI search!")
+                            st.info(f"**{result['uploaded_count']} documents** were successfully uploaded to the vector store and are now available for AI search!", icon=":material/award_star:")
                         
                             if result["synced_files"]:
-                                with st.expander("📋 View uploaded files", expanded=False):
+                                with st.expander("View uploaded files", expanded=False, icon=":material/visibility:"):
                                     for fname in result["synced_files"]:
                                         # Strip the numeric prefix for cleaner display
                                         pretty_name = fname.split("_", 1)[1] if "_" in fname else fname
@@ -878,10 +901,10 @@ if HAS_STREAMLIT_CONTEXT:
                     
                         # Show next steps or all-clear message
                         if updated_new_count == 0 and updated_resync_count == 0:
-                            st.success("🎯 **All documents are now synchronized!** Your knowledge base is fully up to date.")
+                            st.success("**All documents are now synchronized!** Your knowledge base is fully up to date.", icon=":material/check_circle:")
                         else:
                             remaining_total = updated_new_count + updated_resync_count
-                            st.warning(f"📋 **{remaining_total} documents** still need synchronization. Run sync again if needed.")
+                            st.warning(f"**{remaining_total} documents** still need synchronization. Run sync again if needed.", icon=":material/sync_problem:" )
                 
                     # Clear the progress indicators
                     progress_bar.empty()
@@ -898,11 +921,9 @@ if HAS_STREAMLIT_CONTEXT:
                     display_sync_log(log_container, output_buffer)
                     progress_bar.empty()
                     status_text.empty()
-                    st.error(f"❌ **Synchronization failed:** {e}")
-                    st.info("💡 Try running the sync again or check the logs above for more details.")
+                    st.error(f"**Synchronization failed:** {e}", icon=":material/error:")
+                    st.info("Try running the sync again or check the logs above for more details.", icon=":material/info:")
 
-        st.markdown("---")
-        st.markdown("### 🗂️ Vector Store File Management")
 
         # Always compute vector store data for file management (this section needs accurate data)
         try:
@@ -912,15 +933,15 @@ if HAS_STREAMLIT_CONTEXT:
                 vs_file_count = len(vs_files)
                 current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(VECTOR_STORE_ID, use_cache=True)
         except Exception as e:
-            st.error(f"❌ Failed to load vector store data: {e}")
+            st.error(f"Failed to load vector store data: {e}", icon=":material/error:")
             vs_file_count = 0
             current_ids = set()
             pending_replacement_ids = set()
             true_orphan_ids = set()
             
-        # Quick action: clean excluded now
-        st.markdown("#### 🚫 Clean Excluded Now")
-        st.caption("Deletes vector store files for documents marked as excluded (no_upload = TRUE) and clears DB references.")
+        # Action: clean excluded now
+        st.markdown("#### Clean Excluded Now")
+        st.caption("Only deletes vector store files for documents marked as excluded and clears DB references.")
         # Count excluded docs that still have vector files
         try:
             conn = get_connection(); cur = conn.cursor()
@@ -961,10 +982,10 @@ if HAS_STREAMLIT_CONTEXT:
                     
                         # Clear cache and refresh page
                         _vs_files_cache["data"] = None
-                        st.success("✅ Cleaned excluded files and cleared references.")
+                        st.success("Cleaned excluded files and cleared references.", icon=":material/check_circle:")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Failed to clean excluded files: {e}")
+                        st.error(f"Failed to clean excluded files: {e}", icon=":material/error:")
         else:
             st.caption("No excluded vector files to clean.")
 
@@ -983,10 +1004,10 @@ if HAS_STREAMLIT_CONTEXT:
                 combined_pending_cleanup_count = len(pending_replacement_ids)
                 live_display_count = len(current_ids)
         
-            st.info(f"📁 **Vector Store contains {vs_file_count} files** ({live_display_count} live, {combined_pending_cleanup_count} pending cleanup, {len(true_orphan_ids)} orphans)")
+            st.info(f"**Vector Store contains {vs_file_count} files** ({live_display_count} live, {combined_pending_cleanup_count} pending cleanup, {len(true_orphan_ids)} orphans)", icon=":material/storage:")
         
             # Cleanup options - organized by priority and safety
-            st.markdown("#### 🧹 Vector Store Cleanup")
+            st.markdown("#### Vector Store Cleanup")
             st.caption("Clean up unnecessary files to save storage space and keep the vector store organized.")
         
             # Row 1: Safe cleanup operations
@@ -994,57 +1015,57 @@ if HAS_STREAMLIT_CONTEXT:
         
             with col1:
                 if len(true_orphan_ids) > 0:
-                    st.markdown("**🗑️ Remove Orphaned Files**")
-                    st.write(f"🔍 Found {len(true_orphan_ids)} files in vector store that no longer exist in the database")
+                    st.markdown("**Remove Orphaned Files**")
+                    st.write(f"Found {len(true_orphan_ids)} files in vector store that no longer exist in the database")
                     st.caption("Safe to delete - these files are no longer referenced by any documents")
-                    if st.button("🗑️ Delete Orphans", key="delete_orphans"):
+                    if st.button("Delete Orphans", key="delete_orphans", icon=":material/delete_sweep:"):
                         with st.spinner("Deleting orphans..."):
                             try:
                                 delete_file_ids(VECTOR_STORE_ID, true_orphan_ids, label="orphan")
-                                st.success("✅ Deleted all orphaned files from the vector store.")
+                                st.success("Deleted all orphaned files from the vector store.", icon=":material/check_circle:")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"❌ Failed to delete orphans: {e}")
+                                st.error(f"Failed to delete orphans: {e}", icon=":material/error:")
                 else:
-                    st.markdown("**🗑️ Remove Orphaned Files**")
+                    st.markdown("**Remove Orphaned Files**")
                     st.write("✅ No orphaned files found")
                     st.caption("All vector store files are properly referenced in the database")
         
             with col2:
                 if len(pending_replacement_ids) > 0:
-                    st.markdown("**♻️ Clean Up Old Versions**")
+                    st.markdown("**Clean Up Old Versions**")
                     st.write(f"🔄 Found {len(pending_replacement_ids)} old file versions after content updates")
                     st.caption("Safe to delete - these are old versions that have been replaced with updated content")
-                    if st.button("♻️ Clean Up Old Versions", key="finalize_replacements"):
+                    if st.button("Clean Up Old Versions", key="finalize_replacements", icon=":material/restore_page:"):
                         with st.spinner("Cleaning up old versions..."):
                             try:
                                 delete_file_ids(VECTOR_STORE_ID, pending_replacement_ids, label="old version")
                                 clear_old_file_ids(pending_replacement_ids)
-                                st.success("✅ Cleaned up old file versions and updated database references.")
+                                st.success("Cleaned up old file versions and updated database references.", icon=":material/check_circle:")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"❌ Failed to clean up old versions: {e}")
+                                st.error(f"Failed to clean up old versions: {e}", icon=":material/error:")
                 else:
-                    st.markdown("**♻️ Clean Up Old Versions**")
+                    st.markdown("**Clean Up Old Versions**")
                     st.write("✅ No old versions to clean up")
                     st.caption("All file replacements have been properly finalized")
         
             # Dangerous operation separated and clearly marked
             st.markdown("---")
-            st.markdown("#### ⚠️ Nuclear Option")
-            st.error("**⚠️ DANGER**: This will permanently delete ALL files in the vector store!")
+            st.markdown("#### Nuclear Option")
+            st.error("**DANGER**: This will permanently delete ALL files in the vector store!", icon=":material/warning:")
             st.caption("Only use this if you want to completely rebuild the vector store from scratch.")
         
             col_danger1, col_danger2, col_danger3 = st.columns([1, 1, 2])
             with col_danger2:
-                if st.button("🗑️ Delete Everything", type="secondary", help="This will permanently delete all files in the vector store"):
+                if st.button("Delete Everything", type="secondary", help="This will permanently delete all files in the vector store", icon=":material/delete_forever:"):
                     with st.spinner("Deleting all files..."):
                         try:
                             delete_all_files_in_vector_store(VECTOR_STORE_ID)
-                            st.success("✅ All files deleted from the vector store.")
+                            st.success("All files deleted from the vector store.", icon=":material/check_circle:")
                             st.rerun()
                         except Exception as e:
-                            st.error(f"❌ Failed to delete files: {e}")
+                            st.error(f"Failed to delete files: {e}", icon=":material/error:")
         else:
             st.info("📭 Vector store is empty - no files to manage.")
 
