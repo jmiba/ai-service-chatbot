@@ -95,6 +95,17 @@ llm_analysis_results = []  # collect LLM analysis summaries for display in info 
 recordset_latest_urls = defaultdict(set)  # track URLs seen per recordset in the latest crawl
 
 
+def rerun_app():
+    """Trigger a Streamlit rerun compatible with recent and legacy versions."""
+    try:
+        st.rerun()
+    except AttributeError:
+        try:
+            st.experimental_rerun()
+        except AttributeError:
+            pass
+
+
 def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
     """Update `documents.is_stale` by confirming which pages disappeared during this crawl."""
     if conn is None:
@@ -1194,8 +1205,111 @@ def main():
     )
     
     # Create tabs for different views
-    tab1, tab2 = st.tabs(["Knowledge Base","Indexing Tool"])
+    tab1, tab_manual, tab2 = st.tabs(["Knowledge Base", "Manual Entry", "Indexing Tool"])
     
+    with tab_manual:
+        st.header("Add Knowledge Base Entry Manually")
+        st.caption("Create documents directly in the knowledge base. Entries are stored under **Internal documents** and summarized automatically.")
+
+        with st.expander("Markdown formatting tips", expanded=False):
+            st.markdown(
+                """
+                - Start with a short heading that states the topic, e.g. `# Resetting Passwords`.
+                - Use paragraphs or bullet lists for individual concepts; keep each paragraph focused.
+                - Include question/answer pairs only when they reflect how teammates will query the knowledge base.
+                - Provide examples in fenced code blocks (```bash ...```), and highlight important callouts with bold or block quotes.
+                - Keep chunks concise (2-4 short paragraphs) so vector embeddings align with a single intent.
+                - Add metadata inline if needed, e.g. `**Audience:** Support` or `**Updated:** 2024-09-01`.
+                """
+            )
+
+        default_date = datetime.utcnow().date()
+
+        with st.form("manual_kb_entry"):
+            manual_title = st.text_input("Title")
+            manual_safe_title = st.text_input("Safe Title (optional)", help="Used for generated filenames. Leave blank to auto-generate from the title.")
+            manual_identifier = st.text_input(
+                "Document identifier",
+                help="Optional slug. Stored as internal://internal-documents/<identifier>. Leave blank to derive from the title.",
+            )
+            manual_markdown = st.text_area("Markdown Content", height=260)
+            manual_crawl_date = st.date_input("Crawl date", value=default_date)
+            manual_page_type = st.selectbox("Page type", options=["text", "links", "other"], index=0)
+            manual_no_upload = st.checkbox("Exclude from vector store", value=False)
+            submitted_manual = st.form_submit_button("Save entry")
+
+        if submitted_manual:
+            errors: list[str] = []
+            manual_markdown_clean = manual_markdown.strip()
+            if not manual_markdown_clean:
+                errors.append("Markdown content cannot be empty.")
+            manual_title_clean = manual_title.strip() or "Untitled"
+
+            if errors:
+                for err in errors:
+                    st.error(err)
+            else:
+                safe_title_manual = manual_safe_title.strip()
+                if not safe_title_manual:
+                    safe_title_manual = re.sub(
+                        r"_+",
+                        "_",
+                        "".join(c if c.isalnum() else "_" for c in manual_title_clean or "untitled"),
+                    )[:64]
+
+                identifier = manual_identifier.strip() or safe_title_manual or "internal_doc"
+                normalized_manual_url = f"internal://internal-documents/{identifier}"
+
+                llm_result = None
+                try:
+                    llm_result = summarize_and_tag_tooluse(manual_markdown_clean)
+                except Exception as exc:
+                    st.error(f"LLM summarization failed: {exc}")
+
+                if not llm_result:
+                    st.error("Could not generate summary and metadata; entry not saved.")
+                else:
+                    summary_text = llm_result.get("summary", "")
+                    tags_value = llm_result.get("tags", [])
+                    if isinstance(tags_value, str):
+                        try:
+                            tags_value = json.loads(tags_value)
+                        except Exception:
+                            tags_value = [t.strip().strip("'\" ") for t in tags_value.strip("[]").split(",") if t.strip()]
+                    tags_list = tags_value if isinstance(tags_value, list) else []
+                    language = llm_result.get("detected_language") or "unknown"
+
+                    conn = None
+                    try:
+                        conn = get_connection()
+                        save_document_to_db(
+                            conn,
+                            normalized_manual_url,
+                            manual_title_clean,
+                            safe_title_manual,
+                            manual_crawl_date.isoformat() if hasattr(manual_crawl_date, "isoformat") else str(manual_crawl_date),
+                            language,
+                            summary_text,
+                            tags_list,
+                            manual_markdown_clean,
+                            compute_sha256(manual_markdown_clean),
+                            "Internal documents",
+                            manual_page_type,
+                            manual_no_upload,
+                        )
+                    except Exception as exc:
+                        st.error(f"Failed to save manual entry: {exc}")
+                    else:
+                        st.success("Saved document.")
+                        with st.expander("Generated metadata", expanded=True):
+                            st.write(f"**Language:** {language}")
+                            st.write(f"**Summary:** {summary_text or '(empty)'}")
+                            st.write(f"**Tags:** {', '.join(tags_list) if tags_list else '(none)'}")
+                        rerun_app()
+                    finally:
+                        if conn:
+                            conn.close()
+
     with tab2:
         st.header("Scrape webpages")
     
