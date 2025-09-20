@@ -1229,39 +1229,66 @@ def main():
 """
         )
 
-        default_date = datetime.utcnow().date()
+        default_date = datetime.now(datetime.UTC).date()
+        manual_form_defaults = {
+            "manual_title": "",
+            "manual_safe_title": "",
+            "manual_identifier": "",
+            "manual_markdown": "",
+            "manual_crawl_date": default_date,
+            "manual_page_type": "text",
+            "manual_no_upload": False,
+            "manual_form_submitting": False,
+        }
 
-        manual_defaults = st.session_state.get("manual_entry_defaults", {})
+        if st.session_state.pop("manual_form_reset_pending", False):
+            st.session_state.update(manual_form_defaults)
+
+        for key, value in manual_form_defaults.items():
+            st.session_state.setdefault(key, value)
+
+        status_placeholder = st.empty()
+        if st.session_state["manual_form_submitting"]:
+            status_placeholder.info("Saving manual entry…")
 
         with st.form("manual_kb_entry"):
-            manual_title = st.text_input("Title", value=manual_defaults.get("title", ""))
+            manual_title = st.text_input("Title", key="manual_title")
             manual_safe_title = st.text_input(
                 "Safe Title (optional)",
-                value=manual_defaults.get("safe_title", ""),
+                key="manual_safe_title",
                 help="Used for generated filenames. Leave blank to auto-generate from the title."
             )
             manual_identifier = st.text_input(
                 "Document identifier",
-                value=manual_defaults.get("identifier", ""),
+                key="manual_identifier",
                 help="Optional slug. Stored as internal://internal-documents/<identifier>. Leave blank to derive from the title.",
             )
-            manual_markdown = st.text_area("Markdown Content", value=manual_defaults.get("markdown", ""), height=260)
+            manual_markdown = st.text_area("Markdown Content", height=260, key="manual_markdown")
             manual_crawl_date = st.date_input(
                 "Crawl date",
-                value=manual_defaults.get("crawl_date", default_date)
+                value=st.session_state["manual_crawl_date"],
+                key="manual_crawl_date"
             )
+            options_page_type = ["text", "links", "other"]
             manual_page_type = st.selectbox(
                 "Page type",
-                options=["text", "links", "other"],
-                index=["text", "links", "other"].index(manual_defaults.get("page_type", "text"))
+                options=options_page_type,
+                index=options_page_type.index(st.session_state["manual_page_type"]),
+                key="manual_page_type"
             )
             manual_no_upload = st.checkbox(
                 "Exclude from vector store",
-                value=manual_defaults.get("no_upload", False)
+                value=st.session_state["manual_no_upload"],
+                key="manual_no_upload"
             )
-            submitted_manual = st.form_submit_button("Save entry")
+            submitted_manual = st.form_submit_button(
+                "Save entry",
+                disabled=st.session_state["manual_form_submitting"],
+            )
 
         if submitted_manual:
+            st.session_state["manual_form_submitting"] = True
+            status_placeholder.info("Saving manual entry…")
             errors: list[str] = []
             manual_markdown_clean = manual_markdown.strip()
             if not manual_markdown_clean:
@@ -1269,81 +1296,84 @@ def main():
             manual_title_clean = manual_title.strip() or "Untitled"
 
             if errors:
+                st.session_state["manual_form_submitting"] = False
+                status_placeholder.empty()
                 for err in errors:
                     st.error(err)
             else:
-                safe_title_manual = manual_safe_title.strip()
-                if not safe_title_manual:
-                    safe_title_manual = re.sub(
-                        r"_+",
-                        "_",
-                        "".join(c if c.isalnum() else "_" for c in manual_title_clean or "untitled"),
-                    )[:64]
+                with st.spinner("Saving manual entry…"):
+                    safe_title_manual = manual_safe_title.strip()
+                    if not safe_title_manual:
+                        safe_title_manual = re.sub(
+                            r"_+",
+                            "_",
+                            "".join(c if c.isalnum() else "_" for c in manual_title_clean or "untitled"),
+                        )[:64]
 
-                identifier = manual_identifier.strip() or safe_title_manual or "internal_doc"
-                normalized_manual_url = f"internal://internal-documents/{identifier}"
+                    identifier = manual_identifier.strip() or safe_title_manual or "internal_doc"
+                    normalized_manual_url = f"internal://internal-documents/{identifier}"
 
-                llm_result = None
-                try:
-                    llm_result = summarize_and_tag_tooluse(manual_markdown_clean)
-                except Exception as exc:
-                    st.error(f"LLM summarization failed: {exc}")
-
-                if not llm_result:
-                    st.error("Could not generate summary and metadata; entry not saved.")
-                else:
-                    summary_text = llm_result.get("summary", "")
-                    tags_value = llm_result.get("tags", [])
-                    if isinstance(tags_value, str):
-                        try:
-                            tags_value = json.loads(tags_value)
-                        except Exception:
-                            tags_value = [t.strip().strip("'\" ") for t in tags_value.strip("[]").split(",") if t.strip()]
-                    tags_list = tags_value if isinstance(tags_value, list) else []
-                    language = llm_result.get("detected_language") or "unknown"
-
-                    conn = None
+                    llm_result = None
                     try:
-                        conn = get_connection()
-                        save_document_to_db(
-                            conn,
-                            normalized_manual_url,
-                            manual_title_clean,
-                            safe_title_manual,
-                            manual_crawl_date.isoformat() if hasattr(manual_crawl_date, "isoformat") else str(manual_crawl_date),
-                            language,
-                            summary_text,
-                            tags_list,
-                            manual_markdown_clean,
-                            compute_sha256(manual_markdown_clean),
-                            "Internal documents",
-                            manual_page_type,
-                            manual_no_upload,
-                        )
+                        llm_result = summarize_and_tag_tooluse(manual_markdown_clean)
                     except Exception as exc:
-                        st.error(f"Failed to save manual entry: {exc}")
+                        st.session_state["manual_form_submitting"] = False
+                        status_placeholder.empty()
+                        st.error(f"LLM summarization failed: {exc}")
+
+                    if not llm_result:
+                        st.session_state["manual_form_submitting"] = False
+                        status_placeholder.empty()
+                        st.error("Could not generate summary and metadata; entry not saved.")
                     else:
-                        with st.expander("Generated metadata", expanded=True):
-                            st.write(f"**Language:** {language}")
-                            st.write(f"**Summary:** {summary_text or '(empty)'}")
-                            st.write(f"**Tags:** {', '.join(tags_list) if tags_list else '(none)'}")
-                        st.session_state["manual_entry_success"] = {
-                            "title": manual_title_clean,
-                            "url": normalized_manual_url,
-                        }
-                        st.session_state["manual_entry_defaults"] = {
-                            "title": "",
-                            "safe_title": "",
-                            "identifier": "",
-                            "markdown": "",
-                            "crawl_date": default_date,
-                            "page_type": "text",
-                            "no_upload": False,
-                        }
-                        rerun_app()
-                    finally:
-                        if conn:
-                            conn.close()
+                        summary_text = llm_result.get("summary", "")
+                        tags_value = llm_result.get("tags", [])
+                        if isinstance(tags_value, str):
+                            try:
+                                tags_value = json.loads(tags_value)
+                            except Exception:
+                                tags_value = [t.strip().strip("'\" ") for t in tags_value.strip("[]").split(",") if t.strip()]
+                        tags_list = tags_value if isinstance(tags_value, list) else []
+                        language = llm_result.get("detected_language") or "unknown"
+
+                        conn = None
+                        try:
+                            conn = get_connection()
+                            save_document_to_db(
+                                conn,
+                                normalized_manual_url,
+                                manual_title_clean,
+                                safe_title_manual,
+                                manual_crawl_date.isoformat() if hasattr(manual_crawl_date, "isoformat") else str(manual_crawl_date),
+                                language,
+                                summary_text,
+                                tags_list,
+                                manual_markdown_clean,
+                                compute_sha256(manual_markdown_clean),
+                                "Internal documents",
+                                manual_page_type,
+                                manual_no_upload,
+                            )
+                        except Exception as exc:
+                            st.session_state["manual_form_submitting"] = False
+                            status_placeholder.empty()
+                            st.error(f"Failed to save manual entry: {exc}")
+                        else:
+                            with st.expander("Generated metadata", expanded=True):
+                                st.write(f"**Language:** {language}")
+                                st.write(f"**Summary:** {summary_text or '(empty)'}")
+                                st.write(f"**Tags:** {', '.join(tags_list) if tags_list else '(none)'}")
+                            st.session_state["manual_entry_success"] = {
+                                "title": manual_title_clean,
+                                "url": normalized_manual_url,
+                            }
+                            st.session_state["manual_form_submitting"] = False
+                            status_placeholder.empty()
+                            st.session_state["manual_form_reset_pending"] = True
+                            rerun_app()
+                        finally:
+                            if conn:
+                                conn.close()
 
     with tab2:
         st.header("Scrape webpages")
