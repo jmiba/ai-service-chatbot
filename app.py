@@ -60,6 +60,64 @@ is_authenticated = st.session_state.get("authenticated", False)
 debug_one = render_sidebar(authenticated=is_authenticated, show_debug=True)
 
 BASE_DIR = Path(__file__).parent
+PROMPT_CONFIG_PATH = BASE_DIR / ".streamlit" / "prompts.json"
+
+
+def _load_prompt_config() -> dict:
+    """Load prompt configuration JSON and validate required sections."""
+
+    try:
+        raw_config = PROMPT_CONFIG_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        message = (
+            f"Prompt configuration not found at {PROMPT_CONFIG_PATH}. "
+            "Create the file and provide the required entries (see README)."
+        )
+        st.error(message)
+        raise RuntimeError(message) from exc
+
+    try:
+        data = json.loads(raw_config)
+    except json.JSONDecodeError as exc:
+        message = f"Prompt configuration {PROMPT_CONFIG_PATH} is not valid JSON: {exc}."
+        st.error(message)
+        raise RuntimeError(message) from exc
+
+    if not isinstance(data, dict):
+        message = f"Prompt configuration {PROMPT_CONFIG_PATH} must contain a top-level JSON object."
+        st.error(message)
+        raise RuntimeError(message)
+
+    default_prompt = data.get("default_chat_system_prompt")
+    if not isinstance(default_prompt, str) or not default_prompt.strip():
+        message = "Prompt configuration is missing 'default_chat_system_prompt'."
+        st.error(message)
+        raise RuntimeError(message)
+
+    evaluation_section = data.get("evaluation")
+    evaluation_prompt = None
+    if isinstance(evaluation_section, dict):
+        evaluation_prompt = evaluation_section.get("system")
+    if not isinstance(evaluation_prompt, str) or not evaluation_prompt.strip():
+        message = "Prompt configuration is missing 'evaluation.system'."
+        st.error(message)
+        raise RuntimeError(message)
+
+    return data
+
+
+PROMPTS_LOAD_ERROR = None
+try:
+    PROMPT_CONFIG = _load_prompt_config()
+except RuntimeError as exc:  # pragma: no cover - requires misconfiguration
+    PROMPTS_LOAD_ERROR = str(exc)
+    PROMPT_CONFIG = {}
+
+if PROMPTS_LOAD_ERROR:
+    st.stop()
+
+DEFAULT_PROMPT = PROMPT_CONFIG["default_chat_system_prompt"]
+EVALUATION_SYSTEM_TEMPLATE = PROMPT_CONFIG["evaluation"]["system"]
 
 # Avatare zentral definieren
 AVATAR_ASSISTANT = str(BASE_DIR / "assets/robot_2_24dp_4B77D1_FILL0_wght400_GRAD0_opsz24.svg")
@@ -1188,28 +1246,13 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     confidence = 0.0
     error_code = None
     try:
-        evaluation_system_prompt = """
-        You are an academic assistant evaluating the quality of a chatbot's response. Your task is to:
-        1. Classify the user's request type
-        2. Evaluate the assistant's response quality and accuracy
-        
-        Consider these factors in your evaluation:
-        - How well the user's question was answered
-        - Quality and relevance of sources cited ({citation_count} sources used)
-        - Completeness of the response
-        - Any potential inaccuracies or gaps
-        - Whether the response format is appropriate for the request type
-        
-        IMPORTANT: Return ONLY a valid JSON object with this exact structure:
-        {{
-            "request_classification": "one of: {allowed_topics}",
-            "confidence": 0.0-1.0,
-            "error_code": 0-3,
-            "evaluation_notes": "brief explanation"
-        }}
-        
-        Error codes: 0=perfect response, 1=minor issues, 2=significant gaps, 3=unable to answer properly
-        """.format(citation_count=len(citation_map), allowed_topics=", ".join(get_allowed_request_classifications()))
+        try:
+            evaluation_system_prompt = EVALUATION_SYSTEM_TEMPLATE.format(
+                citation_count=len(citation_map),
+                allowed_topics=", ".join(get_allowed_request_classifications()),
+            )
+        except KeyError as exc:
+            raise RuntimeError(f"Evaluation prompt template missing placeholder: {exc}") from exc
 
         # Get current LLM configuration from database
         llm_config = get_current_llm_config()
@@ -1317,12 +1360,6 @@ except KeyError:
     The app cannot function without an OpenAI API key.
     """)
     st.stop()
-
-PROMPT_PATH = BASE_DIR / ".streamlit/system_prompt.txt"
-
-with PROMPT_PATH.open("r", encoding="utf-8") as f:
-    DEFAULT_PROMPT = f.read()
-
 # Helper function to get current LLM configuration
 def get_current_llm_config():
     """Get current LLM settings from database with fallback to defaults"""

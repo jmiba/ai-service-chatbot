@@ -1,6 +1,7 @@
 import re
 from datetime import datetime
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
+from collections import defaultdict
 from bs4 import BeautifulSoup
 import requests
 from markdownify import markdownify as md
@@ -13,13 +14,67 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent.parent
 
 SCRAPE_SVG = (BASE_DIR / "assets" / "home_storage.svg").read_text()
-HEADERS = {"User-Agent": "Viadrina-Indexer/1.0 (+https://www.europa-uni.de/)"}
-admin_email = st.secrets["ADMIN_EMAIL"]
-HEADERS = {
-    "User-Agent": (
-        f"Mozilla/5.0 (compatible; Viadrina-Indexer/1.0; +mailto:{admin_email})"
-    )
-}
+PROMPT_CONFIG_PATH = BASE_DIR / ".streamlit" / "prompts.json"
+
+def load_summarize_prompts() -> tuple[str, str]:
+    """Load LLM prompts from config, raising actionable errors when misconfigured."""
+
+    try:
+        raw_config = PROMPT_CONFIG_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:  # pragma: no cover - requires misconfiguration
+        message = (
+            f"Prompt configuration not found at {PROMPT_CONFIG_PATH}. "
+            "Create the file and provide a 'summarize_and_tag' entry with 'system' and 'user' prompts."
+        )
+        st.error(message)
+        raise RuntimeError(message) from exc
+
+    try:
+        data = json.loads(raw_config)
+    except json.JSONDecodeError as exc:  # pragma: no cover - requires misconfiguration
+        message = f"Prompt configuration {PROMPT_CONFIG_PATH} is not valid JSON: {exc}."
+        st.error(message)
+        raise RuntimeError(message) from exc
+
+    if not isinstance(data, dict):  # pragma: no cover - requires misconfiguration
+        message = f"Prompt configuration {PROMPT_CONFIG_PATH} must contain a top-level JSON object."
+        st.error(message)
+        raise RuntimeError(message)
+
+    prompts = data.get("summarize_and_tag")
+    if not isinstance(prompts, dict):  # pragma: no cover - requires misconfiguration
+        message = "Prompt configuration is missing the 'summarize_and_tag' object."
+        st.error(message)
+        raise RuntimeError(message)
+
+    system_prompt = prompts.get("system")
+    user_prompt = prompts.get("user")
+    if not system_prompt or not user_prompt:  # pragma: no cover - requires misconfiguration
+        message = "Prompt configuration must define both 'system' and 'user' keys under 'summarize_and_tag'."
+        st.error(message)
+        raise RuntimeError(message)
+
+    return system_prompt, user_prompt
+
+
+PROMPT_LOAD_ERROR = None
+try:
+    SUMMARIZE_SYSTEM_PROMPT, SUMMARIZE_USER_TEMPLATE = load_summarize_prompts()
+except RuntimeError as exc:  # pragma: no cover - requires misconfiguration
+    PROMPT_LOAD_ERROR = str(exc)
+    SUMMARIZE_SYSTEM_PROMPT = ""
+    SUMMARIZE_USER_TEMPLATE = ""
+
+admin_email = st.secrets.get("ADMIN_EMAIL")
+if admin_email:
+    HEADERS = {
+        "User-Agent": (
+            f"Mozilla/5.0 (compatible; Viadrina-Indexer/1.0; +mailto:{admin_email})"
+        )
+    }
+else:
+    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Viadrina-Indexer/1.0)"}
+    st.warning("Set ADMIN_EMAIL in secrets.toml to advertise a contact address in the crawler header.")
 
 # -----------------------------
 # Auth / sidebar
@@ -37,6 +92,137 @@ base_path = None      # base path to restrict scraping to
 processed_pages_count = 0  # count of pages processed by LLM and saved to DB
 dry_run_llm_eligible_count = 0  # count of pages that would be LLM processed in dry run mode
 llm_analysis_results = []  # collect LLM analysis summaries for display in info box
+recordset_latest_urls = defaultdict(set)  # track URLs seen per recordset in the latest crawl
+
+
+def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
+    """Render crawl summary, logs, and results using stored session data."""
+
+    if show_log:
+        log_entries = summary.get("log") or []
+        st.markdown("##### 📟 Processing Log")
+        st.text_area(
+            label="",
+            value="\n".join(log_entries[-20:]) if log_entries else "No log entries recorded.",
+            height=300,
+            disabled=True,
+            label_visibility="collapsed",
+            key="scrape_saved_log",
+        )
+
+    if summary.get("error"):
+        st.error(f"Error during crawl: {summary['error']}")
+
+    st.markdown("### 📊 Crawl Summary")
+
+    visited = summary.get("visited", 0)
+    processed = summary.get("processed", 0)
+    dry_run_count = summary.get("dry_run_llm", 0)
+    max_budget = summary.get("max_urls_per_run", 0)
+    dry_run = summary.get("dry_run", False)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("URLs Visited", f"{visited}", help="Total number of URLs that were visited and processed")
+    with col2:
+        st.metric("Crawl Budget", f"{max_budget}", help="Maximum number of URLs allowed per crawl session")
+    with col3:
+        if dry_run:
+            st.metric("Would LLM Process", f"{dry_run_count}", help="Pages that would trigger LLM processing in a real run")
+        else:
+            st.metric("Pages Processed by LLM", f"{processed}",
+                      help="Number of pages processed by LLM and saved to the database")
+
+    if dry_run:
+        if dry_run_count > 0:
+            st.info(f"🧪 Dry run completed – {dry_run_count} pages would be processed by the LLM.")
+        else:
+            st.info("🧪 Dry run completed – no pages would be processed by the LLM (likely duplicates or filtered out).")
+    else:
+        if processed > 0:
+            st.success("Indexing completed. Pages are ready for vector store synchronization.")
+        else:
+            st.info("Indexing completed. No new pages were processed (all may have been skipped or already exist).")
+
+    stale_entries = summary.get("stale_candidates") or []
+    if stale_entries:
+        if dry_run:
+            st.info("Stale pages detected (dry run). They are not deleted in dry-run mode.")
+        else:
+            st.markdown("### 🧹 Review pages missing in the latest crawl")
+            st.caption("Select entries to remove from the knowledge base. Only URLs not seen in the current crawl are listed.")
+
+            display_rows = [
+                {
+                    "Recordset": entry["recordset"] or "(none)",
+                    "Title": entry.get("title") or "—",
+                    "URL": entry["url"],
+                    "Last Crawl": entry.get("crawl_date") or "—",
+                }
+                for entry in stale_entries
+            ]
+            st.dataframe(display_rows, hide_index=True, use_container_width=True)
+
+            option_map = {
+                f"{entry['recordset'] or '(none)'} • {entry.get('title') or entry['url']}": entry
+                for entry in stale_entries
+            }
+            selected_labels = st.multiselect(
+                "Select pages to delete",
+                options=list(option_map.keys()),
+                key="stale_select",
+            )
+
+            if st.button("Delete selected pages", type="secondary", disabled=not selected_labels, key="delete_stale"):
+                ids_to_delete = [option_map[label]["id"] for label in selected_labels]
+                try:
+                    conn = get_connection()
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM documents WHERE id = ANY(%s)", (ids_to_delete,))
+                    st.success(f"Deleted {len(ids_to_delete)} page(s) from the knowledge base.")
+                    remaining = [entry for entry in stale_entries if entry["id"] not in ids_to_delete]
+                    summary["stale_candidates"] = remaining
+                    if "scrape_results" in st.session_state:
+                        st.session_state.scrape_results["stale_candidates"] = remaining
+                        st.session_state.scrape_results = dict(st.session_state.scrape_results)
+                    st.rerun()
+                except Exception as delete_exc:
+                    st.error(f"Failed to delete selected pages: {delete_exc}")
+
+    llm_results = summary.get("llm_analysis") or []
+    if llm_results and not dry_run:
+        with st.expander(f"LLM Analysis Results ({len(llm_results)} pages)", expanded=True, icon=":material/insights:"):
+            for i, result in enumerate(llm_results, 1):
+                st.markdown(f"**{i}. {result['title']}**")
+                st.markdown(f"🔗 *{result['url']}*")
+                st.markdown(f"📝 **Summary:** {result['summary']}")
+                st.markdown(f"🌍 **Language:** {result['language']}")
+                st.markdown(f"🏷️ **Tags:** {', '.join(result['tags'])}")
+                st.markdown(f"📄 **Type:** {result['page_type']}")
+                if i < len(llm_results):
+                    st.divider()
+
+    frontier = summary.get("frontier") or []
+    if frontier:
+        with st.expander(f"View Processed URLs ({len(frontier)} total)", expanded=False, icon=":material/visibility:"):
+            from collections import defaultdict
+
+            url_groups = defaultdict(list)
+            for url in frontier[:1000]:
+                domain = urlparse(url).netloc
+                url_groups[domain].append(url)
+
+            for domain, urls in url_groups.items():
+                st.markdown(f"**{domain}** ({len(urls)} URLs)")
+                for url in urls[:10]:
+                    st.text(f"  • {url}")
+                if len(urls) > 10:
+                    st.text(f"  ... and {len(urls) - 10} more URLs")
+                st.markdown("---")
+
+            if len(frontier) > 1000:
+                st.info(f"Showing first 1000 URLs. Total processed: {len(frontier)}")
 
 # -----------------------------
 # URL Normalization Utilities
@@ -190,7 +376,7 @@ def summarize_and_tag_tooluse(markdown_content, log_callback=None, depth=0):
     Falls back to local model if secrets are not available.
     Includes retry logic for token limit errors.
     """
-    MAX_INPUT_CHARS = 3000  # Reduced from 4000 to give more room for output tokens
+    MAX_INPUT_CHARS = 6000  # Keep summaries lean for latency/token safety
     
     # Try with progressively smaller inputs if we hit token limits
     input_sizes = [MAX_INPUT_CHARS, 2000, 1500, 1000]
@@ -220,6 +406,12 @@ def _attempt_summarize_and_tag(markdown_content, log_callback=None, depth=0):
     Single attempt at summarizing and tagging content.
     Returns None if token limit is hit, allowing for retry with smaller input.
     """
+
+    if PROMPT_LOAD_ERROR:
+        if log_callback:
+            log_callback(f"{'  ' * depth}❌ {PROMPT_LOAD_ERROR}")
+        st.error(PROMPT_LOAD_ERROR)
+        raise RuntimeError(PROMPT_LOAD_ERROR)
     
     # Try to get OpenAI credentials from secrets
     try:
@@ -262,18 +454,15 @@ def _attempt_summarize_and_tag(markdown_content, log_callback=None, depth=0):
         }
     ]
     
+    try:
+        user_message = SUMMARIZE_USER_TEMPLATE.format(markdown_content=markdown_content)
+    except KeyError:
+        # Fallback in case the template itself contains stray braces
+        user_message = f"{SUMMARIZE_USER_TEMPLATE}\n\n{markdown_content}"
+
     messages = [
-        {"role": "system", "content":
-            "You summarize academic/institutional markdown, add tags, and detect language. "
-            "When detecting language, ignore this prompt and ONLY consider the markdown content. "
-            "Return 'detected_language' as a two-letter ISO 639-1 code (e.g. 'de' for German, 'en' for English, etc.). "
-            "If uncertain, return 'unknown'. Respond only using the provided tool."
-        },
-        {"role": "user", "content":
-            "Summarize the following markdown in two to three English sentences, suggest 3–7 relevant English tags, and detect the main language of the content. "
-            "IMPORTANT: Return 'detected_language' as a two-letter ISO 639-1 code based ONLY on the markdown content.\n\n"
-            f"{markdown_content}"  # Content is already truncated when passed to this function
-        }
+        {"role": "system", "content": SUMMARIZE_SYSTEM_PROMPT},
+        {"role": "user", "content": user_message},
     ]
     
     print(f"[LLM] Starting analysis with {len(markdown_content)} characters...")
@@ -292,7 +481,7 @@ def _attempt_summarize_and_tag(markdown_content, log_callback=None, depth=0):
                 tools=tools,
                 tool_choice="required",
                 # temperature removed - model only supports default value (1)
-                max_completion_tokens=2048  # Increased from 512 to handle longer content
+                max_completion_tokens=4096  # Increased from 512 to handle longer content
             )
             
             if log_callback:
@@ -332,9 +521,9 @@ def _attempt_summarize_and_tag(markdown_content, log_callback=None, depth=0):
                     log_callback(f"{'  ' * depth}❌ No valid tool_calls in OpenAI response")
                 return None
         else:
-            # Fall back to local model using requests
+            # Fall back to local/other model using requests
             if log_callback:
-                log_callback(f"{'  ' * depth}🤖 Using local model: {model}")
+                log_callback(f"{'  ' * depth}🤖 Using local/other model: {model}")
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
             data = {
                 "model": model,
@@ -479,6 +668,8 @@ def scrape(url,
 
     If dry_run=True: no LLM calls and no DB writes; collects 'frontier_seen' for UI display.
     """
+    global recordset_latest_urls
+
     # Normalize the start URL immediately (drop fragments, normalize query, etc.)
     norm_url = normalize_url(url, "", keep_query=keep_query_keys)
     if log_callback:
@@ -607,6 +798,9 @@ def scrape(url,
             norm_url = canon_norm
             visited_norm.add(norm_url)
             frontier_seen.append(norm_url)
+
+    recordset_key = (recordset or "").strip()
+    recordset_latest_urls[recordset_key].add(norm_url)
 
     # Content extraction
     main = extract_main_content(soup, depth)
@@ -1155,11 +1349,21 @@ def main():
 
         st.markdown("**Indexing will:** Discover  and crawl pages, process content with LLM, save to knowledge base, show real-time progress")
         
+        if 'scrape_log' not in st.session_state:
+            st.session_state.scrape_log = []
+        if 'scrape_results' not in st.session_state:
+            st.session_state.scrape_results = None
+        if 'scrape_running' not in st.session_state:
+            st.session_state.scrape_running = False
+
         # Main action button - more prominent
         if st.button("🚀 **START INDEXING ALL URLS**", type="primary", use_container_width=True):
             if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
                 st.error("❌ No valid URLs found in configurations. Please add at least one URL.")
                 st.stop()
+
+            st.session_state.scrape_running = True
+            st.session_state.scrape_results = None
             
             # Initialize log system
             if 'scrape_log' not in st.session_state:
@@ -1217,6 +1421,7 @@ def main():
             processed_pages_count = 0  # Reset processed pages counter
             dry_run_llm_eligible_count = 0  # Reset dry run LLM counter
             llm_analysis_results = []  # Reset LLM analysis results
+            recordset_latest_urls.clear()  # Reset per-recordset tracking
             add_log("✅ Visited sets, base path, and all counters cleared")
             update_log_display()
 
@@ -1257,12 +1462,13 @@ def main():
                 
                 for config in st.session_state.url_configs:
                     url = config["url"].strip()
-                    recordset = config["recordset"].strip()
+                    recordset = (config["recordset"] or "").strip()
                     depth = config["depth"]
                     exclude_paths = config["exclude_paths"]
                     include_lang_prefixes = config["include_lang_prefixes"]
                     if url:
                         current_config += 1
+                        recordset_latest_urls.setdefault(recordset, set())
                         
                         add_log(f"🔍 Starting config {current_config}/{total_configs}: {url}")
                         add_log(f"   📂 Recordset: {recordset}")
@@ -1328,84 +1534,74 @@ def main():
                 update_log_display()
                 
                 if not dry_run:
-                    st.success("Indexing completed.")
                     add_log("💾 Indexing completed - data saved to database")
                 else:
-                    st.success("Dry run completed. No DB writes or LLM calls were performed.")
                     add_log("🧪 Dry run completed - no database writes performed")
                 update_log_display()
+
+                stale_candidates = []
+                if not dry_run and conn:
+                    try:
+                        with conn.cursor() as stale_cur:
+                            for rs_key, urls in recordset_latest_urls.items():
+                                rs_value = rs_key  # already normalized to str
+                                stale_cur.execute(
+                                    "SELECT id, url, title, crawl_date FROM documents WHERE recordset = %s",
+                                    (rs_value,)
+                                )
+                                rows = stale_cur.fetchall()
+                                for doc_id, doc_url, doc_title, doc_crawl in rows:
+                                    if doc_url not in urls:
+                                        stale_candidates.append({
+                                            "id": doc_id,
+                                            "recordset": rs_value,
+                                            "url": doc_url,
+                                            "title": doc_title,
+                                            "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
+                                        })
+                    except Exception as stale_exc:
+                        add_log(f"⚠️ Could not compute stale documents: {stale_exc}")
+
+                summary_payload = {
+                    "dry_run": dry_run,
+                    "visited": len(visited_norm),
+                    "processed": processed_pages_count,
+                    "dry_run_llm": dry_run_llm_eligible_count,
+                    "max_urls_per_run": max_urls_per_run,
+                    "frontier": list(frontier_seen),
+                    "llm_analysis": list(llm_analysis_results),
+                    "log": list(st.session_state.scrape_log),
+                    "stale_candidates": stale_candidates,
+                }
+
+                render_crawl_summary(summary_payload, show_log=False)
+                st.session_state.scrape_results = summary_payload
             except Exception as e:
                 st.error(f"Error during crawl: {e}")
                 add_log(f"❌ ERROR during crawl: {e}", "ERROR")
                 update_log_display()
                 print(f"[CRAWL ERROR] {e}")
+                st.session_state.scrape_results = {
+                    "dry_run": dry_run,
+                    "error": str(e),
+                    "log": list(st.session_state.scrape_log),
+                    "visited": len(visited_norm),
+                    "processed": processed_pages_count,
+                    "dry_run_llm": dry_run_llm_eligible_count,
+                    "max_urls_per_run": max_urls_per_run,
+                    "frontier": list(frontier_seen),
+                    "llm_analysis": list(llm_analysis_results),
+                    "stale_candidates": [],
+                }
             finally:
                 if not dry_run and conn:
                     conn.close()
                     add_log("🔌 Database connection closed")
                     update_log_display()
+                st.session_state.scrape_running = False
 
-            # Show frontier results in the UI (Dry Run visibility; also useful for normal runs)
-            st.markdown("### 📊 Crawl Summary")
-            
-            # Create metrics columns for better display
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("URLs Visited", f"{len(visited_norm)}", help="Total number of URLs that were visited and processed")
-            with col2:
-                st.metric("Crawl Budget", f"{max_urls_per_run}", help="Maximum number of URLs allowed per crawl session")
-            with col3:
-                if not dry_run:
-                    st.metric("Pages Processed by LLM", f"{processed_pages_count}", 
-                            help="Number of pages that were processed by LLM and saved to database (waiting for vector sync)")
-                else:
-                    st.metric("Would LLM Process", f"{dry_run_llm_eligible_count}", 
-                            help="Number of pages that would be processed by LLM in a real run (excluding duplicates)")
-            
-            if not dry_run:
-                if processed_pages_count > 0:
-                    st.success(f"{processed_pages_count} pages are ready for vector store synchronization", icon=":material/check_circle:")
-                else:
-                    st.info("ℹNo new pages were processed (all pages may have been skipped or already exist)", icon=":material/info:")
-            else:
-                if dry_run_llm_eligible_count > 0:
-                    st.info(f"🧪 **Dry Run Results**: {dry_run_llm_eligible_count} pages would be processed by LLM in a real run")
-                else:
-                    st.info("🧪 **Dry Run Results**: No pages would be processed by LLM (all may be duplicates or filtered out)")
-            
-            # Display LLM Analysis Results
-            if llm_analysis_results and not dry_run:
-                with st.expander(f"LLM Analysis Results ({len(llm_analysis_results)} pages)", expanded=True, icon=":material/insights:"):
-                    for i, result in enumerate(llm_analysis_results, 1):
-                        st.markdown(f"**{i}. {result['title']}**")
-                        st.markdown(f"🔗 *{result['url']}*")
-                        st.markdown(f"📝 **Summary:** {result['summary']}")
-                        st.markdown(f"🌍 **Language:** {result['language']}")
-                        st.markdown(f"🏷️ **Tags:** {', '.join(result['tags'])}")
-                        st.markdown(f"📄 **Type:** {result['page_type']}")
-                        if i < len(llm_analysis_results):
-                            st.divider()        # Improved frontier display
-            if frontier_seen:
-                with st.expander(f"View Processed URLs ({len(frontier_seen)} total)", expanded=False, icon=":material/visibility:"):
-                    # Group URLs by domain for better readability
-                    from collections import defaultdict
-                    url_groups = defaultdict(list)
-                    for url in frontier_seen[:1000]:  # Limit to prevent performance issues
-                        domain = urlparse(url).netloc
-                        url_groups[domain].append(url)
-                    
-                    for domain, urls in url_groups.items():
-                        st.markdown(f"**{domain}** ({len(urls)} URLs)")
-                        # Show first 10 URLs for each domain
-                        display_urls = urls[:10]
-                    for url in display_urls:
-                        st.text(f"  • {url}")
-                    if len(urls) > 10:
-                        st.text(f"  ... and {len(urls) - 10} more URLs")
-                    st.markdown("---")
-                
-                if len(frontier_seen) > 1000:
-                    st.info(f"Showing first 1000 URLs. Total processed: {len(frontier_seen)}")
+        elif st.session_state.get('scrape_results'):
+            render_crawl_summary(st.session_state.scrape_results)
 
         # --- Show current knowledge base entries ---
         # Fetch entries for filters and display

@@ -141,7 +141,7 @@ ai-service-chatbot/
 ├── utils/              # DB and helper functions
 ├── css/, assets/       # UI assets
 ├── tests/              # Test suite
-└── .streamlit/         # secrets.toml, system_prompt.txt
+└── .streamlit/         # secrets.toml, prompts.json
 ```
 
 ## 🌐 Deployment (Streamlit Cloud)
