@@ -1,5 +1,5 @@
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 from collections import defaultdict
 from bs4 import BeautifulSoup
@@ -1229,7 +1229,7 @@ def main():
 """
         )
 
-        default_date = datetime.now(datetime.UTC).date()
+        default_date = datetime.now(timezone.utc).date()
         manual_form_defaults = {
             "manual_title": "",
             "manual_safe_title": "",
