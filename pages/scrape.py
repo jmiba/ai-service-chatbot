@@ -1892,6 +1892,12 @@ def main():
         st.header("Browse Knowledge Base")
         st.markdown("*View, search, and manage your indexed content*")
 
+        edit_success = st.session_state.pop("internal_edit_success", None)
+        if edit_success:
+            st.success(
+                f"Updated **{edit_success['title']}** (`{edit_success['url']}`) successfully."
+            )
+
         # Add summary of pages waiting for vector sync
         pending_vector_sync = len([entry for entry in entries if entry[10] is None and entry[12] is not True])
         excluded_needing_cleanup = len([entry for entry in entries if entry[10] is not None and entry[12] is True])
@@ -2009,11 +2015,20 @@ def main():
                     st.markdown(f"**{safe_title}.md** - {recordset} ({crawl_date}) (`{tags_str}`)\n\n**Summary:** {summary or '(no summary)'} (**Language:** {lang})")
                     if is_stale:
                         st.warning("This page was not encountered in the latest crawl.", icon=":material/report:")
-                    st.info(markdown or "(no content)")
-                
-                    col1, col2, col3, col4 = st.columns([1,2,2,1])
+
+                    is_editing_internal = recordset == "Internal documents" and st.session_state.get("internal_edit_id") == id
+                    if not is_editing_internal:
+                        st.info(markdown or "(no content)")
+
+                    col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
+                    with col1:
+                        if recordset == "Internal documents":
+                            edit_label = "Close" if is_editing_internal else "Edit"
+                            edit_icon = ":material/close:" if is_editing_internal else ":material/edit:"
+                            if st.button(edit_label, key=f"edit_toggle_{id}", icon=edit_icon, type="secondary"):
+                                st.session_state["internal_edit_id"] = None if is_editing_internal else id
+                                rerun_app()
                     with col2:
-                        # Toggle include/exclude from vector store depending on current state
                         toggle_label = (
                             f"Include Record {id} in Vector Store" if no_upload else f"Exclude Record {id} from Vector Store"
                         )
@@ -2029,10 +2044,10 @@ def main():
                                     st.success(f"Record {id} included in vector store.")
                                 else:
                                     st.success(f"Record {id} excluded from vector store.")
-                                st.rerun()
+                                rerun_app()
                             except Exception as e:
                                 st.error(f"Failed to update vector store inclusion for record {id}: {e}")
-                    with col3:    
+                    with col3:
                         if st.button(f"Delete Record {id} from Knowledge Base", key=f"delete_button_{id}", icon=":material/delete:", type="secondary"):
                             try:
                                 conn = get_connection()
@@ -2041,9 +2056,107 @@ def main():
                                     conn.commit()
                                 conn.close()
                                 st.success(f"Record {id} deleted successfully.")
-                                st.rerun()
+                                rerun_app()
                             except Exception as e:
                                 st.error(f"Failed to delete record {id}: {e}")
+
+                    if recordset == "Internal documents" and is_editing_internal:
+                        st.divider()
+                        st.markdown("**Edit Internal Document**")
+                        options = ["text", "links", "other"]
+                        default_page_type = page_type if page_type in options else "text"
+                        identifier_value = url.split("internal://internal-documents/")[-1] if url.startswith("internal://internal-documents/") else ""
+                        with st.form(f"edit_internal_{id}"):
+                            new_title = st.text_input("Title", value=title or "", key=f"edit_title_{id}")
+                            new_safe_title = st.text_input("Safe Title", value=safe_title or "", key=f"edit_safe_title_{id}")
+                            new_identifier = st.text_input(
+                                "Document identifier",
+                                value=identifier_value,
+                                help="Stored as internal://internal-documents/<identifier>. Leave blank to keep the current value.",
+                                key=f"edit_identifier_{id}"
+                            )
+                            new_markdown = st.text_area("Markdown", value=markdown or "", height=220, key=f"edit_markdown_{id}")
+                            new_summary = st.text_area("Summary", value=summary or "", height=120, key=f"edit_summary_{id}")
+                            new_tags_input = st.text_input("Tags (comma separated)", value=", ".join(tags or []), key=f"edit_tags_{id}")
+                            new_lang = st.text_input("Language", value=lang or "unknown", key=f"edit_lang_{id}")
+                            new_page_type = st.selectbox(
+                                "Page type",
+                                options=options,
+                                index=options.index(default_page_type),
+                                key=f"edit_page_type_{id}"
+                            )
+                            new_no_upload = st.checkbox(
+                                "Exclude from vector store",
+                                value=bool(no_upload),
+                                key=f"edit_no_upload_{id}"
+                            )
+                            submit_edit = st.form_submit_button("Save changes", type="primary")
+                            cancel_edit = st.form_submit_button("Cancel", type="secondary")
+
+                        if cancel_edit:
+                            st.session_state["internal_edit_id"] = None
+                            rerun_app()
+
+                        if submit_edit:
+                            if not new_title.strip():
+                                st.error("Title cannot be empty.")
+                            elif not new_markdown.strip():
+                                st.error("Markdown content cannot be empty.")
+                            else:
+                                identifier_final = new_identifier.strip() or identifier_value or re.sub(
+                                    r"_+",
+                                    "_",
+                                    "".join(c if c.isalnum() else "_" for c in (new_title.strip() or "untitled")),
+                                )[:64]
+                                new_url = f"internal://internal-documents/{identifier_final}"
+                                safe_title_final = new_safe_title.strip() or re.sub(
+                                    r"_+",
+                                    "_",
+                                    "".join(c if c.isalnum() else "_" for c in (new_title.strip() or "untitled")),
+                                )[:64]
+                                tags_list_new = [t.strip() for t in new_tags_input.split(",") if t.strip()]
+                                try:
+                                    conn = get_connection()
+                                    with conn:
+                                        with conn.cursor() as cur:
+                                            cur.execute(
+                                                """
+                                                UPDATE documents
+                                                SET url = %s,
+                                                    title = %s,
+                                                    safe_title = %s,
+                                                    summary = %s,
+                                                    tags = %s,
+                                                    markdown_content = %s,
+                                                    markdown_hash = %s,
+                                                    lang = %s,
+                                                    page_type = %s,
+                                                    no_upload = %s,
+                                                    updated_at = NOW()
+                                                WHERE id = %s
+                                                """,
+                                                (
+                                                    new_url,
+                                                    new_title.strip(),
+                                                    safe_title_final,
+                                                    new_summary.strip(),
+                                                    tags_list_new,
+                                                    new_markdown,
+                                                    compute_sha256(new_markdown),
+                                                    new_lang.strip() or "unknown",
+                                                    new_page_type,
+                                                    new_no_upload,
+                                                    id,
+                                                )
+                                            )
+                                    st.session_state["internal_edit_success"] = {
+                                        "title": new_title.strip(),
+                                        "url": new_url,
+                                    }
+                                    st.session_state["internal_edit_id"] = None
+                                    rerun_app()
+                                except Exception as exc:
+                                    st.error(f"Failed to update document: {exc}")
 
         except Exception as e:
             st.error(f"Failed to load entries: {e}")
