@@ -95,6 +95,91 @@ llm_analysis_results = []  # collect LLM analysis summaries for display in info 
 recordset_latest_urls = defaultdict(set)  # track URLs seen per recordset in the latest crawl
 
 
+def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
+    """Update `documents.is_stale` based on latest crawl results and return current stale entries."""
+    if conn is None:
+        return []
+
+    def _log(msg: str):
+        if log_callback:
+            log_callback(msg)
+
+    stale_candidates: list[dict] = []
+    try:
+        with conn.cursor() as cur:
+            if not dry_run:
+                for rs_key, urls in recordset_latest_urls.items():
+                    url_list = list(urls)
+                    cur.execute(
+                        "UPDATE documents SET is_stale = FALSE WHERE recordset = %s AND url = ANY(%s)",
+                        (rs_key, url_list),
+                    )
+                    cur.execute(
+                        "UPDATE documents SET is_stale = TRUE WHERE recordset = %s AND NOT (url = ANY(%s))",
+                        (rs_key, url_list),
+                    )
+                conn.commit()
+                cur.execute(
+                    "SELECT id, recordset, url, title, crawl_date FROM documents WHERE is_stale = TRUE ORDER BY updated_at DESC"
+                )
+                rows = cur.fetchall()
+                for doc_id, doc_recordset, doc_url, doc_title, doc_crawl in rows:
+                    stale_candidates.append(
+                        {
+                            "id": doc_id,
+                            "recordset": doc_recordset,
+                            "url": doc_url,
+                            "title": doc_title,
+                            "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
+                        }
+                    )
+            else:
+                seen_ids: set[int] = set()
+                for rs_key, urls in recordset_latest_urls.items():
+                    cur.execute(
+                        "SELECT id, url, title, crawl_date FROM documents WHERE recordset = %s",
+                        (rs_key,),
+                    )
+                    rows = cur.fetchall()
+                    for doc_id, doc_url, doc_title, doc_crawl in rows:
+                        if doc_url not in urls and doc_id not in seen_ids:
+                            stale_candidates.append(
+                                {
+                                    "id": doc_id,
+                                    "recordset": rs_key,
+                                    "url": doc_url,
+                                    "title": doc_title,
+                                    "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
+                                }
+                            )
+                            seen_ids.add(doc_id)
+                cur.execute(
+                    "SELECT id, recordset, url, title, crawl_date FROM documents WHERE is_stale = TRUE"
+                )
+                rows = cur.fetchall()
+                for doc_id, doc_recordset, doc_url, doc_title, doc_crawl in rows:
+                    if doc_id not in seen_ids:
+                        stale_candidates.append(
+                            {
+                                "id": doc_id,
+                                "recordset": doc_recordset,
+                                "url": doc_url,
+                                "title": doc_title,
+                                "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
+                            }
+                        )
+    except Exception as exc:
+        _log(f"⚠️ Could not compute stale documents: {exc}")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return []
+
+    _log(f"📦 Stale detection complete: {len(stale_candidates)} candidate(s)")
+    return stale_candidates
+
+
 def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
     """Render crawl summary, logs, and results using stored session data."""
 
@@ -102,7 +187,7 @@ def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
         log_entries = summary.get("log") or []
         st.markdown("##### 📟 Processing Log")
         st.text_area(
-            label="",
+            label="Processing log",
             value="\n".join(log_entries[-20:]) if log_entries else "No log entries recorded.",
             height=300,
             disabled=True,
@@ -120,6 +205,7 @@ def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
     dry_run_count = summary.get("dry_run_llm", 0)
     max_budget = summary.get("max_urls_per_run", 0)
     dry_run = summary.get("dry_run", False)
+    stale_count = len(summary.get("stale_candidates") or [])
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -132,6 +218,9 @@ def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
         else:
             st.metric("Pages Processed by LLM", f"{processed}",
                       help="Number of pages processed by LLM and saved to the database")
+
+    if stale_count > 0:
+        st.metric("Potentially Stale Pages", f"{stale_count}", help="Documents present in the knowledge base but not seen in this crawl")
 
     if dry_run:
         if dry_run_count > 0:
@@ -146,49 +235,54 @@ def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
 
     stale_entries = summary.get("stale_candidates") or []
     if stale_entries:
+        st.markdown("### 🧹 Review pages missing in the latest crawl")
         if dry_run:
             st.info("Stale pages detected (dry run). They are not deleted in dry-run mode.")
-        else:
-            st.markdown("### 🧹 Review pages missing in the latest crawl")
-            st.caption("Select entries to remove from the knowledge base. Only URLs not seen in the current crawl are listed.")
+        st.caption("Select entries to remove from the knowledge base. Only URLs not seen in the current crawl are listed.")
 
-            display_rows = [
-                {
-                    "Recordset": entry["recordset"] or "(none)",
-                    "Title": entry.get("title") or "—",
-                    "URL": entry["url"],
-                    "Last Crawl": entry.get("crawl_date") or "—",
-                }
-                for entry in stale_entries
-            ]
-            st.dataframe(display_rows, hide_index=True, use_container_width=True)
-
-            option_map = {
-                f"{entry['recordset'] or '(none)'} • {entry.get('title') or entry['url']}": entry
-                for entry in stale_entries
+        display_rows = [
+            {
+                "Recordset": entry.get("recordset") or "(none)",
+                "Title": entry.get("title") or "—",
+                "URL": entry.get("url"),
+                "Last Crawl": entry.get("crawl_date") or "—",
             }
-            selected_labels = st.multiselect(
-                "Select pages to delete",
-                options=list(option_map.keys()),
-                key="stale_select",
-            )
+            for entry in stale_entries
+        ]
+        st.dataframe(display_rows, hide_index=True, width="stretch")
 
-            if st.button("Delete selected pages", type="secondary", disabled=not selected_labels, key="delete_stale"):
-                ids_to_delete = [option_map[label]["id"] for label in selected_labels]
-                try:
-                    conn = get_connection()
-                    with conn:
-                        with conn.cursor() as cur:
-                            cur.execute("DELETE FROM documents WHERE id = ANY(%s)", (ids_to_delete,))
-                    st.success(f"Deleted {len(ids_to_delete)} page(s) from the knowledge base.")
-                    remaining = [entry for entry in stale_entries if entry["id"] not in ids_to_delete]
-                    summary["stale_candidates"] = remaining
-                    if "scrape_results" in st.session_state:
-                        st.session_state.scrape_results["stale_candidates"] = remaining
-                        st.session_state.scrape_results = dict(st.session_state.scrape_results)
-                    st.rerun()
-                except Exception as delete_exc:
-                    st.error(f"Failed to delete selected pages: {delete_exc}")
+        option_map = {
+            f"{entry.get('recordset') or '(none)'} • {entry.get('title') or entry.get('url')}": entry
+            for entry in stale_entries
+        }
+        selected_labels = st.multiselect(
+            "Select pages to delete",
+            options=list(option_map.keys()),
+            key="stale_select",
+            disabled=dry_run,
+        )
+
+        if st.button(
+            "Delete selected pages",
+            type="secondary",
+            disabled=dry_run or not selected_labels,
+            key="delete_stale",
+        ):
+            ids_to_delete = [option_map[label]["id"] for label in selected_labels]
+            try:
+                conn = get_connection()
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute("DELETE FROM documents WHERE id = ANY(%s)", (ids_to_delete,))
+                st.success(f"Deleted {len(ids_to_delete)} page(s) from the knowledge base.")
+                remaining = [entry for entry in stale_entries if entry["id"] not in ids_to_delete]
+                summary["stale_candidates"] = remaining
+                if "scrape_results" in st.session_state:
+                    st.session_state.scrape_results["stale_candidates"] = remaining
+                    st.session_state.scrape_results = dict(st.session_state.scrape_results)
+                st.rerun()
+            except Exception as delete_exc:
+                st.error(f"Failed to delete selected pages: {delete_exc}")
 
     llm_results = summary.get("llm_analysis") or []
     if llm_results and not dry_run:
@@ -328,12 +422,12 @@ def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary,
             INSERT INTO documents (
                 url, title, safe_title, crawl_date, lang, summary, tags,
                 markdown_content, markdown_hash, recordset, vector_file_id, old_file_id,
-                updated_at, page_type, no_upload
+                updated_at, page_type, no_upload, is_stale
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
-                NOW(), %s, %s
+                NOW(), %s, %s, FALSE
             )
             ON CONFLICT (url) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -349,7 +443,8 @@ def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary,
                 old_file_id = documents.vector_file_id,
                 updated_at = NOW(),
                 page_type = EXCLUDED.page_type,
-                no_upload = documents.no_upload
+                no_upload = documents.no_upload,
+                is_stale = FALSE
         """, (
             url, title, safe_title, crawl_date, lang, summary, tags,
             markdown_content, markdown_hash, recordset, vector_file_id, None,
@@ -376,7 +471,7 @@ def summarize_and_tag_tooluse(markdown_content, log_callback=None, depth=0):
     Falls back to local model if secrets are not available.
     Includes retry logic for token limit errors.
     """
-    MAX_INPUT_CHARS = 6000  # Keep summaries lean for latency/token safety
+    MAX_INPUT_CHARS = 10000  # Keep summaries lean for latency/token safety
     
     # Try with progressively smaller inputs if we hit token limits
     input_sizes = [MAX_INPUT_CHARS, 2000, 1500, 1000]
@@ -726,7 +821,10 @@ def scrape(url,
         ctype = head.headers.get("Content-Type", "")
         # Only trust HEAD to skip when URL clearly looks like a file (by extension)
         looks_like_file = re.search(
-            r'\.(pdf|docx?|xlsx?|pptx?|zip|rar|tar\.gz|7z|jpg|jpeg|png|gif|svg|mp4|webm)$',
+            r"\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z|tar(?:\.gz)?|tgz|gz|bz2|xz|"
+            r"jpg|jpeg|png|gif|svg|webp|tiff?|bmp|ico|heic|"
+            r"mp4|webm|mov|mkv|avi|mp3|m4a|wav|ogg|flac|"
+            r"exe|dmg|pkg|iso|apk|woff2?|ttf)$",
             urlparse(norm_url).path,
             re.I
         )
@@ -1357,7 +1455,7 @@ def main():
             st.session_state.scrape_running = False
 
         # Main action button - more prominent
-        if st.button("🚀 **START INDEXING ALL URLS**", type="primary", use_container_width=True):
+        if st.button("🚀 **START INDEXING ALL URLS**", type="primary", width="stretch"):
             if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
                 st.error("❌ No valid URLs found in configurations. Please add at least one URL.")
                 st.stop()
@@ -1398,7 +1496,7 @@ def main():
                     log_display.empty()
                     with log_display.container():
                         st.text_area(
-                            label="",
+                            label="Processing log",
                             value=log_text,
                             height=300,  # Fixed height prevents layout jumping
                             disabled=True,  # Read-only
@@ -1539,28 +1637,7 @@ def main():
                     add_log("🧪 Dry run completed - no database writes performed")
                 update_log_display()
 
-                stale_candidates = []
-                if not dry_run and conn:
-                    try:
-                        with conn.cursor() as stale_cur:
-                            for rs_key, urls in recordset_latest_urls.items():
-                                rs_value = rs_key  # already normalized to str
-                                stale_cur.execute(
-                                    "SELECT id, url, title, crawl_date FROM documents WHERE recordset = %s",
-                                    (rs_value,)
-                                )
-                                rows = stale_cur.fetchall()
-                                for doc_id, doc_url, doc_title, doc_crawl in rows:
-                                    if doc_url not in urls:
-                                        stale_candidates.append({
-                                            "id": doc_id,
-                                            "recordset": rs_value,
-                                            "url": doc_url,
-                                            "title": doc_title,
-                                            "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
-                                        })
-                    except Exception as stale_exc:
-                        add_log(f"⚠️ Could not compute stale documents: {stale_exc}")
+                stale_candidates = update_stale_documents(conn, dry_run=dry_run, log_callback=add_log)
 
                 summary_payload = {
                     "dry_run": dry_run,
@@ -1616,23 +1693,27 @@ def main():
         # Add summary of pages waiting for vector sync
         pending_vector_sync = len([entry for entry in entries if entry[10] is None and entry[12] is not True])
         excluded_needing_cleanup = len([entry for entry in entries if entry[10] is not None and entry[12] is True])
+        stale_documents_total = len([entry for entry in entries if len(entry) > 13 and entry[13]])
         
-        if pending_vector_sync > 0 and excluded_needing_cleanup > 0:
-            st.warning(
-                f"**{pending_vector_sync} page(s)** are waiting for vector store synchronization, "
-                f"and **{excluded_needing_cleanup} excluded page(s)** still have vector files that need cleanup.", icon=":material/warning:"
-            )
-        elif pending_vector_sync > 0:
-            st.warning(
+        summary_messages = []
+        if pending_vector_sync > 0:
+            summary_messages.append(
                 f"**{pending_vector_sync} page(s)** are waiting for vector store synchronization. "
-                f"These pages have been processed by LLM but haven't been vectorized yet.", icon=":material/warning:"
+                "These pages have been processed by LLM but haven't been vectorized yet."
             )
-        elif excluded_needing_cleanup > 0:
-            st.warning(
-                f"**{excluded_needing_cleanup} excluded page(s)** still have vector files and need cleanup (run Vectorize).", icon=":material/warning:"
+        if excluded_needing_cleanup > 0:
+            summary_messages.append(
+                f"**{excluded_needing_cleanup} excluded page(s)** still have vector files and need cleanup (run Vectorize)."
             )
+        if stale_documents_total > 0:
+            summary_messages.append(
+                f"**{stale_documents_total} page(s)** are currently marked as stale (missing in the latest crawl)."
+            )
+
+        if summary_messages:
+            st.warning("\n\n".join(summary_messages), icon=":material/warning:")
         else:
-            st.info("All pages are synchronized and no excluded files need cleanup.", icon=":material/check_circle:")
+            st.info("All pages are synchronized, no stale pages detected, and no excluded files need cleanup.", icon=":material/check_circle:")
 
         selected_recordset = st.selectbox(
             "Filter by recordset",
@@ -1657,6 +1738,12 @@ def main():
             index=0,
             help="Filter entries that are excluded from vectorization"
         )
+        selected_stale_status = st.selectbox(
+            "Filter by stale status",
+            options=["All", "Fresh", "Stale"],
+            index=0,
+            help="Filter entries based on whether they were missing in the latest crawl"
+        )
 
         filtered = entries
         if selected_recordset != "All":
@@ -1674,6 +1761,11 @@ def main():
                 filtered = [entry for entry in filtered if len(entry) > 12 and bool(entry[12])]
             else:  # Included
                 filtered = [entry for entry in filtered if len(entry) > 12 and not bool(entry[12])]
+        if selected_stale_status != "All":
+            if selected_stale_status == "Stale":
+                filtered = [entry for entry in filtered if len(entry) > 13 and bool(entry[13])]
+            else:
+                filtered = [entry for entry in filtered if len(entry) > 13 and not bool(entry[13])]
 
         try:
             if not filtered:
@@ -1685,8 +1777,9 @@ def main():
                 non_vectorized_total = len([entry for entry in entries if entry[10] is None and entry[12] is not True])
                 vectorized_total = len([entry for entry in entries if entry[10] is not None])
                 excluded = len([entry for entry in entries if len(entry) > 12 and bool(entry[12])])
+                stale_total = stale_documents_total
                 
-                col1, col2, col3, col4, col5 = st.columns(5)
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
                 with col1:
                     st.metric("Total Entries", total_entries, border=True)
                 with col2:
@@ -1697,18 +1790,23 @@ def main():
                     st.metric("Excluded from Vector Store", excluded, border=True)
                 with col5:
                     st.metric("Non-vectorized", non_vectorized_total, border=True)
+                with col6:
+                    st.metric("Stale Pages", stale_total, border=True)
                 
                 st.markdown("---")
             
-            for id, url, title, safe_title, crawl_date, lang, summary, tags, markdown, recordset, vector_file_id, page_type, no_upload in filtered:
+            for id, url, title, safe_title, crawl_date, lang, summary, tags, markdown, recordset, vector_file_id, page_type, no_upload, is_stale in filtered:
                 tags_str = " ".join(f"#{tag}" for tag in tags)
                 
                 # Create status indicators
                 vector_status = "✅ Vectorized" if vector_file_id and not no_upload == True else "⏳ Waiting for sync" if not vector_file_id and not no_upload == True else "🚫 Excluded"
                 vector_id_display = f"`{vector_file_id}`" if vector_file_id else "`None`"
+                stale_label = " 🟠 Stale" if is_stale else ""
                 
-                with st.expander(f"**{title or '(no title)'}** (ID {id}) - [{url}]({url}) - {vector_status} {vector_id_display} - **Page Type:** {page_type}"):
+                with st.expander(f"**{title or '(no title)'}** (ID {id}){stale_label} - [{url}]({url}) - {vector_status} {vector_id_display} - **Page Type:** {page_type}"):
                     st.markdown(f"**{safe_title}.md** - {recordset} ({crawl_date}) (`{tags_str}`)\n\n**Summary:** {summary or '(no summary)'} (**Language:** {lang})")
+                    if is_stale:
+                        st.warning("This page was not encountered in the latest crawl.", icon=":material/report:")
                     st.info(markdown or "(no content)")
                 
                     col1, col2, col3, col4 = st.columns([1,2,2,1])
@@ -1749,28 +1847,25 @@ def main():
             st.error(f"Failed to load entries: {e}")
         
         # --- Delete all entries button ---
-        st.markdown("### Delete All Records")
-        if selected_recordset != "All":
-            recordset_docs_count = len([entry for entry in filtered if entry[9] == selected_recordset])
-            if st.button(f"Delete All Records in '{selected_recordset}' ({recordset_docs_count} docs)", icon =":material/delete_forever:", type="secondary"):
+        st.markdown("### Delete Filtered Records")
+        ids_to_delete = [entry[0] for entry in filtered]
+        if not ids_to_delete:
+            st.info("No records match the current filters.")
+        else:
+            if st.button(
+                f"Delete {len(ids_to_delete)} filtered record(s)",
+                type="secondary",
+                icon=":material/delete_forever:",
+            ):
                 try:
                     conn = get_connection()
-                    with conn.cursor() as cur:
-                        cur.execute("DELETE FROM documents WHERE recordset = %s", (selected_recordset,))
-                        conn.commit()
-                    st.success(f"All documents in recordset '{selected_recordset}' have been deleted.")
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM documents WHERE id = ANY(%s)", (ids_to_delete,))
+                    st.success(f"Deleted {len(ids_to_delete)} record(s) matching the current filters.")
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Failed to delete documents in recordset '{selected_recordset}': {e}")
-        else:
-            total_docs_count = len(filtered)
-            if st.button(f"Delete All Records ({total_docs_count} docs)", type="secondary", icon=":material/delete_forever:"):
-                try:
-                    delete_docs()
-                    st.success("All documents have been deleted.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to delete documents: {e}")
+                    st.error(f"Failed to delete filtered documents: {e}")
 
 if authenticated:
     main()

@@ -99,6 +99,8 @@ def reset_scraper_state():
         scraper_mod.processed_pages_count = 0
         scraper_mod.dry_run_llm_eligible_count = 0
         scraper_mod.llm_analysis_results = []
+        if hasattr(scraper_mod, "recordset_latest_urls"):
+            scraper_mod.recordset_latest_urls.clear()
     except Exception as e:
         print(f"[WARN] Could not reset scraper state: {e}")
 
@@ -221,6 +223,27 @@ def main():
                 time.sleep(args.sleep)
 
         if conn:
+            stale_candidates = []
+            try:
+                stale_candidates = scraper_mod.update_stale_documents(
+                    conn,
+                    dry_run=args.dry_run,
+                    log_callback=log_cb,
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to compute stale documents: {e}")
+            else:
+                count = len(stale_candidates)
+                if count:
+                    print(f"[INFO] Marked {count} document(s) as stale.")
+                    preview = stale_candidates[:5]
+                    for entry in preview:
+                        rec = entry.get("recordset") or "(none)"
+                        print(f"[INFO] Stale candidate: recordset={rec} url={entry.get('url')}")
+                    if count > len(preview):
+                        print(f"[INFO] ...and {count - len(preview)} more.")
+                else:
+                    print("[INFO] No stale documents detected.")
             try:
                 conn.close()
             except Exception:

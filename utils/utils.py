@@ -144,14 +144,21 @@ def create_knowledge_base_table():
             old_file_id VARCHAR(255),
             updated_at TIMESTAMP DEFAULT NOW(),
             page_type VARCHAR(50),
-            no_upload BOOLEAN DEFAULT FALSE
+            no_upload BOOLEAN DEFAULT FALSE,
+            is_stale BOOLEAN DEFAULT FALSE
         );
     """)
-    
+
     # Step 2: Create a non-unique index on recordset for performance (optional but recommended)
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_documents_recordset
         ON documents(recordset);
+    """)
+
+    # Ensure new columns exist when upgrading
+    cursor.execute("""
+        ALTER TABLE documents
+        ADD COLUMN IF NOT EXISTS is_stale BOOLEAN DEFAULT FALSE
     """)
 
     conn.commit()
@@ -170,14 +177,14 @@ def get_kb_entries(limit=None):
     try:
         if limit is not None:
             cursor.execute("""
-                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type, no_upload
+                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type, no_upload, is_stale
                 FROM documents
                 ORDER BY updated_at DESC
                 LIMIT %s
             """, (limit,))
         else:
             cursor.execute("""
-                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type, no_upload
+                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type, no_upload, is_stale
                 FROM documents
                 ORDER BY updated_at DESC
             """)
@@ -447,7 +454,7 @@ def render_sidebar(authenticated=False, show_debug=False):
         type="secondary",
         help="Start a fresh session",
         icon=":material/add_comment:",
-        use_container_width=True,
+        width="stretch",
         key="sidebar_new_chat_button",
     ):
         st.session_state.messages = []

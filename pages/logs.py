@@ -421,7 +421,7 @@ if authenticated:
                 display_df['Share of interactions (%)'] = display_df['Share of interactions (%)'].round(1)
                 display_df['Share of sessions (%)'] = display_df['Share of sessions (%)'].round(1)
                 display_df['Interactions/session'] = display_df['Interactions/session'].round(2)
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                st.dataframe(display_df, width="stretch", hide_index=True)
             else:
                 st.info("No topic data available yet.")
         except Exception as e:
@@ -441,7 +441,7 @@ if authenticated:
                 }
                 for r in rows
             ]
-            st.dataframe(table, use_container_width=True, hide_index=True)
+            st.dataframe(table, width="stretch", hide_index=True)
 
             # Drill-down per session
             selected = st.selectbox(
@@ -566,6 +566,6 @@ if authenticated:
                 }
                 for m, v in sorted(model_agg.items(), key=lambda kv: kv[1]["cost"], reverse=True)
             ]
-            st.dataframe(table, use_container_width=True, hide_index=True)
+            st.dataframe(table, width="stretch", hide_index=True)
 
         st.info("Costs are estimated from stored usage and pricing in config/pricing.json.")
