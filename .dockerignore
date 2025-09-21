@@ -1,0 +1,29 @@
+# Git metadata
+.git
+.gitignore
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.so
+
+# Local environments
+.env
+.venv/
+venv/
+ENV/
+env/
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.devcontainer/
+
+# Tests & artifacts
+.pytest_cache/
+coverage/
+
+# Streamlit secrets (mount or supply via env instead)
+.streamlit/secrets.toml

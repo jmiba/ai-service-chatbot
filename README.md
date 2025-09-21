@@ -67,6 +67,27 @@ Run:
 streamlit run app.py
 ```
 
+### Docker (optional)
+
+You can ship the same app as a container while keeping Streamlit Cloud deployments unchanged.
+
+Build the image:
+
+```bash
+docker build -t viadrina-chatbot .
+```
+
+Run it locally (mount your secrets file or provide env vars):
+
+```bash
+docker run \
+  -p 8501:8501 \
+  -v $(pwd)/.streamlit/secrets.toml:/app/.streamlit/secrets.toml:ro \
+  viadrina-chatbot
+```
+
+The container uses the standard Streamlit port (`8501`) and obeys the same secrets format, so you can reuse the configuration you already prepared for Streamlit Cloud.
+
 ## 🔧 Configuration Notes
 
 ### Web Search (Admin → Filters)
