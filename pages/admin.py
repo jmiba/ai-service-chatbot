@@ -1,5 +1,23 @@
 import streamlit as st
-from utils import get_connection, get_latest_prompt, admin_authentication, render_sidebar, create_llm_settings_table, save_llm_settings, get_llm_settings, get_available_openai_models, supports_reasoning_effort, get_supported_verbosity_options, create_filter_settings_table, get_filter_settings, save_filter_settings, create_request_classifications_table, get_request_classifications, save_request_classifications
+from utils import (
+    get_connection,
+    get_latest_prompt,
+    admin_authentication,
+    render_sidebar,
+    create_llm_settings_table,
+    save_llm_settings,
+    get_llm_settings,
+    get_available_openai_models,
+    supports_reasoning_effort,
+    get_supported_verbosity_options,
+    create_filter_settings_table,
+    get_filter_settings,
+    save_filter_settings,
+    create_request_classifications_table,
+    get_request_classifications,
+    save_request_classifications,
+    create_prompt_versions_table,
+)
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.parent
@@ -9,31 +27,11 @@ SETTINGS_SVG = (BASE_DIR / "assets" / "settings.svg").read_text()
 # Must be the first Streamlit call
 st.set_page_config(page_title="LLM & API Settings", layout="wide")
 
-# Initialize LLM settings table
-def _ensure_prompt_versions_table():
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-        # Minimal, portable-ish schema without PK (sufficient for history listing)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS prompt_versions (
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                prompt TEXT NOT NULL,
-                edited_by VARCHAR(255),
-                note TEXT
-            )
-        """)
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        st.error(f"Error ensuring prompt_versions table: {e}")
-
 try:
+    create_prompt_versions_table()
     create_llm_settings_table()
     create_filter_settings_table()
     create_request_classifications_table()
-    _ensure_prompt_versions_table()
 except Exception as e:
     st.error(f"Error initializing settings tables: {e}")
 
@@ -370,4 +368,3 @@ if authenticated:
         # Reset button outside the form
         if st.button("Reset to Defaults", icon=":material/cached:",):
             st.rerun()
-

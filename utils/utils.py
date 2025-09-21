@@ -162,83 +162,8 @@ def get_kb_entries(limit=None):
 
 # Function to create the log_table if it doesn't exist   
 def create_log_table():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS log_table (
-            id SERIAL PRIMARY KEY,
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            session_id VARCHAR(36),
-            user_input TEXT NOT NULL,
-            assistant_response TEXT NOT NULL,
-            error_code VARCHAR(10),
-            citation_count INTEGER DEFAULT 0,
-            citations JSONB,
-            confidence DECIMAL(3,2) DEFAULT 0.0,
-            request_classification VARCHAR(50),
-            evaluation_notes TEXT,
-            -- New usage/cost/model fields
-            model VARCHAR(100),
-            usage_input_tokens INTEGER,
-            usage_output_tokens INTEGER,
-            usage_total_tokens INTEGER,
-            usage_reasoning_tokens INTEGER,
-            api_cost_usd NUMERIC(12,6),
-            -- Latency of main API call in milliseconds
-            response_time_ms INTEGER
-        );
-    """)
-    
-    # Add new columns to existing table if they don't exist
-    cursor.execute(
-        """
-        DO $$ 
-        BEGIN
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS confidence DECIMAL(3,2) DEFAULT 0.0;
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS request_classification VARCHAR(50);
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS evaluation_notes TEXT;
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS model VARCHAR(100);
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS usage_input_tokens INTEGER;
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS usage_output_tokens INTEGER;
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS usage_total_tokens INTEGER;
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS usage_reasoning_tokens INTEGER;
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS api_cost_usd NUMERIC(12,6);
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN
-                ALTER TABLE log_table ADD COLUMN IF NOT EXISTS response_time_ms INTEGER;
-            EXCEPTION WHEN duplicate_column THEN NULL; END;
-        END $$;
-        """
-    )
-    
-    # Create index on session_id for efficient conversation queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_log_table_session_id ON log_table(session_id);
-    """)
-    
-    conn.commit()
-    cursor.close()
-    conn.close()
+    """Ensure log_table schema migrations have run."""
+    run_migrations(get_connection)
 
 def check_log_table_schema():
     """
@@ -296,39 +221,12 @@ def force_add_session_id_column():
     
 # Function to create the prompt_versions table if it doesn't exist
 def create_prompt_versions_table():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS prompt_versions (
-            id SERIAL PRIMARY KEY,
-            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            prompt TEXT NOT NULL,
-            edited_by TEXT,
-            note TEXT
-        );
-    """)
-    conn.commit()
-    cursor.close()
-    conn.close()
+    """Ensure prompt_versions table exists via migrations."""
+    run_migrations(get_connection)
 
 def create_url_configs_table():
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS url_configs (
-            id SERIAL PRIMARY KEY,
-            url TEXT NOT NULL,
-            recordset TEXT NOT NULL DEFAULT '',
-            depth INTEGER NOT NULL DEFAULT 2,
-            exclude_paths TEXT[] DEFAULT ARRAY['/en/', '/pl/', '/_ablage-alte-www/', '/site-euv/', '/site-zwe-ikm/'],
-            include_lang_prefixes TEXT[] DEFAULT ARRAY['/de/'],
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-    """)
-    conn.commit()
-    cursor.close()
-    conn.close()
+    """Ensure url_configs table exists via migrations."""
+    run_migrations(get_connection)
 
 # Function to create an initial system prompt
 def initialize_default_prompt_if_empty(default_prompt, edited_by="system"):
@@ -669,20 +567,9 @@ def get_available_openai_models():
 
 def create_llm_settings_table():
     """Create table for storing LLM configuration settings (future-ready with reasoning effort and verbosity)"""
+    run_migrations(get_connection)
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS llm_settings (
-            id SERIAL PRIMARY KEY,
-            model VARCHAR(100) NOT NULL DEFAULT 'gpt-4o-mini',
-            parallel_tool_calls BOOLEAN DEFAULT TRUE,
-            reasoning_effort VARCHAR(20) DEFAULT 'medium',
-            text_verbosity VARCHAR(20) DEFAULT 'medium',
-            updated_by VARCHAR(100),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-        );
-    """)
-    
     # Insert default settings if table is empty
     cursor.execute("SELECT COUNT(*) FROM llm_settings")
     if cursor.fetchone()[0] == 0:
@@ -770,44 +657,9 @@ def get_llm_settings():
 # Filter Settings Management Functions
 def create_filter_settings_table():
     """Create table for storing web search filter settings (locale, domains, user_location, enable flag)."""
+    run_migrations(get_connection)
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS filter_settings (
-            id SERIAL PRIMARY KEY,
-            web_search_enabled BOOLEAN DEFAULT TRUE,
-            web_locale TEXT DEFAULT 'de-DE',
-            web_domains TEXT[] DEFAULT ARRAY[]::TEXT[],
-            web_domains_mode VARCHAR(16) DEFAULT 'include',
-            web_userloc_type TEXT DEFAULT 'approximate',
-            web_userloc_country TEXT,
-            web_userloc_city TEXT,
-            web_userloc_region TEXT,
-            web_userloc_timezone TEXT,
-            updated_by VARCHAR(100),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-        );
-        """
-    )
-    # migrate columns if upgrading from older schema
-    cursor.execute(
-        """
-        DO $$ BEGIN
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_search_enabled BOOLEAN DEFAULT TRUE; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_locale TEXT DEFAULT 'de-DE'; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_domains TEXT[] DEFAULT ARRAY[]::TEXT[]; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_domains_mode VARCHAR(16) DEFAULT 'include'; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_type TEXT DEFAULT 'approximate'; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_country TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_city TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_region TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS web_userloc_timezone TEXT; EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS updated_by VARCHAR(100); EXCEPTION WHEN duplicate_column THEN NULL; END;
-            BEGIN ALTER TABLE filter_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW(); EXCEPTION WHEN duplicate_column THEN NULL; END;
-        END $$;
-        """
-    )
     cursor.execute("SELECT COUNT(*) FROM filter_settings")
     if cursor.fetchone()[0] == 0:
         cursor.execute(
@@ -937,18 +789,9 @@ DEFAULT_REQUEST_CLASSIFICATIONS = [
 
 def create_request_classifications_table():
     """Create table to store request classification categories as a single TEXT[] row."""
+    run_migrations(get_connection)
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS request_classifications (
-            id SERIAL PRIMARY KEY,
-            categories TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-            updated_by TEXT,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """
-    )
     # Seed defaults if empty
     cur.execute("SELECT COUNT(*) FROM request_classifications")
     if cur.fetchone()[0] == 0:
@@ -999,17 +842,6 @@ def save_request_classifications(categories, updated_by='admin'):
 
     conn = get_connection()
     cur = conn.cursor()
-    # Ensure table exists
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS request_classifications (
-            id SERIAL PRIMARY KEY,
-            categories TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-            updated_by TEXT,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        """
-    )
     # If a row exists, update it; else insert
     cur.execute("SELECT id FROM request_classifications ORDER BY id ASC LIMIT 1")
     row = cur.fetchone()

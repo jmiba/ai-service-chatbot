@@ -10,7 +10,7 @@ import uuid
 
 # ---- utilities ----
 from utils import (
-    get_connection, create_prompt_versions_table, create_log_table,
+    get_connection,
     initialize_default_prompt_if_empty, get_latest_prompt, render_sidebar,
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
     supports_reasoning_effort, get_kb_entries, estimate_cost_usd,
@@ -1393,9 +1393,7 @@ try:
     database_available = create_database_if_not_exists()
     if database_available:
         create_knowledge_base_table()
-        create_prompt_versions_table()
         initialize_default_prompt_if_empty(DEFAULT_PROMPT)
-        create_log_table()
         create_llm_settings_table()  # Initialize LLM settings table
         create_request_classifications_table()  # Initialize request classifications
         create_filter_settings_table()  # Initialize filter settings table

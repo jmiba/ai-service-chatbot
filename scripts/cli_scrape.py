@@ -158,14 +158,6 @@ def main():
     try:
         lock_conn = get_connection()
         with lock_conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS job_locks (
-                    name TEXT PRIMARY KEY,
-                    acquired_at TIMESTAMPTZ DEFAULT NOW()
-                )
-                """
-            )
             lock_name = "scrape_job"
             # Cleanup stale lock older than 6h
             cur.execute("DELETE FROM job_locks WHERE name=%s AND acquired_at < NOW() - INTERVAL '6 hours'", (lock_name,))
