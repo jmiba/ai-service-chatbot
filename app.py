@@ -1490,19 +1490,26 @@ except Exception as e:
 berlin_time = datetime.now(ZoneInfo("Europe/Berlin"))
 formatted_time = berlin_time.strftime("%A, %Y-%m-%d %H:%M:%S %Z")
 
+def _format_prompt(template: str, *, datetime: str, doc_count: int | None = None) -> str:
+    safe_values = {"datetime": datetime}
+    if "{doc_count" in template:
+        safe_values["doc_count"] = doc_count if doc_count is not None else 0
+    return template.format(**safe_values)
+
+
 if database_available:
     try:
         # Get current document count and latest prompt from database 
         all_entries = get_kb_entries()
         doc_count = len(all_entries)
         current_prompt, _ = get_latest_prompt()
-        CUSTOM_INSTRUCTIONS = current_prompt.format(datetime=formatted_time, doc_count=doc_count)
+        CUSTOM_INSTRUCTIONS = _format_prompt(current_prompt, datetime=formatted_time, doc_count=doc_count)
     except Exception as e:
         st.warning("Using default prompt due to database connection issues. Error: " + str(e))
-        CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
+        CUSTOM_INSTRUCTIONS = _format_prompt(DEFAULT_PROMPT, datetime=formatted_time)
 else:
     # Use default prompt when database is not available
-    CUSTOM_INSTRUCTIONS = DEFAULT_PROMPT.format(datetime=formatted_time)
+    CUSTOM_INSTRUCTIONS = _format_prompt(DEFAULT_PROMPT, datetime=formatted_time)
 
 load_css("css/styles.css")
 
