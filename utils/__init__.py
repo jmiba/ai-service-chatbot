@@ -21,6 +21,7 @@ from .utils import (
     create_llm_settings_table,
     save_llm_settings,
     get_llm_settings,
+    get_document_by_identifier,
     get_available_openai_models,
     supports_reasoning_effort,
     get_supported_verbosity_options,

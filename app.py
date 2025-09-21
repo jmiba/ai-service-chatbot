@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import json, re, html
+from urllib.parse import quote_plus
 import psycopg2
 from functools import lru_cache
 import uuid
@@ -24,6 +25,7 @@ from utils import (
 # -------------------------------------
 
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
+
 
 # -------------------------------------
 def _redact_ids(obj_str: str) -> str:
@@ -173,15 +175,27 @@ def log_interaction(user_input, assistant_response, session_id=None, citation_js
         print(f"❌ DB logging error: {e}")
 
 def get_urls_and_titles_by_file_ids(conn, file_ids):
-    """Returns {file_id: (url, title, summary, recordset)}"""
+    """Return metadata keyed by file_id for citation rendering."""
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT vector_file_id, url, title, summary, recordset
+        cur.execute(
+            """
+            SELECT vector_file_id, id, url, title, summary, recordset
             FROM documents
             WHERE vector_file_id = ANY(%s);
-        """, (file_ids,))
+            """,
+            (file_ids,)
+        )
         rows = cur.fetchall()
-        return {row[0]: (row[1], row[2], row[3], row[4]) for row in rows}
+        return {
+            row[0]: {
+                "doc_id": row[1],
+                "url": row[2],
+                "title": row[3],
+                "summary": row[4],
+                "recordset": row[5],
+            }
+            for row in rows
+        }
 
 # ---------- Cached file metadata lookups ----------
 @lru_cache(maxsize=1024)
@@ -377,7 +391,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
     file_data = {}
     if file_ids:
         conn = get_connection()
-        file_data = get_urls_and_titles_by_file_ids(conn, file_ids)  # {file_id: (url, title, summary, recordset)}
+        file_data = get_urls_and_titles_by_file_ids(conn, file_ids)
 
     # Build map and placements in order of appearance
     i = 1
@@ -386,7 +400,12 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
             file_id = n["file_id"]
             filename = n["filename"] or _cached_filename(file_id)
             idx = max(0, min(len(full_text), n["index"]))  # clamp
-            url, title, summary, recordset = file_data.get(file_id, (None, None, None, None))
+            file_info = file_data.get(file_id, {})
+            url = file_info.get("url")
+            title = file_info.get("title")
+            summary = file_info.get("summary")
+            recordset = file_info.get("recordset")
+            doc_id = file_info.get("doc_id")
             if not title:
                 title = filename.rsplit(".", 1)[0]
             clean_title = html.escape(re.sub(r"^\d+_", "", title).replace("_", " "))
@@ -399,6 +418,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
                 "title": clean_title,
                 "summary": summary,
                 "recordset": recordset,
+                "doc_id": doc_id,
             }
             placements.append((idx, i))
             i += 1
@@ -491,15 +511,30 @@ def render_sources_list(citation_map):
             is_internal_doc = True
 
         # Link rendering (keep url_with_tooltip behavior as-is unless internal document)
+        safe_title = html.escape(title)
         if url and not is_internal_doc:
-            safe_title = html.escape(title)
             if summary:
                 url_with_tooltip = f'<a href="{url}" title="{summary}" target="_blank" rel="noopener noreferrer">{safe_title}</a>'
                 link_part = url_with_tooltip
             else:
                 link_part = f"[{safe_title}]({url})"
+        elif is_internal_doc:
+            target_id = c.get("doc_id") or c.get("file_id")
+            if target_id:
+                param_name = "doc_id" if c.get("doc_id") else "file_id"
+                base_path = st.get_option("server.baseUrlPath") or ""
+                if base_path and not base_path.startswith("/"):
+                    base_path = "/" + base_path
+                viewer_path = "document_viewer"
+                viewer_url = f"{base_path}/{viewer_path}?{param_name}={quote_plus(str(target_id))}"
+                link_part = (
+                    f'<a href="{viewer_url}" title="{summary}" target="doc-viewer" rel="noopener noreferrer">'
+                    f"{safe_title}</a>"
+                )
+            else:
+                link_part = safe_title
         else:
-            link_part = html.escape(title)
+            link_part = safe_title
 
         icon_html = _icon_for_source(c.get("source"))
 

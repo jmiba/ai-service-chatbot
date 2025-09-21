@@ -160,6 +160,54 @@ def get_kb_entries(limit=None):
         cursor.close()
         conn.close()
 
+
+def get_document_by_identifier(*, doc_id: int | None = None, file_id: str | None = None):
+    """Fetch a single document row by numeric id or vector/legacy file id."""
+    if doc_id is None and not file_id:
+        return None
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if doc_id is not None:
+            cursor.execute(
+                """
+                SELECT id, title, url, summary, tags, markdown_content, recordset, updated_at
+                FROM documents
+                WHERE id = %s
+                LIMIT 1
+                """,
+                (doc_id,),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, title, url, summary, tags, markdown_content, recordset, updated_at
+                FROM documents
+                WHERE vector_file_id = %s OR old_file_id = %s
+                LIMIT 1
+                """,
+                (file_id, file_id),
+            )
+
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        return {
+            "id": row[0],
+            "title": row[1] or "Untitled Document",
+            "url": row[2],
+            "summary": row[3],
+            "tags": row[4] or [],
+            "markdown": row[5],
+            "recordset": row[6],
+            "updated_at": row[7],
+        }
+    finally:
+        cursor.close()
+        conn.close()
+
 # Function to create the log_table if it doesn't exist   
 def create_log_table():
     """Ensure log_table schema migrations have run."""
