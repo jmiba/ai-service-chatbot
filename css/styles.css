@@ -34,23 +34,6 @@
     display: block;
 }
 
-[data-testid="stSidebar"] button[title="Start a fresh session"] {
-    background: transparent !important;
-    border: none !important;
-    color: #3F4C7B !important;
-    padding: 0 !important;
-    min-height: 0 !important;
-    box-shadow: none !important;
-    justify-content: flex-start;
-    gap: .4rem;
-}
-
-[data-testid="stSidebar"] button[title="Start a fresh session"]:hover,
-[data-testid="stSidebar"] button[title="Start a fresh session"]:focus {
-    color: #253056 !important;
-    text-decoration: underline;
-}
-
 #special-hr hr {
   margin-top: -20px !important;
 }
