@@ -10,11 +10,13 @@ Try it: https://viadrina.streamlit.app
 
 ## ✨ Highlights
 
-- Intelligent Q&A (multilingual) with streaming responses and status updates
-- RAG with OpenAI File Search (vector store) and structured citations
-- Web search tool with admin-controlled allow-list and user location
-- Admin dashboard: LLM settings, prompt versioning, request-class categories, filters
-- Session analytics and detailed logging (PostgreSQL)
+- **Multilingual chat assistant** with streaming Responses API output, status updates, and resilient error handling.
+- **Retrieval-Augmented Generation** backed by the documents knowledge base (PostgreSQL + OpenAI File Search) with inline citations.
+- **One-click document viewer** that opens cited internal markdown in a dedicated Streamlit tab (no more losing context).
+- **Web search tooling** with admin-managed allow lists, locale/user-location overrides, and per-request cost estimates.
+- **Admin control center** covering prompt versioning, LLM settings, request classifications, web search filters, and knowledge-base maintenance.
+- **Content ingestion pipeline** with scraping, manual metadata editing, SHA hashing, and optional vector store sync.
+- **Observability out of the box**: detailed interaction logging, usage/cost tracking, request analytics, and job locking.
 
 ## 🆕 What’s New (recent changes)
 
@@ -23,6 +25,7 @@ Try it: https://viadrina.streamlit.app
   - User Location: type (approximate/precise), country, city, region (optional), timezone (optional)
   - Note: The API does not support exclude-only lists or a locale filter
 - Request Classifications are now DB-backed and editable in Admin → Request Classes
+- Internal citations now open in a dedicated `/document_viewer` tab so staff can inspect markdown sources without leaving the chat
 - Sidebar "New chat" button directly beneath "Chat Assistant"
 - Client-managed conversation context retained for predictability (see Context section)
 
@@ -118,6 +121,7 @@ If you want to switch to OpenAI-managed conversations later:
 
 - Streaming responses with readable statuses ("Searching the web…", etc.)
 - RAG with File Search: vector store-backed citations with hover tooltips
+- Dedicated `document_viewer` page for browsing cited markdown with summaries, tags, and back-link
 - Admin: scraping, vectorization, prompt versioning, filters, logs/analytics
 - Session tracking: UUID-based sessions with costs/usage/latency logging
 - Robust error handling and graceful degradation without DB
