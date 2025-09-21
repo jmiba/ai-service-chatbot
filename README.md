@@ -25,7 +25,7 @@ Try it: https://viadrina.streamlit.app
   - User Location: type (approximate/precise), country, city, region (optional), timezone (optional)
   - Note: The API does not support exclude-only lists or a locale filter
 - Request Classifications are now DB-backed and editable in Admin → Request Classes
-- Internal citations now open in a dedicated `/document_viewer` tab so staff can inspect markdown sources without leaving the chat
+- Internal citations now open in a dedicated `/document_viewer` tab so users can view internal knowledge base sources
 - Sidebar "New chat" button directly beneath "Chat Assistant"
 - Client-managed conversation context retained for predictability (see Context section)
 
