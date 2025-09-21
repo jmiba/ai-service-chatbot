@@ -546,7 +546,7 @@ safe_title: "{safe_title or ''}"
 
 
 if HAS_STREAMLIT_CONTEXT:
-    authenticated = admin_authentication()
+    authenticated = admin_authentication(return_to="/pages/vectorize")
     render_sidebar(authenticated)
 
     # -----------------------------

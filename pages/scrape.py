@@ -79,7 +79,7 @@ else:
 # -----------------------------
 # Auth / sidebar
 # -----------------------------
-authenticated = admin_authentication()
+authenticated = admin_authentication(return_to="/pages/scrape")
 render_sidebar(authenticated)
 
 # -----------------------------

@@ -37,7 +37,7 @@ def fmt_dt(value, fmt="%Y-%m-%d %H:%M:%S") -> str:
     except Exception:
         return "—"
 
-authenticated = admin_authentication()
+authenticated = admin_authentication(return_to="/pages/logs")
 render_sidebar(authenticated)
 
 st.set_page_config(page_title="Logging & Analytics", layout="wide")

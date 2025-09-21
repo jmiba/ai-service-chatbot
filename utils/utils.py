@@ -7,6 +7,15 @@ from functools import lru_cache
 import uuid
 
 from .db_migrations import run_migrations
+from .saml import (
+    allow_password_fallback,
+    build_saml_login_url,
+    ensure_saml_routes_registered,
+    get_default_next_path,
+    get_saml_allowlist,
+    is_saml_configured,
+    pop_saml_token,
+)
 
 BASE_DIR = Path(__file__).parent.parent
 
@@ -322,33 +331,121 @@ def get_latest_prompt():
     else:
         return "", ""
 
-def admin_authentication():
+def _query_params_to_dict() -> dict:
+    try:
+        qp = st.query_params  # type: ignore[attr-defined]
+        if hasattr(qp, "to_dict"):
+            return qp.to_dict()  # type: ignore[no-any-return]
+        return dict(qp)
+    except Exception:
+        try:
+            return st.experimental_get_query_params()
+        except Exception:
+            return {}
+
+
+def _remove_query_params(keys: list[str]) -> None:
+    try:
+        qp = st.query_params  # type: ignore[attr-defined]
+        for key in keys:
+            try:
+                del qp[key]
+            except Exception:
+                pass
+        return
+    except Exception:
+        pass
+
+    try:
+        current = st.experimental_get_query_params()
+        filtered = {k: v for k, v in current.items() if k not in keys}
+        st.experimental_set_query_params(**filtered)
+    except Exception:
+        pass
+
+
+def _saml_user_allowed(payload: dict) -> bool:
+    allowlist = get_saml_allowlist()
+    if not allowlist:
+        return True
+    candidate = (payload.get("email") or "").strip().lower()
+    return bool(candidate and candidate in allowlist)
+
+
+def admin_authentication(return_to: str | None = None):
     """
-    Authenticates the admin based on a password in st.secrets.
-    Returns True if authenticated, False otherwise.
+    Authenticate admin users via SAML SSO (when available) or fallback password.
     """
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
-    if not st.session_state.authenticated:
-        #st.title("Admin Login")
-        st.markdown(
-            f"""
-            <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
-                {LOGIN_SVG}
-                Admin Login
-            </h1>
-            """,
-            unsafe_allow_html=True
-        )
-        password = st.text_input("Admin Password", type="password")
-        if password == st.secrets["ADMIN_PASSWORD"]:
-            st.session_state.authenticated = True
-            st.rerun()
-        elif password:
-            st.error("Incorrect password.")
-        return False
-    return True
+    if st.session_state.authenticated:
+        return True
+
+    st.markdown(
+        f"""
+        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
+            {LOGIN_SVG}
+            Admin Login
+        </h1>
+        """,
+        unsafe_allow_html=True
+    )
+
+    saml_ready = is_saml_configured()
+    if saml_ready:
+        try:
+            ensure_saml_routes_registered()
+        except Exception as exc:
+            st.error(f"SAML configuration error: {exc}")
+            saml_ready = False
+
+    if saml_ready:
+        qp = _query_params_to_dict()
+        raw_token = qp.get("saml_token")
+        token = raw_token[0] if isinstance(raw_token, list) else raw_token
+        if isinstance(token, str) and token:
+            payload = pop_saml_token(token)
+            _remove_query_params(["saml_token"])
+            if payload is None:
+                st.error("Your SSO login expired. Please try again.")
+            elif not _saml_user_allowed(payload):
+                st.error("Your account is not authorized for admin access.")
+            else:
+                st.session_state.authenticated = True
+                st.session_state["admin_email"] = payload.get("email") or st.secrets.get("ADMIN_EMAIL")
+                if payload.get("name"):
+                    st.session_state["admin_name"] = payload.get("name")
+                st.session_state["saml_attributes"] = payload.get("attributes", {})
+                return True
+
+        if not st.session_state.authenticated:
+            if "saml_state" not in st.session_state:
+                st.session_state.saml_state = uuid.uuid4().hex
+
+            next_target = return_to or qp.get("next") or get_default_next_path() or "/"
+            if isinstance(next_target, list):
+                next_target = next_target[0]
+            login_url = build_saml_login_url(st.session_state.saml_state, next_path=next_target)
+            try:
+                st.link_button("Continue with SSO", login_url, type="primary")
+            except AttributeError:
+                st.markdown(f"[Continue with SSO]({login_url})")
+            st.caption("Use your institutional credentials to access the admin tools.")
+
+            if not allow_password_fallback():
+                return False
+
+            st.markdown("---")
+            st.caption("Fallback password login (for emergency use only)")
+
+    password = st.text_input("Admin Password", type="password")
+    if password == st.secrets.get("ADMIN_PASSWORD") and password:
+        st.session_state.authenticated = True
+        st.rerun()
+    elif password:
+        st.error("Incorrect password.")
+    return False
 
 
 # Function to render the sidebar with common elements
@@ -358,11 +455,16 @@ def render_sidebar(authenticated=False, show_debug=False):
     Args:
         authenticated: Whether user is authenticated
         show_debug: Whether to show debug controls (only for main chat page)
-    Returns:
+        Returns:
         debug_one: Debug state if show_debug=True, otherwise False
     """
     load_css()
     st.sidebar.page_link("app.py", label="Chat Assistant", icon=":material/chat_bubble:")
+
+    def _perform_logout():
+        st.session_state.authenticated = False
+        for key in ("saml_state", "saml_attributes", "admin_name", "admin_email"):
+            st.session_state.pop(key, None)
     
     # New chat
     if st.sidebar.button(
@@ -404,7 +506,7 @@ def render_sidebar(authenticated=False, show_debug=False):
         st.sidebar.page_link("pages/admin.py", label="Settings", icon=":material/settings:")
         #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
         
-        st.sidebar.button("Logout", on_click=lambda: st.session_state.update({"authenticated": False}), icon=":material/logout:")
+        st.sidebar.button("Logout", on_click=_perform_logout, icon=":material/logout:")
         with st.sidebar.container(key="sidebar_bottom"):
             st.caption("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
     else:

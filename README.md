@@ -90,6 +90,23 @@ The container exposes port `8501` and reads the same `secrets.toml`. If your Pos
 
 ## 🔧 Configuration Notes
 
+### Admin Login (SAML SSO)
+- By default the admin pages accept a single password stored in `ADMIN_PASSWORD`.
+- To enable multi-user SSO, add a `[saml]` block to `.streamlit/secrets.toml` and provide your IdP metadata:
+  ```toml
+  [saml]
+  sp_entity_id = "https://your-app.example.com/metadata"
+  sp_acs = "https://your-app.example.com/saml/acs"
+  idp_entity_id = "https://idp.example.com/metadata"
+  idp_sso_url = "https://idp.example.com/sso"
+  idp_x509_cert = """-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"""
+  allowed_admin_emails = ["librarian@example.com", "it@example.com"]
+  allow_password_fallback = false  # set true only if you want the old password as backup
+  email_attribute = "mail"         # optional; defaults to "mail"
+  name_attribute = "displayName"   # optional; defaults to "displayName"
+  ```
+- Install the new dependency (`pip install python3-saml xmlsec`) and expose the generated service-provider metadata at `/saml/metadata` to your IdP. Successful SSO logins are persisted in `st.session_state`, and only users in `allowed_admin_emails` gain admin access.
+
 ### Web Search (Admin → Filters)
 - Allowed Domains (optional)
   - Provide one or more domains (e.g., `arXiv.org`) to restrict search
