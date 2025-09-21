@@ -69,7 +69,7 @@ streamlit run app.py
 
 ### Docker (optional)
 
-You can ship the same app as a container while keeping Streamlit Cloud deployments unchanged.
+The Dockerfile uses a slim Python 3.12 base with a multi-stage build so the runtime image contains only your app and its virtualenv.
 
 Build the image:
 
@@ -86,7 +86,7 @@ docker run \
   viadrina-chatbot
 ```
 
-The container uses the standard Streamlit port (`8501`) and obeys the same secrets format, so you can reuse the configuration you already prepared for Streamlit Cloud.
+The container exposes port `8501` and reads the same `secrets.toml`. If your PostgreSQL server runs on the host machine, set `host = "host.docker.internal"` in the secrets file so the container can reach it.
 
 ## 🔧 Configuration Notes
 
