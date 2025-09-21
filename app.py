@@ -17,7 +17,8 @@ from utils import (
     create_request_classifications_table, get_request_classifications,
     get_filter_settings,
     # NEW: ensure filter_settings table exists on app startup
-    create_filter_settings_table
+    create_filter_settings_table,
+    create_knowledge_base_table,
 )
 
 # -------------------------------------
@@ -1391,6 +1392,7 @@ database_available = False
 try:
     database_available = create_database_if_not_exists()
     if database_available:
+        create_knowledge_base_table()
         create_prompt_versions_table()
         initialize_default_prompt_if_empty(DEFAULT_PROMPT)
         create_log_table()
