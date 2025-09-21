@@ -586,11 +586,6 @@ if HAS_STREAMLIT_CONTEXT:
         with open("last_export.txt", "w") as f:
             f.write(ts.isoformat())
         
-    def load_css(file_path):
-        with open(BASE_DIR / file_path) as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-    load_css("css/styles.css")
 
     if authenticated:
         # Admin-only content

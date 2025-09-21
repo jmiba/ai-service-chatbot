@@ -157,9 +157,6 @@ def get_allowed_request_classifications():
     except Exception:
         return ['library_hours','book_search','research_help','account_info','facility_info','policy_question','technical_support','other']
 
-def load_css(file_path):
-    with open(BASE_DIR / file_path) as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 def log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, error_code=None, request_classification=None, evaluation_notes=None,
                     model=None, usage_input_tokens=None, usage_output_tokens=None, usage_total_tokens=None, usage_reasoning_tokens=None, api_cost_usd=None, response_time_ms=None):
@@ -1528,8 +1525,6 @@ if database_available:
 else:
     # Use default prompt when database is not available
     CUSTOM_INSTRUCTIONS = _format_prompt(DEFAULT_PROMPT, datetime=formatted_time)
-
-load_css("css/styles.css")
 
 col1, col2 = st.columns([3, 3])
 with col1:

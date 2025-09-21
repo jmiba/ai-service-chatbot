@@ -1,10 +1,8 @@
 import streamlit as st
-from pathlib import Path
-BASE_DIR = Path(__file__).parent.parent
-
 from utils import (
     create_knowledge_base_table,
     get_document_by_identifier,
+    load_css,
 )
 
 st.set_page_config(page_title="Document Viewer", layout="wide", initial_sidebar_state="collapsed")
@@ -25,11 +23,7 @@ if doc_id_param:
     except (TypeError, ValueError):
         doc_id = None
        
-def load_css(file_path):
-    with open(BASE_DIR / file_path) as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-load_css("css/styles.css")
+load_css()
 
 
 st.markdown(

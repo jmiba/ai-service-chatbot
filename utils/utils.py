@@ -12,6 +12,12 @@ BASE_DIR = Path(__file__).parent.parent
 
 LOGIN_SVG = (BASE_DIR / "assets" / "key.svg").read_text()
 
+def load_css(file_path: str = "css/styles.css") -> None:
+    """Inject a CSS file into the current Streamlit app."""
+    css_path = BASE_DIR / file_path
+    with css_path.open("r", encoding="utf-8") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
 # --- Pricing & cost estimation ---
 # Source: config/pricing.json (per-1K tokens)
 
@@ -355,6 +361,7 @@ def render_sidebar(authenticated=False, show_debug=False):
     Returns:
         debug_one: Debug state if show_debug=True, otherwise False
     """
+    load_css()
     st.sidebar.page_link("app.py", label="Chat Assistant", icon=":material/chat_bubble:")
     
     # New chat
@@ -363,7 +370,6 @@ def render_sidebar(authenticated=False, show_debug=False):
         type="secondary",
         help="Start a fresh session",
         icon=":material/add_comment:",
-        width="stretch",
         key="sidebar_new_chat_button",
     ):
         st.session_state.messages = []

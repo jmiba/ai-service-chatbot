@@ -1,15 +1,22 @@
-FROM python:3.12-slim AS builder
+
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+
+FROM ${PYTHON_IMAGE} AS builder
 
 ENV PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN python -m venv /venv \
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m venv /venv \
     && /venv/bin/pip install --upgrade pip \
     && /venv/bin/pip install -r requirements.txt
 
-FROM python:3.12-slim
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+FROM ${PYTHON_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -18,6 +25,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
 WORKDIR /app
+
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /venv /venv
 ENV PATH="/venv/bin:$PATH"

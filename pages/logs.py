@@ -111,11 +111,6 @@ def get_session_overview(limit=500):
     conn.close()
     return rows
 
-def load_css(file_path):
-    with open(BASE_DIR / file_path) as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
-load_css("css/styles.css")
 if authenticated:
     #st.title("📊 Logging & Analytics")
     st.markdown(
