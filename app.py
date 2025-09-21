@@ -122,9 +122,23 @@ if PROMPTS_LOAD_ERROR:
 DEFAULT_PROMPT = PROMPT_CONFIG["default_chat_system_prompt"]
 EVALUATION_SYSTEM_TEMPLATE = PROMPT_CONFIG["evaluation"]["system"]
 
-# Avatare zentral definieren
-AVATAR_ASSISTANT = str(BASE_DIR / "assets/robot_2_24dp_4B77D1_FILL0_wght400_GRAD0_opsz24.svg")
-AVATAR_USER = str(BASE_DIR / "assets/face_24dp_F5B908_FILL0_wght400_GRAD0_opsz24.svg")
+# Define avatars and icons centrally
+def _build_icon_html(icon_path: Path, label: str) -> str:
+    """Return inline SVG wrapped for display inside markdown."""
+    try:
+        svg_markup = icon_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+    updated_svg = re.sub(r'fill="#?[0-9a-fA-F]+"', 'fill="currentColor"', svg_markup)
+    label_attr = html.escape(label, quote=True)
+    return f"<span class='ref-icon' role='img' aria-label='{label_attr}'>{updated_svg}</span>"
+
+
+AVATAR_ASSISTANT = str(BASE_DIR / "assets/robot_2.svg")
+AVATAR_USER = str(BASE_DIR / "assets/face.svg")
+WEB_ICON_HTML = _build_icon_html(BASE_DIR / "assets/language.svg", "Website source")
+DOC_ICON_HTML = _build_icon_html(BASE_DIR / "assets/doc.svg", "Document source")
 
 # --- Config: request classification options ---
 @lru_cache(maxsize=1)
@@ -480,9 +494,9 @@ def render_sources_list(citation_map):
 
     def _icon_for_source(src):
         if src == "file":
-            return "<span class='ref-icon'>description</span>"  # material icon: file
+            return DOC_ICON_HTML
         if src == "web":
-            return "<span class='ref-icon'>public</span>"      # material icon: public/web
+            return WEB_ICON_HTML
         return ""
 
     lines = []
@@ -538,10 +552,14 @@ def render_sources_list(citation_map):
 
         icon_html = _icon_for_source(c.get("source"))
 
+        parts = [f"* {badge}"]
+        if icon_html:
+            parts.append(icon_html)
         if rs_html:
-            lines.append(f"* {badge}{icon_html}{rs_html}: {link_part}")
-        else:
-            lines.append(f"* {badge}{icon_html}{link_part}")
+            parts.append(f"{rs_html}:")
+        parts.append(link_part)
+
+        lines.append(" ".join(parts))
 
     return "\n".join(lines)
 
