@@ -1062,8 +1062,8 @@ if HAS_STREAMLIT_CONTEXT:
                         except Exception as e:
                             st.error(f"Failed to delete files: {e}", icon=":material/error:")
         else:
-            st.info("📭 Vector store is empty - no files to manage.")
+            st.info("Vector store is empty - no files to manage.", icon=":material/info:")
 
     
     else:
-        st.warning("� Authentication required to access the Vector Store Sync Tool.")
+        st.warning("Authentication required to access the Vector Store Management.", icon=":material/lock:")
