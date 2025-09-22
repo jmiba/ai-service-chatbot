@@ -7,15 +7,18 @@ Identity Provider posts back to the Assertion Consumer Service (ACS).
 """
 from __future__ import annotations
 
+import gc
 import json
 import threading
 import time
 import uuid
+from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
 import streamlit as st
+from streamlit import config
 
 try:  # Optional dependency until installed by the user
     from onelogin.saml2.auth import OneLogin_Saml2_Auth  # type: ignore
@@ -26,12 +29,10 @@ except ImportError:  # pragma: no cover - python3-saml not installed yet
 
 try:  # FastAPI/Starlette types bundled with Streamlit
     from starlette.requests import Request
-    from starlette.responses import HTMLResponse, RedirectResponse, Response
+    from starlette.responses import Response
 except ImportError:  # pragma: no cover - Streamlit runtime not loaded
     Request = Any  # type: ignore
     Response = Any  # type: ignore
-    RedirectResponse = Any  # type: ignore
-    HTMLResponse = Any  # type: ignore
 
 try:
     from streamlit.web.server.routes import get_router
@@ -44,6 +45,177 @@ _LOGIN_STATE: Dict[str, Dict[str, Any]] = {}
 _TOKEN_STORE: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
 _ROUTES_REGISTERED = False
+
+
+@dataclass
+class SamlRequestContext:
+    scheme: str
+    host_header: str
+    port: int
+    path: str
+    root_path: str
+    query_params: Dict[str, Any]
+    headers: Dict[str, str]
+    form_data: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SamlResponse:
+    status_code: int
+    body: bytes = b""
+    headers: list[Tuple[str, str]] = field(default_factory=list)
+
+    def content_type(self) -> Optional[str]:
+        for key, value in self.headers:
+            if key.lower() == "content-type":
+                return value
+        return None
+
+
+def _encode_body(value: Any) -> bytes:
+    if value is None:
+        return b""
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    return str(value).encode("utf-8")
+
+
+def _build_response(
+    status_code: int,
+    body: Any = b"",
+    *,
+    headers: Optional[list[Tuple[str, str]]] = None,
+    content_type: Optional[str] = None,
+) -> SamlResponse:
+    header_list: list[Tuple[str, str]] = []
+    if headers:
+        header_list.extend((str(key), str(value)) for key, value in headers)
+    if content_type:
+        header_list.append(("Content-Type", content_type))
+    return SamlResponse(status_code=status_code, body=_encode_body(body), headers=header_list)
+
+
+def _normalize_form_items(items: Any) -> Dict[str, Any]:
+    normalized: Dict[str, Any] = {}
+    if items is None:
+        return normalized
+    iterator = items
+    if hasattr(items, "multi_items"):
+        iterator = items.multi_items()
+    elif hasattr(items, "items"):
+        iterator = items.items()
+
+    for raw_key, raw_value in iterator:
+        key = str(raw_key)
+        value = raw_value
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if hasattr(value, "read"):
+            # Skip uploaded files; python3-saml only needs textual fields
+            continue
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        elif value is not None and not isinstance(value, str):
+            value = str(value)
+        normalized[key] = value
+    return normalized
+
+
+async def _context_from_starlette_request(
+    request: "Request",
+    *,
+    include_form: bool,
+) -> SamlRequestContext:
+    scheme = request.url.scheme
+    host_header = request.headers.get("host", "")
+    port = request.url.port or (443 if scheme == "https" else 80)
+    root_path = request.scope.get("root_path", "")
+    query_params = dict(request.query_params)
+    headers = dict(request.headers)
+    form_data: Dict[str, Any] = {}
+    if include_form:
+        form = await request.form()
+        form_data = _normalize_form_items(form)
+    return SamlRequestContext(
+        scheme=scheme,
+        host_header=host_header,
+        port=port,
+        path=request.url.path,
+        root_path=root_path,
+        query_params=query_params,
+        headers=headers,
+        form_data=form_data,
+    )
+
+
+def _context_from_tornado_handler(handler: "tornado.web.RequestHandler") -> SamlRequestContext:
+    request = handler.request
+    scheme = request.protocol or "http"
+    host_header = request.headers.get("Host", request.host or "")
+    port = 443 if scheme == "https" else 80
+    if host_header and ":" in host_header:
+        maybe_port = host_header.rsplit(":", 1)[-1]
+        try:
+            port = int(maybe_port)
+        except ValueError:
+            port = 443 if scheme == "https" else 80
+    query_params: Dict[str, Any] = {}
+    for key, values in request.query_arguments.items():
+        if not values:
+            continue
+        value = values[-1]
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        query_params[str(key)] = value
+
+    form_data: Dict[str, Any] = {}
+    for key, values in request.body_arguments.items():
+        if not values:
+            continue
+        value = values[-1]
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        form_data[str(key)] = value
+
+    root_path = config.get_option("server.baseUrlPath") or ""
+    headers = {str(k): str(v) for k, v in request.headers.items()}
+
+    return SamlRequestContext(
+        scheme=scheme,
+        host_header=host_header,
+        port=port,
+        path=request.path,
+        root_path=root_path,
+        query_params=query_params,
+        headers=headers,
+        form_data=form_data,
+    )
+
+
+def _to_starlette_response(payload: SamlResponse) -> "Response":
+    content_type = payload.content_type()
+    response = Response(content=payload.body, status_code=payload.status_code, media_type=content_type)
+    if content_type is None:
+        try:
+            del response.headers["content-type"]
+        except KeyError:
+            pass
+    for key, value in payload.headers:
+        if key.lower() == "content-type":
+            continue
+        response.headers[key] = value
+    return response
+
+
+def _write_tornado_response(handler: "tornado.web.RequestHandler", payload: SamlResponse) -> None:
+    handler.set_status(payload.status_code)
+    for key, value in payload.headers:
+        handler.set_header(key, value)
+    if payload.body:
+        handler.write(payload.body)
+    handler.finish()
 
 
 def _now() -> float:
@@ -203,38 +375,35 @@ def _load_saml_settings() -> OneLogin_Saml2_Settings:
     return OneLogin_Saml2_Settings(settings=settings_dict, custom_base_path=None)
 
 
-def _prepare_request_data(request: Request, post_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    url = request.url
-    scheme = url.scheme
-    host = request.headers.get("host", "")
-    port = url.port or (443 if scheme == "https" else 80)
-    get_params = dict(request.query_params)
-    data = {
+def _prepare_request_data(context: SamlRequestContext) -> Dict[str, Any]:
+    scheme = context.scheme or "http"
+    host = context.host_header
+    port = context.port or (443 if scheme == "https" else 80)
+    return {
         "https": "on" if scheme == "https" else "off",
         "http_host": host,
         "server_port": str(port),
-        "script_name": request.scope.get("root_path", ""),
-        "path_info": request.url.path,
-        "get_data": get_params,
-        "post_data": post_data or {},
+        "script_name": context.root_path,
+        "path_info": context.path,
+        "get_data": context.query_params,
+        "post_data": context.form_data or {},
     }
-    return data
 
 
-def _build_auth(request: Request, post_data: Optional[Dict[str, Any]] = None) -> OneLogin_Saml2_Auth:
+def _build_auth(context: SamlRequestContext) -> OneLogin_Saml2_Auth:
     settings = _load_saml_settings()
-    request_data = _prepare_request_data(request, post_data)
+    request_data = _prepare_request_data(context)
     return OneLogin_Saml2_Auth(request_data, old_settings=settings)
 
 
-def _build_metadata_response() -> Response:
+def _build_metadata_response() -> SamlResponse:
     settings = _load_saml_settings()
     metadata = settings.get_sp_metadata()
     errors = settings.validate_metadata(metadata)
     if errors:
         detail = "\n".join(errors)
-        return HTMLResponse(content=f"<h1>Invalid metadata</h1><pre>{detail}</pre>", status_code=500)
-    return Response(content=metadata, media_type="application/xml")
+        return _build_response(500, f"<h1>Invalid metadata</h1><pre>{detail}</pre>", content_type="text/html")
+    return _build_response(200, metadata, content_type="application/xml")
 
 
 def _extract_user_payload(auth: OneLogin_Saml2_Auth, relay_state: str, next_target: str) -> Dict[str, Any]:
@@ -278,83 +447,152 @@ def _extract_user_payload(auth: OneLogin_Saml2_Auth, relay_state: str, next_targ
     }
 
 
+def _handle_login(context: SamlRequestContext) -> SamlResponse:
+    if not is_saml_configured():
+        return _build_response(404, "SAML not configured", content_type="text/plain")
+
+    state = context.query_params.get("state")
+    if not state:
+        return _build_response(400, "Missing state parameter", content_type="text/plain")
+
+    next_target = _sanitize_next_target(context.query_params.get("next"))
+    _store_login_state(str(state), next_path=next_target)
+
+    auth = _build_auth(context)
+    redirect_url = auth.login(return_to=str(state), stay=True)
+    return _build_response(302, b"", headers=[("Location", redirect_url)])
+
+
+def _handle_acs(context: SamlRequestContext) -> SamlResponse:
+    if not is_saml_configured():
+        return _build_response(404, "SAML not configured", content_type="text/plain")
+
+    auth = _build_auth(context)
+    auth.process_response()
+    errors = auth.get_errors()
+    if errors:
+        detail = json.dumps(errors)
+        return _build_response(400, f"<h1>SAML error</h1><pre>{detail}</pre>", content_type="text/html")
+
+    if not auth.is_authenticated():
+        return _build_response(401, "<h1>Authentication failed</h1>", content_type="text/html")
+
+    relay_state = context.form_data.get("RelayState") or context.query_params.get("RelayState")
+    if not relay_state:
+        return _build_response(400, "<h1>Missing RelayState</h1>", content_type="text/html")
+
+    state_info = _pop_login_state(str(relay_state))
+    if not state_info:
+        return _build_response(440, "<h1>Login session expired. Please try again.</h1>", content_type="text/html")
+
+    payload = _extract_user_payload(auth, str(relay_state), state_info.get("next", "/"))
+    token = _store_token(payload)
+
+    target = state_info.get("next", "/")
+    redirect_url = _append_query_param(target, saml_token=token)
+    return _build_response(302, b"", headers=[("Location", redirect_url)])
+
+
+def _handle_metadata() -> SamlResponse:
+    if not is_saml_configured():
+        return _build_response(404, "SAML not configured", content_type="text/plain")
+    return _build_metadata_response()
+
+
 def _saml_login_route_factory():
     async def saml_login(request: Request) -> Response:
-        if not is_saml_configured():
-            return Response("SAML not configured", status_code=404)
-
-        state = request.query_params.get("state")
-        if not state:
-            return Response("Missing state parameter", status_code=400)
-        next_target = _sanitize_next_target(request.query_params.get("next"))
-        _store_login_state(state, next_path=next_target)
-
-        auth = _build_auth(request)
-        redirect_url = auth.login(return_to=state, stay=True)
-        # stay=True returns the URL without triggering redirect, so we do it here
-        return RedirectResponse(url=redirect_url, status_code=302)
+        context = await _context_from_starlette_request(request, include_form=False)
+        payload = _handle_login(context)
+        return _to_starlette_response(payload)
 
     return saml_login
 
 
 def _saml_acs_route_factory():
     async def saml_acs(request: Request) -> Response:
-        if not is_saml_configured():
-            return Response("SAML not configured", status_code=404)
-
-        form = await request.form()
-        form_dict = {k: v for k, v in form.multi_items()} if hasattr(form, "multi_items") else dict(form)
-        auth = _build_auth(request, form_dict)
-        auth.process_response()
-        errors = auth.get_errors()
-        if errors:
-            detail = json.dumps(errors)
-            return HTMLResponse(content=f"<h1>SAML error</h1><pre>{detail}</pre>", status_code=400)
-
-        if not auth.is_authenticated():
-            return HTMLResponse(content="<h1>Authentication failed</h1>", status_code=401)
-
-        relay_state = form_dict.get("RelayState") or request.query_params.get("RelayState")
-        if not relay_state:
-            return HTMLResponse(content="<h1>Missing RelayState</h1>", status_code=400)
-
-        state_info = _pop_login_state(relay_state)
-        if not state_info:
-            return HTMLResponse(content="<h1>Login session expired. Please try again.</h1>", status_code=440)
-
-        payload = _extract_user_payload(auth, relay_state, state_info.get("next", "/"))
-        token = _store_token(payload)
-
-        target = state_info.get("next", "/")
-        redirect_url = _append_query_param(target, saml_token=token)
-        return RedirectResponse(url=redirect_url, status_code=302)
+        context = await _context_from_starlette_request(request, include_form=True)
+        payload = _handle_acs(context)
+        return _to_starlette_response(payload)
 
     return saml_acs
 
 
 def _saml_metadata_route_factory():
     async def saml_metadata(_: Request) -> Response:
-        if not is_saml_configured():
-            return Response("SAML not configured", status_code=404)
-        return _build_metadata_response()
+        payload = _handle_metadata()
+        return _to_starlette_response(payload)
 
     return saml_metadata
 
 
+def _find_tornado_app() -> Optional["tornado.web.Application"]:
+    try:
+        import tornado.web  # type: ignore[attr-defined]
+    except ImportError as exc:  # pragma: no cover - tornado ships with Streamlit
+        raise RuntimeError("tornado is required for SAML route registration") from exc
+
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, tornado.web.Application):
+                return obj
+        except ReferenceError:
+            continue
+    return None
+
+
+def _register_tornado_routes() -> None:
+    try:
+        import tornado.web  # type: ignore[attr-defined]
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("tornado is required for SAML route registration") from exc
+
+    from streamlit.web.server.server import make_url_path_regex  # type: ignore
+
+    app = _find_tornado_app()
+    if app is None:
+        raise RuntimeError("Unable to locate Streamlit Tornado application for SAML route registration.")
+
+    base = config.get_option("server.baseUrlPath") or ""
+
+    class SamlHandler(tornado.web.RequestHandler):
+        def initialize(self, handler_func):
+            self._handler_func = handler_func
+
+        async def get(self):
+            await self._dispatch()
+
+        async def post(self):
+            await self._dispatch()
+
+        async def _dispatch(self):
+            context = _context_from_tornado_handler(self)
+            payload = self._handler_func(context)
+            _write_tornado_response(self, payload)
+
+    app.add_handlers(
+        r".*$",
+        [
+            (make_url_path_regex(base, "/saml/login"), SamlHandler, {"handler_func": _handle_login}),
+            (make_url_path_regex(base, "/saml/acs"), SamlHandler, {"handler_func": _handle_acs}),
+            (make_url_path_regex(base, "/saml/metadata"), SamlHandler, {"handler_func": lambda _ctx: _handle_metadata()}),
+        ],
+    )
+
+
 def ensure_saml_routes_registered() -> None:
-    """Register FastAPI routes (idempotent)."""
+    """Register SAML HTTP routes with the active Streamlit server."""
     global _ROUTES_REGISTERED
     if _ROUTES_REGISTERED:
         return
     if not is_saml_configured():
         return
     if get_router is None:
-        raise RuntimeError("Streamlit version does not expose get_router(); upgrade to 1.25+ to use SAML.")
-
-    router = get_router()
-    router.add_api_route("/saml/login", _saml_login_route_factory(), methods=["GET"], name="saml_login")
-    router.add_api_route("/saml/acs", _saml_acs_route_factory(), methods=["POST"], name="saml_acs")
-    router.add_api_route("/saml/metadata", _saml_metadata_route_factory(), methods=["GET"], name="saml_metadata")
+        _register_tornado_routes()
+    else:
+        router = get_router()
+        router.add_api_route("/saml/login", _saml_login_route_factory(), methods=["GET"], name="saml_login")
+        router.add_api_route("/saml/acs", _saml_acs_route_factory(), methods=["POST"], name="saml_acs")
+        router.add_api_route("/saml/metadata", _saml_metadata_route_factory(), methods=["GET"], name="saml_metadata")
     _ROUTES_REGISTERED = True
 
 

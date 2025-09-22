@@ -106,6 +106,18 @@ The container exposes port `8501` and reads the same `secrets.toml`. If your Pos
   name_attribute = "displayName"   # optional; defaults to "displayName"
   ```
 - Install the new dependency (`pip install python3-saml xmlsec`) and expose the generated service-provider metadata at `/saml/metadata` to your IdP. Successful SSO logins are persisted in `st.session_state`, and only users in `allowed_admin_emails` gain admin access.
+- Streamlit ≥1.49 no longer exposes `get_router`; the app now registers the SAML endpoints directly with the underlying Tornado server, so you can keep current Streamlit releases without extra configuration.
+- macOS + Python 3.13 tip: the prebuilt `xmlsec` wheel may ship with a different `libxml2` than the `lxml` wheel, causing `xmlsec.InternalError: lxml & xmlsec libxml2 library version mismatch`.
+  - Install the system libraries once with Homebrew: `brew install libxml2 libxslt libxmlsec1 pkg-config`.
+  - Rebuild both dependencies so they link against the same `libxml2` version:
+    ```bash
+    export XML2_CONFIG=/opt/homebrew/opt/libxml2/bin/xml2-config
+    export XSLT_CONFIG=/opt/homebrew/opt/libxslt/bin/xslt-config
+    export PKG_CONFIG_PATH=/opt/homebrew/opt/libxml2/lib/pkgconfig:/opt/homebrew/opt/libxslt/lib/pkgconfig:/opt/homebrew/opt/libxmlsec1/lib/pkgconfig
+    python3 -m pip install --no-binary lxml 'lxml==5.4.0'
+    python3 -m pip install --no-binary xmlsec xmlsec
+    ```
+  - Verify with `python3 -c "import xmlsec; print(xmlsec.get_libxml_version())"` – both `xmlsec` and `lxml` should report the same `(major, minor, micro)` tuple.
 
 ### Web Search (Admin → Filters)
 - Allowed Domains (optional)
