@@ -20,13 +20,13 @@ Try it: https://viadrina.streamlit.app
 
 ## 🆕 What’s New (recent changes)
 
+- Internal document citations now open in a dedicated `/document_viewer` tab so users can view internal knowledge base sources
+- Added manual entries to the knowledge base as internal documents, made them editable
 - Web search settings moved to Admin → Filters:
   - Allowed Domains (optional): restrict web search to these domains when set; if empty, web search is unrestricted
   - User Location: type (approximate/precise), country, city, region (optional), timezone (optional)
   - Note: The API does not support exclude-only lists or a locale filter
 - Request Classifications are now DB-backed and editable in Admin → Request Classes
-- Internal citations now open in a dedicated `/document_viewer` tab so users can view internal knowledge base sources
-- Sidebar "New chat" button directly beneath "Chat Assistant"
 - Client-managed conversation context retained for predictability (see Context section)
 
 ## 🚀 Quick Start
