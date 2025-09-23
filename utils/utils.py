@@ -780,6 +780,7 @@ def supports_full_verbosity(model_name):
     """Check if a model supports all verbosity options (low/medium/high)"""
     return supports_reasoning_effort(model_name)  # Same as reasoning effort for now
 
+@lru_cache(maxsize=1)
 def get_llm_settings():
     """Get current LLM settings from database (future-ready with reasoning effort and verbosity)"""
     conn = get_connection()
