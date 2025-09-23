@@ -587,15 +587,15 @@ if HAS_STREAMLIT_CONTEXT:
         return output_buffer
 
     def display_sync_log(log_container, output_buffer):
-        """Display captured output in terminal-style interface"""
+        """Display captured output while reusing the same widget to avoid DOM churn."""
         output_text = output_buffer.getvalue()
         if output_text:
             log_container.text_area(
-                "📋 Sync Progress Log", 
+                "📋 Sync Progress Log",
                 value=output_text,
                 height=400,
                 disabled=True,
-                key=f"sync_log_{time.time()}"  # Unique key for each sync
+                key="sync_log_area",
             )
 
     def read_last_export_timestamp():
