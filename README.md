@@ -17,17 +17,22 @@ Try it: https://viadrina.streamlit.app
 - **Admin control center** covering prompt versioning, LLM settings, request classifications, web search filters, and knowledge-base maintenance.
 - **Content ingestion pipeline** with scraping, manual metadata editing, SHA hashing, and optional vector store sync.
 - **Observability out of the box**: detailed interaction logging, usage/cost tracking, request analytics, and job locking.
+- **Live DBIS lookup** via Model Context Protocol (MCP) tools so the assistant can fetch authoritative database information directly from the DBIS API with clear in-chat indicators.
 
 ## 🆕 What’s New (recent changes)
 
-- Internal document citations now open in a dedicated `/document_viewer` tab so users can view internal knowledge base sources
-- Added manual entries to the knowledge base as internal documents, made them editable
+
 - Web search settings moved to Admin → Filters:
   - Allowed Domains (optional): restrict web search to these domains when set; if empty, web search is unrestricted
   - User Location: type (approximate/precise), country, city, region (optional), timezone (optional)
   - Note: The API does not support exclude-only lists or a locale filter
 - Request Classifications are now DB-backed and editable in Admin → Request Classes
 - Client-managed conversation context retained for predictability (see Context section)
+- Internal document citations now open in a dedicated `/document_viewer` tab so users can view internal knowledge base sources
+- Added manual entries to the knowledge base as internal documents, made them editable
+- DBIS database records are now reachable through MCP tools; configure once and the chatbot can query subjects or resources in real time (see *DBIS MCP Integration* below)
+- Async logging and cached LLM settings keep the UI responsive even when the DB is busy
+
 
 ## 🚀 Quick Start
 
@@ -53,6 +58,9 @@ ADMIN_PASSWORD = "your-admin-password"
 MODEL = "gpt-4o-mini"
 # Optional: shown as default in Admin UI and for auditing
 ADMIN_EMAIL = "you@your.org"
+# Optional: DBIS integration (MCP)
+DBIS_ORGANIZATION_ID = "6515"
+OPENAI_MCP_SERVER_DBIS = "python mcp_servers/dbis/server.py"
 
 [postgres]
 host = "your-host"   # optional (when omitted, app runs in reduced mode)
@@ -87,6 +95,19 @@ docker run \
 ```
 
 The container exposes port `8501` and reads the same `secrets.toml`. If your PostgreSQL server runs on the host machine, set `host = "host.docker.internal"` in the secrets file so the container can reach it.
+
+## 🔌 DBIS MCP Integration
+
+The chatbot can consult DBIS (Database Information System) through a lightweight MCP server included in this repo (`mcp_servers/dbis/server.py`).
+
+1. **Install dependencies** (already in `requirements.txt`): `pip install fastmcp httpx`.
+2. **Provide the organization ID**
+   - Add `DBIS_ORGANIZATION_ID = "6515"` (replace with your ID) to `.streamlit/secrets.toml`.
+3. **Expose the MCP server command**
+   - For local runs: `export OPENAI_MCP_SERVER_DBIS="python mcp_servers/dbis/server.py"` before launching Streamlit.
+   - For Streamlit Cloud, place the same line in `secrets.toml` (as shown above).
+
+When those variables are present the app automatically registers the MCP tool set (`dbis_list_subjects`, `dbis_list_resource_ids`, `dbis_get_resource`, `dbis_list_resource_ids_by_subject`). During a chat turn the UI displays “Consulted DBIS: …” whenever the model actually called one of the DBIS tools.
 
 ## 🔧 Configuration Notes
 
