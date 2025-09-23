@@ -6,6 +6,7 @@ from io import BytesIO
 import streamlit as st
 import time
 from pathlib import Path
+import base64
 
 try:
     from streamlit.runtime import exists as streamlit_runtime_exists  # type: ignore
@@ -48,7 +49,7 @@ except RuntimeError as exc:
     VECTOR_STORE_ID = ""
 
 BASE_DIR = Path(__file__).parent.parent
-VECTORIZE_ICON_PATH = BASE_DIR / "assets" / "owl.svg"
+ICON_PATH = BASE_DIR / "assets" / "owl.png"
 
 client = OpenAI(api_key=OPENAI_API_KEY) if not VECTORIZE_CONFIG_ERROR else None
 
@@ -632,13 +633,20 @@ if HAS_STREAMLIT_CONTEXT:
 
         output_dir = "exported_markdown"
         os.makedirs(output_dir, exist_ok=True)
-    
-        heading_cols = st.columns([1, 8])
-        with heading_cols[0]:
-            if VECTORIZE_ICON_PATH.exists():
-                st.image(str(VECTORIZE_ICON_PATH), width=48)
-        with heading_cols[1]:
-            st.markdown("# Vector Store Management")
+            
+        if ICON_PATH.exists():
+            encoded_icon = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
+            st.markdown(
+                f"""
+                <div style="display:flex;align-items:center;gap:.75rem;">
+                    <img src="data:image/png;base64,{encoded_icon}" width="48" height="48"/>
+                    <h1 style="margin:0;">Vector Store Management</h1>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.header("Vector Store Management")
 
     
         # Quick explanation with performance info

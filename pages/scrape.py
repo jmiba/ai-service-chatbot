@@ -1,3 +1,5 @@
+import base64
+import math
 import re
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
@@ -10,10 +12,11 @@ import json
 from openai import OpenAI
 from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs, get_document_status_counts
 from pathlib import Path
-  
-BASE_DIR = Path(__file__).parent.parent
 
-SCRAPE_SVG = (BASE_DIR / "assets" / "home_storage.svg").read_text()
+
+BASE_DIR = Path(__file__).parent.parent
+ICON_PATH = BASE_DIR / "assets" / "home_storage.png"
+
 PROMPT_CONFIG_PATH = BASE_DIR / ".streamlit" / "prompts.json"
 
 def load_summarize_prompts() -> tuple[str, str]:
@@ -1188,16 +1191,20 @@ def main():
     create_knowledge_base_table()
 
     st.set_page_config(page_title="Content Indexing", layout="wide")
-    #st.title("🔧 Content Indexing & Management")
-    st.markdown(
-        f"""
-        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
-            {SCRAPE_SVG}
-            Content Indexing
-        </h1>
-        """,
-        unsafe_allow_html=True
-    )
+
+    if ICON_PATH.exists():
+        encoded_icon = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
+        st.markdown(
+            f"""
+            <div style="display:flex;align-items:center;gap:.75rem;">
+                <img src="data:image/png;base64,{encoded_icon}" width="48" height="48"/>
+                <h1 style="margin:0;">Content Indexing</h1>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.header("Content Indexing")
     
     # Create tabs for different views
     tab1, tab_manual, tab2 = st.tabs(["Knowledge Base", "Manual Entry", "Indexing Tool"])
@@ -1985,14 +1992,13 @@ def main():
             filtered = [entry for entry in filtered if entry[11] == selected_page_type]
         if selected_vector_status != "All":
             if selected_vector_status == "Non-vectorized":
-                filtered = [entry for entry in filtered if entry[10] is None]  # vector_file_id is None
+                filtered = [entry for entry in filtered if entry[10] is None]
             elif selected_vector_status == "Vectorized (synced)":
-                filtered = [entry for entry in filtered if entry[10] is not None]  # vector_file_id is not None
-        # Apply exclusion filter using no_upload (index 12)
+                filtered = [entry for entry in filtered if entry[10] is not None]
         if selected_exclusion_status != "All":
             if selected_exclusion_status == "Excluded":
                 filtered = [entry for entry in filtered if len(entry) > 12 and bool(entry[12])]
-            else:  # Included
+            else:
                 filtered = [entry for entry in filtered if len(entry) > 12 and not bool(entry[12])]
         if selected_stale_status != "All":
             if selected_stale_status == "Stale":
@@ -2000,35 +2006,98 @@ def main():
             else:
                 filtered = [entry for entry in filtered if len(entry) > 13 and not bool(entry[13])]
 
+        filter_signature = (
+            selected_recordset,
+            selected_page_type,
+            selected_vector_status,
+            selected_exclusion_status,
+            selected_stale_status,
+        )
+        if st.session_state.get("kb_filter_signature") != filter_signature:
+            st.session_state["kb_filter_signature"] = filter_signature
+            st.session_state["kb_page"] = 1
+
+        st.session_state.setdefault("kb_page", 1)
+        st.session_state.setdefault("kb_page_size", 25)
+
+        page_size_options = [10, 25, 50, 100]
+        default_page_size = st.session_state["kb_page_size"]
+        if default_page_size not in page_size_options:
+            default_page_size = 25
+            st.session_state["kb_page_size"] = default_page_size
+
+        page_size = st.selectbox(
+            "Rows per page",
+            options=page_size_options,
+            index=page_size_options.index(default_page_size),
+            help="Number of knowledge base entries shown per page",
+        )
+        if st.session_state["kb_page_size"] != page_size:
+            st.session_state["kb_page_size"] = page_size
+            st.session_state["kb_page"] = 1
+
+        filtered_count = len(filtered)
+        page_entries: list = []
+        current_page = st.session_state.get("kb_page", 1)
+        start_idx = 0
+        end_idx = 0
+        if filtered_count > 0:
+            total_pages = math.ceil(filtered_count / st.session_state["kb_page_size"])
+            current_page = max(1, min(current_page, total_pages))
+            st.session_state["kb_page"] = current_page
+            start_idx = (current_page - 1) * st.session_state["kb_page_size"]
+            end_idx = start_idx + st.session_state["kb_page_size"]
+            page_entries = filtered[start_idx:end_idx]
+        else:
+            total_pages = 1
+            st.session_state["kb_page"] = 1
+
         try:
             if not filtered:
                 st.info("No entries found in the knowledge base.")
             else:
-                # Show count summary
                 total_entries = len(entries)
-                filtered_entries = len(filtered)
+                filtered_entries = filtered_count
                 non_vectorized_total = len([entry for entry in entries if entry[10] is None and entry[12] is not True])
                 vectorized_total = len([entry for entry in entries if entry[10] is not None])
                 excluded = len([entry for entry in entries if len(entry) > 12 and bool(entry[12])])
                 stale_total = stale_documents_total
-                
+
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
                 with col1:
                     st.metric("Total Entries", total_entries, border=True)
                 with col2:
                     st.metric("Filtered Results", filtered_entries, border=True)
                 with col3:
-                    st.metric("Vectorized", vectorized_total, border=True)  
+                    st.metric("Vectorized", vectorized_total, border=True)
                 with col4:
                     st.metric("Excluded from Vector Store", excluded, border=True)
                 with col5:
                     st.metric("Non-vectorized", non_vectorized_total, border=True)
                 with col6:
                     st.metric("Stale Pages", stale_total, border=True)
-                
+
                 st.markdown("---")
-            
-            for id, url, title, safe_title, crawl_date, lang, summary, tags, markdown, recordset, vector_file_id, page_type, no_upload, is_stale in filtered:
+
+                if filtered_entries > 0:
+                    display_start = start_idx + 1
+                    display_end = min(end_idx, filtered_entries)
+                    pagination_col1, pagination_col2, pagination_col3 = st.columns([1, 2, 1])
+                    with pagination_col1:
+                        if st.button("◀ Previous", disabled=current_page <= 1, key="kb_prev_page"):
+                            st.session_state["kb_page"] = max(1, current_page - 1)
+                    with pagination_col2:
+                        st.markdown(
+                            f"**Page {current_page} of {total_pages}** &nbsp;&nbsp;"
+                            f"Showing entries {display_start}–{display_end} of {filtered_entries}"
+                        )
+                    with pagination_col3:
+                        if st.button("Next ▶", disabled=current_page >= total_pages, key="kb_next_page"):
+                            st.session_state["kb_page"] = min(total_pages, current_page + 1)
+
+                page_entries = page_entries or []
+
+            for id, url, title, safe_title, crawl_date, lang, summary, tags, markdown, recordset, vector_file_id, page_type, no_upload, is_stale in page_entries:
                 tags_str = " ".join(f"#{tag}" for tag in tags)
                 
                 # Create status indicators

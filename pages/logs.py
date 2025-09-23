@@ -4,10 +4,10 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from utils import get_connection, admin_authentication, render_sidebar
+import base64
 
 BASE_DIR = Path(__file__).parent.parent
-
-LOG_SVG = (BASE_DIR / "assets" / "search_activity.svg").read_text()
+ICON_PATH = (BASE_DIR / "assets" / "search_activity.png")
 
 # Helfer: Datums-/Zeitformatierung
 def fmt_dt(value, fmt="%Y-%m-%d %H:%M:%S") -> str:
@@ -112,16 +112,20 @@ def get_session_overview(limit=500):
     return rows
 
 if authenticated:
-    #st.title("📊 Logging & Analytics")
-    st.markdown(
-        f"""
-        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
-            {LOG_SVG}
-            Logging & Analytics
-        </h1>
-        """,
-        unsafe_allow_html=True
-    )
+    if ICON_PATH.exists():
+        encoded_icon = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
+        st.markdown(
+            f"""
+            <div style="display:flex;align-items:center;gap:.75rem;">
+                <img src="data:image/png;base64,{encoded_icon}" width="48" height="48"/>
+                <h1 style="margin:0;">Logging & Analytics</h1>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.header("Logging & Analytics")
+        
     # Create tabs for different views
     tab1, tab2, tab3 = st.tabs(["Interaction Logs", "Session Analytics", "System Metrics"])
     

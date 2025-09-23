@@ -5,6 +5,7 @@ from pathlib import Path
 import json
 from functools import lru_cache
 import uuid
+import base64
 
 from .db_migrations import run_migrations
 from .saml import (
@@ -18,8 +19,7 @@ from .saml import (
 )
 
 BASE_DIR = Path(__file__).parent.parent
-
-LOGIN_SVG = (BASE_DIR / "assets" / "key.svg").read_text()
+ICON_PATH = (BASE_DIR / "assets" / "Key.png")
 
 def load_css(file_path: str = "css/styles.css") -> None:
     """Inject a CSS file into the current Streamlit app."""
@@ -382,15 +382,19 @@ def admin_authentication(return_to: str | None = None):
     if st.session_state.authenticated:
         return True
 
-    st.markdown(
-        f"""
-        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
-            {LOGIN_SVG}
-            Admin Login
-        </h1>
-        """,
-        unsafe_allow_html=True
-    )
+    if ICON_PATH.exists():
+        encoded_icon = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
+        st.markdown(
+            f"""
+            <div style="display:flex;align-items:center;gap:.75rem;">
+                <img src="data:image/png;base64,{encoded_icon}" width="48" height="48"/>
+                <h1 style="margin:0;">Admin Login</h1>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.header("Admin Login")
 
     saml_ready = is_saml_configured()
     if saml_ready:

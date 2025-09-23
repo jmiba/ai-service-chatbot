@@ -19,9 +19,10 @@ from utils import (
     create_prompt_versions_table,
 )
 from pathlib import Path
+import base64
 
 BASE_DIR = Path(__file__).parent.parent
-SETTINGS_ICON_PATH = BASE_DIR / "assets" / "settings.svg"
+ICON_PATH = BASE_DIR / "assets" / "settings.png"
 
 # Must be the first Streamlit call
 st.set_page_config(page_title="LLM & API Settings", layout="wide")
@@ -78,12 +79,19 @@ render_sidebar(authenticated)
 
 # --- Admin content ---
 if authenticated:
-    heading_cols = st.columns([1, 9])
-    with heading_cols[0]:
-        if SETTINGS_ICON_PATH.exists():
-            st.image(str(SETTINGS_ICON_PATH), width=48)
-    with heading_cols[1]:
-        st.markdown("# LLM & API Settings")
+    if ICON_PATH.exists():
+        encoded_icon = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
+        st.markdown(
+            f"""
+            <div style="display:flex;align-items:center;gap:.75rem;">
+                <img src="data:image/png;base64,{encoded_icon}" width="48" height="48"/>
+                <h1 style="margin:0;">LLM & API Settings</h1>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.header("LLM & API Settings")
     
     # Create tabs for different views
     tab1, tab2, tab3, tab4 = st.tabs(["System Prompt", "Language Model", "Request Categories", "Filters"])
