@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from utils import get_connection, admin_authentication, render_sidebar
 import base64
+import pandas as pd
 
 BASE_DIR = Path(__file__).parent.parent
 ICON_PATH = (BASE_DIR / "assets" / "search_activity.png")
@@ -111,6 +112,66 @@ def get_session_overview(limit=500):
     conn.close()
     return rows
 
+
+def render_log_details(entry: dict | None) -> None:
+    """Display metadata and content for a single log entry."""
+    if not entry:
+        st.info("Select a log entry to inspect.")
+        return
+
+    timestamp = fmt_dt(entry.get("timestamp"))
+    session_id = entry.get("session_id") or "(no session)"
+    error_code = entry.get("error_code") or "OK"
+    topic = entry.get("request_classification") or "(unclassified)"
+    citations_count = entry.get("citation_count", 0)
+    response_time = entry.get("response_time_ms")
+    api_cost = entry.get("api_cost_usd")
+
+    meta_lines = [
+        f"**Timestamp:** {timestamp}",
+        f"**Session:** `{session_id}`",
+        f"**Error code:** `{error_code}`",
+        f"**Topic:** `{topic}`",
+        f"**Citations:** {citations_count}",
+    ]
+    if response_time is not None:
+        meta_lines.append(f"**Response time:** {response_time} ms")
+    if api_cost is not None:
+        meta_lines.append(f"**API cost:** ${api_cost:.6f}")
+
+    st.markdown("<br />".join(meta_lines), unsafe_allow_html=True)
+
+    user_text = entry.get("user_input") or "(no user input captured)"
+    st.info(user_text, icon=":material/face:")
+
+    assistant_text = entry.get("assistant_response") or "(no response captured)"
+    code = entry.get("error_code")
+    if code == "E03":
+        st.error(assistant_text, icon=":material/robot_2:")
+    elif code == "E02":
+        st.warning(assistant_text, icon=":material/robot_2:")
+    else:
+        st.success(assistant_text, icon=":material/robot_2:")
+
+    citations = entry.get("citations")
+    if citations:
+        if isinstance(citations, str):
+            try:
+                citations = json.loads(citations)
+            except json.JSONDecodeError:
+                citations = {}
+        if isinstance(citations, dict):
+            lines = []
+            for item in citations.values():
+                title = item.get("title", "Untitled")
+                url = item.get("url", "#")
+                file_id = item.get("file_id", "Unknown")
+                file_name = item.get("file_name", "Unknown")
+                lines.append(f"* [{title}]({url}) • `{file_name}` (`{file_id}`)")
+            if lines:
+                st.markdown("\n".join(lines))
+
+
 if authenticated:
     if ICON_PATH.exists():
         encoded_icon = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
@@ -164,83 +225,279 @@ if authenticated:
         selected_topic = st.selectbox("Filter by topic", options=topic_options)
         selected_topic_val = None if selected_topic == "All" else selected_topic
 
-        group_by_session = st.toggle("Group by session", value=False, help="Show logs grouped by session with a per-session expander")
+        group_by_session = st.toggle(
+            "Group by session",
+            value=False,
+            help="Show logs grouped by session with a per-session expander",
+        )
 
-        logs = read_logs(limit=200, error_code=filter_code, session_id=selected_session_id, request_classification=selected_topic_val)
+        logs = read_logs(
+            limit=200,
+            error_code=filter_code,
+            session_id=selected_session_id,
+            request_classification=selected_topic_val,
+        )
+        log_entries = [dict(row) for row in logs]
+
         st.header("View Interaction Logs")
-        st.markdown(f"### Showing {len(logs)} log entries")
+        st.markdown(f"### Showing {len(log_entries)} log entries")
 
-        if group_by_session:
-            # Group logs by session_id (None gets a label)
-            groups = {}
-            for entry in logs:
+        if not log_entries:
+            st.info("No log entries match the current filters.")
+        elif group_by_session:
+            groups: dict[str, list[dict]] = {}
+            for entry in log_entries:
                 sid = entry.get("session_id") or "(no session)"
                 groups.setdefault(sid, []).append(entry)
-            # Order groups by last activity desc
-            ordered = sorted(groups.items(), key=lambda kv: max(e["timestamp"] for e in kv[1]), reverse=True)
 
+            ordered = sorted(
+                groups.items(),
+                key=lambda kv: max(e["timestamp"] for e in kv[1]),
+                reverse=True,
+            )
+
+            session_payloads = []
             for sid, entries in ordered:
-                entries_sorted = sorted(entries, key=lambda e: e["timestamp"])  # chronological within session
+                entries_sorted = sorted(entries, key=lambda e: e["timestamp"])
                 n = len(entries_sorted)
                 first_seen = entries_sorted[0]["timestamp"] if n else None
                 last_seen = entries_sorted[-1]["timestamp"] if n else None
                 error_count = sum(1 for e in entries_sorted if (e.get("error_code") == "E03"))
-                header = f"Session {sid} — {n} interactions, {fmt_dt(first_seen, '%Y-%m-%d %H:%M')} → {fmt_dt(last_seen, '%Y-%m-%d %H:%M')}, errors: {error_count}"
-                with st.expander(header, expanded=False):
-                    for entry in entries_sorted:
-                        st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}, **Topic:** `{entry.get('request_classification') or '(unclassified)'}`", unsafe_allow_html=False)
-                        with st.container():
-                            st.info(f"{entry['user_input']}", icon=":material/face:")
-                            if entry.get('error_code') == "E03":
-                                st.error(f"{entry['assistant_response']}", icon=":material/robot_2:")
-                            elif entry.get('error_code') == "E02":
-                                st.warning(f"{entry['assistant_response']}", icon=":material/robot_2:")
-                            else:
-                                st.success(f"{entry['assistant_response']}", icon=":material/robot_2:")
-                            if entry.get('citations'):
-                                citations = entry.get('citations')
-                                if isinstance(citations, str):
-                                    try:
-                                        citations = json.loads(citations)
-                                    except json.JSONDecodeError as e:
-                                        st.error(f"Failed to parse citations: {e}")
-                                        citations = {}
-                                markdown_list = ""
-                                for citation in citations.values():
-                                    title = citation.get("title", "Untitled")
-                                    url = citation.get("url", "#")
-                                    file_id = citation.get("file_id", "Unknown")
-                                    file_name = citation.get("file_name", "Unknown")
-                                    markdown_list += f"* [{title}]({url}) (Vector Store File: {file_name}, ID: `{file_id}`)\n"
-                                st.success(markdown_list)
-                    st.markdown("---")
+                session_payloads.append(
+                    {
+                        "session_id": sid,
+                        "interactions": n,
+                        "first_seen": fmt_dt(first_seen, "%Y-%m-%d %H:%M"),
+                        "last_seen": fmt_dt(last_seen, "%Y-%m-%d %H:%M"),
+                        "errors": error_count,
+                        "entries": entries_sorted,
+                    }
+                )
+
+            session_df = pd.DataFrame(
+                [
+                    {
+                        "Session": payload["session_id"],
+                        "Interactions": payload["interactions"],
+                        "First Seen": payload["first_seen"],
+                        "Last Seen": payload["last_seen"],
+                        "Errors": payload["errors"],
+                    }
+                    for payload in session_payloads
+                ]
+            )
+
+            st.session_state.setdefault("logs_session_selected_idx", 0)
+
+            selection_enabled = True
+            try:
+                table_event = st.dataframe(
+                    session_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    selection_mode="single-row",
+                    on_select="rerun",
+                    key="logs_session_table",
+                )
+            except TypeError:
+                selection_enabled = False
+                table_event = st.dataframe(
+                    session_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    key="logs_session_table",
+                )
+
+            selected_session_idx = st.session_state.get("logs_session_selected_idx", 0)
+            if selection_enabled:
+                selected_rows: list[int] = []
+                event_selection = getattr(table_event, "selection", None)
+                if isinstance(event_selection, dict):
+                    selected_rows = event_selection.get("rows", []) or []
+
+                if selected_rows:
+                    selected_session_idx = selected_rows[0]
+                    st.session_state["logs_session_selected_idx"] = selected_session_idx
+
+            if not (0 <= selected_session_idx < len(session_payloads)):
+                selected_session_idx = 0
+                st.session_state["logs_session_selected_idx"] = selected_session_idx
+
+            if not selection_enabled and session_payloads:
+                fallback_labels = {
+                    f"{payload['session_id']} · {payload['interactions']} msgs · last {payload['last_seen']}": idx
+                    for idx, payload in enumerate(session_payloads)
+                }
+                fallback_default = next(
+                    (
+                        label
+                        for label, idx in fallback_labels.items()
+                        if idx == selected_session_idx
+                    ),
+                    None,
+                )
+                fallback_options = list(fallback_labels.keys())
+                fallback_index = (
+                    fallback_options.index(fallback_default)
+                    if fallback_default in fallback_options
+                    else 0
+                )
+                selected_label = st.radio(
+                    "Select session",
+                    options=fallback_options,
+                    index=fallback_index,
+                    key="logs_session_fallback",
+                )
+                selected_session_idx = fallback_labels[selected_label]
+                st.session_state["logs_session_selected_idx"] = selected_session_idx
+
+            if session_payloads:
+                selected_payload = session_payloads[selected_session_idx]
+                st.markdown(
+                    f"#### Session {selected_payload['session_id']} "
+                    f"— {selected_payload['interactions']} interactions"
+                )
+                st.caption(
+                    f"{selected_payload['first_seen']} → {selected_payload['last_seen']} • "
+                    f"Errors: {selected_payload['errors']}"
+                )
+
+                for idx, entry in enumerate(selected_payload["entries"]):
+                    st.markdown(
+                        f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`"
+                        f", **Citations:** {entry.get('citation_count', 0)}, **Topic:** "
+                        f"`{entry.get('request_classification') or '(unclassified)'}`",
+                        unsafe_allow_html=False,
+                    )
+                    render_log_details(entry)
+                    if idx < len(selected_payload["entries"]) - 1:
+                        st.markdown("---")
         else:
-            # Flat list (existing behavior)
-            for entry in logs:
-                with st.expander(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Citations:** {entry.get('citation_count', 0)}, **Topic:** `{entry.get('request_classification') or '(unclassified)'}`", expanded=False):
-                    st.info(f"{entry['user_input']}", icon=":material/face:")
-                    if entry.get('error_code') == "E03":
-                        st.error(f"{entry['assistant_response']}", icon=":material/robot_2:")
-                    elif entry.get('error_code') == "E02":
-                        st.warning(f"{entry['assistant_response']}", icon=":material/robot_2:")
-                    else:
-                        st.success(f"{entry['assistant_response']}", icon=":material/robot_2:")
-                    if entry.get('citations'):
-                        citations = entry.get('citations')
-                        if isinstance(citations, str):
-                            try:
-                                citations = json.loads(citations)
-                            except json.JSONDecodeError as e:
-                                st.error(f"Failed to parse citations: {e}")
-                                citations = {}
-                        markdown_list = ""
-                        for citation in citations.values():
-                            title = citation.get("title", "Untitled")
-                            url = citation.get("url", "#")
-                            file_id = citation.get("file_id", "Unknown")
-                            file_name = citation.get("file_name", "Unknown")
-                            markdown_list += f"* [{title}]({url}) (Vector Store File: {file_name}, ID: `{file_id}`)\n"
-                        st.success(markdown_list)
+            st.session_state.setdefault("logs_page_size", 25)
+            st.session_state.setdefault("logs_page", 1)
+            st.session_state.setdefault("logs_selected_index", 0)
+
+            page_size_options = [10, 25, 50, 100]
+            current_page_size = st.session_state["logs_page_size"]
+            if current_page_size not in page_size_options:
+                current_page_size = 25
+                st.session_state["logs_page_size"] = current_page_size
+
+            page_size = st.selectbox(
+                "Rows per page",
+                options=page_size_options,
+                index=page_size_options.index(current_page_size),
+                key="logs_page_size_select",
+            )
+            if page_size != st.session_state["logs_page_size"]:
+                st.session_state["logs_page_size"] = page_size
+                st.session_state["logs_page"] = 1
+
+            total_entries = len(log_entries)
+            total_pages = max(1, -(-total_entries // st.session_state["logs_page_size"]))
+            current_page = st.session_state.get("logs_page", 1)
+            if current_page < 1 or current_page > total_pages:
+                current_page = 1
+                st.session_state["logs_page"] = 1
+
+            start_idx = (current_page - 1) * st.session_state["logs_page_size"]
+            end_idx = min(start_idx + st.session_state["logs_page_size"], total_entries)
+            page_entries = log_entries[start_idx:end_idx]
+
+            paginator_col1, paginator_col2, paginator_col3 = st.columns([1, 2, 1])
+            with paginator_col1:
+                if st.button("◀ Previous", disabled=current_page <= 1, key="logs_prev_page"):
+                    st.session_state["logs_page"] = max(1, current_page - 1)
+            with paginator_col2:
+                st.markdown(
+                    f"**Page {current_page} of {total_pages}** &nbsp;&nbsp;"
+                    f"Showing entries {start_idx + 1}–{end_idx} of {total_entries}"
+                )
+            with paginator_col3:
+                if st.button("Next ▶", disabled=current_page >= total_pages, key="logs_next_page"):
+                    st.session_state["logs_page"] = min(total_pages, current_page + 1)
+
+            table_rows = []
+            for entry in page_entries:
+                table_rows.append(
+                    {
+                        "Timestamp": fmt_dt(entry.get("timestamp")),
+                        "Session": entry.get("session_id") or "(no session)",
+                        "Error": entry.get("error_code") or "OK",
+                        "Topic": entry.get("request_classification") or "(unclassified)",
+                        "Citations": entry.get("citation_count", 0),
+                    }
+                )
+
+            table_df = pd.DataFrame(table_rows)
+            selection_enabled = True
+            try:
+                table_event = st.dataframe(
+                    table_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    selection_mode="single-row",
+                    on_select="rerun",
+                    key="logs_table",
+                )
+            except TypeError:
+                selection_enabled = False
+                table_event = st.dataframe(
+                    table_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    key="logs_table",
+                )
+
+            selected_global_index = st.session_state.get("logs_selected_index", 0)
+            if selection_enabled:
+                selected_rows: list[int] = []
+                event_selection = getattr(table_event, "selection", None)
+                if isinstance(event_selection, dict):
+                    selected_rows = event_selection.get("rows", []) or []
+
+                if selected_rows:
+                    row_idx = selected_rows[0]
+                    selected_global_index = start_idx + row_idx
+                    st.session_state["logs_selected_index"] = selected_global_index
+
+            if not (0 <= selected_global_index < total_entries):
+                selected_global_index = start_idx if page_entries else 0
+                st.session_state["logs_selected_index"] = selected_global_index
+
+            if not selection_enabled and page_entries:
+                fallback_labels = {
+                    f"{fmt_dt(entry.get('timestamp'))} · {entry.get('error_code') or 'OK'} · "
+                    f"{entry.get('request_classification') or '(unclassified)'}": start_idx + idx
+                    for idx, entry in enumerate(page_entries)
+                }
+                fallback_default = next(
+                    (
+                        label
+                        for label, idx in fallback_labels.items()
+                        if idx == selected_global_index
+                    ),
+                    None,
+                )
+                fallback_options = list(fallback_labels.keys())
+                fallback_index = (
+                    fallback_options.index(fallback_default)
+                    if fallback_default in fallback_options
+                    else 0
+                )
+                selected_label = st.radio(
+                    "Select entry to inspect",
+                    options=fallback_options,
+                    index=fallback_index,
+                    key="logs_table_fallback",
+                )
+                selected_global_index = fallback_labels[selected_label]
+                st.session_state["logs_selected_index"] = selected_global_index
+
+            selected_entry = log_entries[selected_global_index] if page_entries else None
+            detail_container = st.container()
+            with detail_container:
+                render_log_details(selected_entry)
 
         if st.button("Delete All Logs", icon=":material/delete_forever:"):
             delete_logs()
@@ -252,21 +509,21 @@ if authenticated:
         
     with tab2:
         st.subheader("Session-Based Analytics")
-        
-        # Session analytics using the new session_id column
+
         conn = get_connection()
         cursor = conn.cursor()
-        
-        # Session statistics (unchanged metrics)
-        cursor.execute("""
+
+        cursor.execute(
+            """
             SELECT 
                 COUNT(DISTINCT session_id) AS total_sessions,
                 COUNT(*) AS total_interactions,
                 COUNT(*)::numeric / NULLIF(COUNT(DISTINCT session_id), 0) AS avg_interactions_per_session
             FROM log_table
             WHERE session_id IS NOT NULL
-        """)
-        
+            """
+        )
+
         stats = cursor.fetchone()
         if stats:
             col1, col2, col3 = st.columns(3)
@@ -275,11 +532,14 @@ if authenticated:
             with col2:
                 st.metric("Total Interactions", stats[1] or 0)
             with col3:
-                st.metric("Avg Interactions/Session", f"{stats[2]:.1f}" if stats[2] else "0.0")
-        
-        # --- Topics distribution (request_classification) ---
+                st.metric(
+                    "Avg Interactions/Session",
+                    f"{stats[2]:.1f}" if stats[2] else "0.0",
+                )
+
         try:
             from psycopg2.extras import DictCursor as _DictCursor
+
             cursor.close()
             cursor = conn.cursor(cursor_factory=_DictCursor)
             cursor.execute(
@@ -292,9 +552,9 @@ if authenticated:
                 """
             )
             topic_rows = cursor.fetchall()
-        except Exception as e:
+        except Exception as exc:
             topic_rows = []
-            st.warning(f"Could not load topics: {e}")
+            st.warning(f"Could not load topics: {exc}")
         finally:
             cursor.close()
             conn.close()
@@ -302,33 +562,24 @@ if authenticated:
         st.markdown("### Topics")
         if topic_rows:
             try:
-                import pandas as pd
                 import altair as alt
-                # Normalize rows to a clean list of dicts and coerce types
-                records = []
+
+                records: list[dict] = []
                 for row in topic_rows:
-                    # row can be a DictRow; prefer key access, fall back to positional
                     try:
                         topic_val = row["topic"]
                     except Exception:
-                        try:
-                            topic_val = row[0]
-                        except Exception:
-                            topic_val = "(unclassified)"
+                        topic_val = row[0]
                     if not isinstance(topic_val, str):
                         topic_val = str(topic_val) if topic_val is not None else "(unclassified)"
 
                     try:
-                        count_val = int(row["count"])  # ensure int
+                        count_val = int(row["count"])
                     except Exception:
-                        try:
-                            count_val = int(row[1])
-                        except Exception:
-                            count_val = 0
+                        count_val = int(row[1]) if len(row) > 1 else 0
                     records.append({"topic": topic_val, "count": count_val})
 
                 df_topics = pd.DataFrame.from_records(records)
-                # Drop zero or negative counts just in case
                 df_topics = df_topics[df_topics["count"] > 0]
                 if df_topics.empty:
                     st.info("No topic data available yet.")
@@ -341,30 +592,26 @@ if authenticated:
                             color=alt.Color(field="topic", type="nominal", legend=alt.Legend(title="Topic")),
                             tooltip=[
                                 alt.Tooltip("topic:N", title="Topic"),
-                                alt.Tooltip("count:Q", title="Count")
+                                alt.Tooltip("count:Q", title="Count"),
                             ],
                         )
                         .properties(height=320)
                     )
                     st.altair_chart(pie, use_container_width=True)
-            except Exception as e:
+            except Exception as exc:
                 st.warning("Falling back to table view due to a charting error.")
                 try:
-                    st.exception(e)
+                    st.exception(exc)
                 except Exception:
                     pass
-                # Fallback: show as simple table if chart fails
-                try:
-                    st.table(df_topics if 'df_topics' in locals() else topic_rows)
-                except Exception:
-                    st.write(topic_rows)
+                st.table(df_topics if "df_topics" in locals() else topic_rows)
         else:
             st.info("No topic data available yet.")
 
-        # --- Topics table: interactions vs sessions ---
         st.markdown("### Topics — Interactions and Sessions")
         try:
             from psycopg2.extras import DictCursor as _DictCursor
+
             conn2 = get_connection()
             cur2 = conn2.cursor(cursor_factory=_DictCursor)
             cur2.execute(
@@ -378,7 +625,6 @@ if authenticated:
                 """
             )
             agg_rows = cur2.fetchall()
-            # Totals (for shares)
             cur2.execute(
                 """
                 SELECT COUNT(*)::int AS total_interactions,
@@ -388,77 +634,83 @@ if authenticated:
                 """
             )
             totals = cur2.fetchone() or {"total_interactions": 0, "total_sessions": 0}
-            cur2.close(); conn2.close()
+            cur2.close()
+            conn2.close()
 
-            import pandas as pd
             df = pd.DataFrame(agg_rows)
-            if not {'topic','interactions','sessions_with_topic'}.issubset(df.columns):
-                # handle tuple rows
+            if not {"topic", "interactions", "sessions_with_topic"}.issubset(df.columns):
                 if len(df.columns) >= 3:
-                    df.columns = ['topic','interactions','sessions_with_topic'] + list(df.columns[3:])
+                    df.columns = [
+                        "topic",
+                        "interactions",
+                        "sessions_with_topic",
+                        *list(df.columns[3:]),
+                    ]
                 else:
                     st.info("No topic data available yet.")
-                
-            if not df.empty:
-                ti = int(totals.get('total_interactions', 0) or 0)
-                ts = int(totals.get('total_sessions', 0) or 0)
-                # Compute shares
-                df['share_of_interactions_%'] = df['interactions'].apply(lambda x: (x/ti*100.0) if ti else 0.0)
-                df['share_of_sessions_%'] = df['sessions_with_topic'].apply(lambda x: (x/ts*100.0) if ts else 0.0)
-                df['interactions_per_session'] = df.apply(lambda r: (r['interactions']/r['sessions_with_topic']) if r['sessions_with_topic'] else 0.0, axis=1)
-                # Format for display
-                display_df = df[['topic','interactions','sessions_with_topic','share_of_interactions_%','share_of_sessions_%','interactions_per_session']].copy()
-                display_df.rename(columns={
-                    'topic':'Topic',
-                    'interactions':'Interactions',
-                    'sessions_with_topic':'Sessions with topic',
-                    'share_of_interactions_%':'Share of interactions (%)',
-                    'share_of_sessions_%':'Share of sessions (%)',
-                    'interactions_per_session':'Interactions/session'
-                }, inplace=True)
-                # Round numeric columns
-                display_df['Share of interactions (%)'] = display_df['Share of interactions (%)'].round(1)
-                display_df['Share of sessions (%)'] = display_df['Share of sessions (%)'].round(1)
-                display_df['Interactions/session'] = display_df['Interactions/session'].round(2)
-                st.dataframe(display_df, width="stretch", hide_index=True)
-            else:
-                st.info("No topic data available yet.")
-        except Exception as e:
-            st.warning(f"Could not build topics table: {e}")
-        
-        # Sessions overview table
-        st.markdown("### Sessions Overview")
-        rows = get_session_overview(limit=500)
-        if rows:
-            table = [
-                {
-                    "Session ID": r["session_id"],
-                    "Interactions": r["interactions"],
-                    "Start": fmt_dt(r["first_seen"]),
-                    "Stop": fmt_dt(r["last_seen"]),
-                    "Errors": r["errors"],
-                }
-                for r in rows
-            ]
-            st.dataframe(table, width="stretch", hide_index=True)
+                    df = pd.DataFrame(columns=["topic", "interactions", "sessions_with_topic"])
 
-            # Drill-down per session
-            selected = st.selectbox(
-                "Drill-down: select a session",
-                options=["None"] + rows,
-                format_func=lambda o: "None" if o == "None" else o["session_id"],
-            )
-            if selected != "None":
-                sid = selected["session_id"]
-                st.markdown(f"#### Session {sid} — timeline")
-                detailed = read_logs(limit=1000, session_id=sid)
-                for entry in sorted(detailed, key=lambda e: e["timestamp"]):
-                    st.markdown(f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`, **Topic:** `{entry.get('request_classification') or '(unclassified)'}`")
-                    with st.container():
-                        st.info(f"{entry['user_input']}", icon=":material/face:")
-                        st.success(f"{entry['assistant_response']}", icon=":material/robot_2:")
-                
-        
+            if df.empty:
+                st.info("No topic data available yet.")
+            else:
+                total_interactions = (
+                    totals.get("total_interactions", 0)
+                    if isinstance(totals, dict)
+                    else totals[0]
+                )
+                total_sessions = (
+                    totals.get("total_sessions", 0)
+                    if isinstance(totals, dict)
+                    else totals[1]
+                )
+
+                if total_interactions == 0 or total_sessions == 0:
+                    st.info("No topic data available yet.")
+                else:
+                    df["share_of_interactions_%"] = (
+                        df["interactions"] / total_interactions
+                    ) * 100
+                    df["share_of_sessions_%"] = (
+                        df["sessions_with_topic"] / total_sessions
+                    ) * 100
+                    df["interactions_per_session"] = df["interactions"] / df[
+                        "sessions_with_topic"
+                    ].replace(0, pd.NA)
+
+                    display_df = df[
+                        [
+                            "topic",
+                            "interactions",
+                            "sessions_with_topic",
+                            "share_of_interactions_%",
+                            "share_of_sessions_%",
+                            "interactions_per_session",
+                        ]
+                    ].copy()
+                    display_df.rename(
+                        columns={
+                            "topic": "Topic",
+                            "interactions": "Interactions",
+                            "sessions_with_topic": "Sessions with topic",
+                            "share_of_interactions_%": "Share of interactions (%)",
+                            "share_of_sessions_%": "Share of sessions (%)",
+                            "interactions_per_session": "Interactions/session",
+                        },
+                        inplace=True,
+                    )
+                    display_df["Share of interactions (%)"] = display_df[
+                        "Share of interactions (%)"
+                    ].round(1)
+                    display_df["Share of sessions (%)"] = display_df[
+                        "Share of sessions (%)"
+                    ].round(1)
+                    display_df["Interactions/session"] = display_df[
+                        "Interactions/session"
+                    ].round(2)
+                    st.dataframe(display_df, width="stretch", hide_index=True)
+        except Exception as exc:
+            st.warning(f"Could not build topics table: {exc}")
+
     with tab3:
         st.subheader("System Performance Metrics")
         st.caption("OpenAI usage, tokens, estimated costs, and latency (from log_table)")
