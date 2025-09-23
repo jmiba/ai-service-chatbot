@@ -21,8 +21,7 @@ from utils import (
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent.parent
-
-SETTINGS_SVG = (BASE_DIR / "assets" / "settings.svg").read_text()
+SETTINGS_ICON_PATH = BASE_DIR / "assets" / "settings.svg"
 
 # Must be the first Streamlit call
 st.set_page_config(page_title="LLM & API Settings", layout="wide")
@@ -34,6 +33,7 @@ try:
     create_request_classifications_table()
 except Exception as e:
     st.error(f"Error initializing settings tables: {e}")
+    st.stop()
 
 # Helper to get admin email for audit fields
 def _updated_by_default():
@@ -78,15 +78,12 @@ render_sidebar(authenticated)
 
 # --- Admin content ---
 if authenticated:
-    st.markdown(
-        f"""
-        <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
-            {SETTINGS_SVG}
-            LLM & API Settings
-        </h1>
-        """,
-        unsafe_allow_html=True
-    )
+    heading_cols = st.columns([1, 9])
+    with heading_cols[0]:
+        if SETTINGS_ICON_PATH.exists():
+            st.image(str(SETTINGS_ICON_PATH), width=48)
+    with heading_cols[1]:
+        st.markdown("# LLM & API Settings")
     
     # Create tabs for different views
     tab1, tab2, tab3, tab4 = st.tabs(["System Prompt", "Language Model", "Request Categories", "Filters"])

@@ -38,12 +38,25 @@ def _get_required_secret(key: str) -> str:
 
     return value
 
-OPENAI_API_KEY = _get_required_secret("OPENAI_API_KEY")
-VECTOR_STORE_ID = _get_required_secret("VECTOR_STORE_ID")
-BASE_DIR = Path(__file__).parent.parent
-VECTORIZE_SVG = (BASE_DIR / "assets" / "owl.svg").read_text()
+VECTORIZE_CONFIG_ERROR: str | None = None
+try:
+    OPENAI_API_KEY = _get_required_secret("OPENAI_API_KEY")
+    VECTOR_STORE_ID = _get_required_secret("VECTOR_STORE_ID")
+except RuntimeError as exc:
+    VECTORIZE_CONFIG_ERROR = str(exc)
+    OPENAI_API_KEY = ""
+    VECTOR_STORE_ID = ""
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+BASE_DIR = Path(__file__).parent.parent
+VECTORIZE_ICON_PATH = BASE_DIR / "assets" / "owl.svg"
+
+client = OpenAI(api_key=OPENAI_API_KEY) if not VECTORIZE_CONFIG_ERROR else None
+
+
+def _get_openai_client() -> OpenAI:
+    if client is None:
+        raise RuntimeError(VECTORIZE_CONFIG_ERROR or "OpenAI client is not configured.")
+    return client
 
 # Cache for vector store files (expires after 5 minutes)
 _vs_files_cache = {"data": None, "timestamp": 0, "ttl": 300}
@@ -69,11 +82,12 @@ def list_all_files_in_vector_store(vector_store_id: str):
     """
     Retrieve *all* files in the vector store by following pagination.
     """
+    openai_client = _get_openai_client()
     try:
         all_files = []
         after = None
         while True:
-            resp = client.vector_stores.files.list(
+            resp = openai_client.vector_stores.files.list(
                 vector_store_id=vector_store_id,
                 after=after  # page cursor
             )
@@ -183,17 +197,19 @@ def delete_file_ids(vector_store_id: str, file_ids: set[str], label: str):
     
     print(f"🗑️ Deleting {len(file_ids)} {label} files...")
     
+    openai_client = _get_openai_client()
+
     for i, fid in enumerate(file_ids):
         if not fid:
             continue
         try:
-            client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=fid)
+            openai_client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=fid)
             print(f"🗑️ Detached {label} {fid}")
         except Exception as e:
             print(f"⚠️ Detach failed for {fid}: {e}")
             # continue anyway; maybe already detached
         try:
-            client.files.delete(fid)
+            openai_client.files.delete(fid)
             print(f"🗑️ Deleted file resource {fid}")
         except Exception as e:
             print(f"⚠️ Delete failed for {fid}: {e}")
@@ -231,6 +247,7 @@ def delete_all_files_in_vector_store(vector_store_id: str):
     """
     Delete all files in the vector store, handling pagination and deletion.
     """
+    openai_client = _get_openai_client()
     try:
         # List all files in the vector store
         vs_files = list_all_files_in_vector_store(vector_store_id)
@@ -241,14 +258,14 @@ def delete_all_files_in_vector_store(vector_store_id: str):
 
         for vs_file in vs_files:
             try:
-                client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=vs_file.id)
+                openai_client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=vs_file.id)
                 print(f"🗑️ Detached file {vs_file.id} from vector store.")
             except Exception as e:
                 print(f"⚠️ Failed to detach file {vs_file.id}: {e}")
                 continue
 
             try:
-                client.files.delete(vs_file.id)
+                openai_client.files.delete(vs_file.id)
                 print(f"🗑️ Deleted file resource {vs_file.id}.")
             except Exception as e:
                 print(f"⚠️ Failed to delete file resource {vs_file.id}: {e}")
@@ -292,16 +309,18 @@ def delete_missing_files_from_vector_store(vector_store_id: str, missing_file_id
         print("✅ No missing files to delete.")
         return
 
+    openai_client = _get_openai_client()
+
     for file_id in missing_file_ids:
         try:
-            client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=file_id)
+            openai_client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=file_id)
             print(f"🗑️ Detached file {file_id} from vector store.")
         except Exception as e:
             print(f"⚠️ Failed to detach file {file_id}: {e}")
             continue
 
         try:
-            client.files.delete(file_id)
+            openai_client.files.delete(file_id)
             print(f"🗑️ Deleted file resource {file_id}.")
         except Exception as e:
             print(f"⚠️ Failed to delete file resource {file_id}: {e}")
@@ -313,8 +332,10 @@ def upload_md_to_vector_store(safe_title: str, content: str, vector_store_id: st
     file_stream = BytesIO(content.encode("utf-8"))
     file_name = f"{safe_title}.md"
 
+    openai_client = _get_openai_client()
+
     try:
-        batch = client.vector_stores.file_batches.upload_and_poll(
+        batch = openai_client.vector_stores.file_batches.upload_and_poll(
             vector_store_id=vector_store_id,
             files=[(file_name, file_stream)]
         )
@@ -324,7 +345,7 @@ def upload_md_to_vector_store(safe_title: str, content: str, vector_store_id: st
         # Look through *all* files to find the new one by filename
         vs_files = list_all_files_in_vector_store(vector_store_id)
         for vs_file in vs_files:
-            file_meta = client.files.retrieve(vs_file.id)
+            file_meta = openai_client.files.retrieve(vs_file.id)
             if file_meta.filename == file_name:
                 print(f"📂 Upload successful, found vector file ID: {vs_file.id} for {file_name}")
                 return vs_file.id
@@ -351,9 +372,11 @@ def build_filename_to_id_map_efficiently(vs_files):
     
     print(f"🔍 Mapping {len(vs_files)} vector store files to filenames...")
     
+    openai_client = _get_openai_client()
+
     for i, vs_file in enumerate(vs_files):
         try:
-            file_obj = client.files.retrieve(vs_file.id)
+            file_obj = openai_client.files.retrieve(vs_file.id)
             filename_to_id[file_obj.filename] = vs_file.id
             
             # Progress indicator for large batches
@@ -373,6 +396,7 @@ def build_filename_to_id_map_efficiently(vs_files):
 def sync_vector_store():
     conn = get_connection()
     cur = conn.cursor()
+    openai_client = _get_openai_client()
 
     cur.execute("""
         SELECT id, url, title, safe_title, crawl_date, lang, summary, tags,
@@ -471,13 +495,13 @@ safe_title: "{safe_title or ''}"
         print(f"🗑️ Deleting {len(old_file_ids)} old files...")
         for old_file_id in old_file_ids:
             try:
-                client.vector_stores.files.delete(vector_store_id=VECTOR_STORE_ID, file_id=old_file_id)
+                openai_client.vector_stores.files.delete(vector_store_id=VECTOR_STORE_ID, file_id=old_file_id)
                 print(f"🗑️ Detached file {old_file_id} from vector store.")
             except Exception as e:
                 print(f"⚠️ Detach failed for {old_file_id}: {e} (may already be detached/deleted)")
 
             try:
-                client.files.delete(old_file_id)
+                openai_client.files.delete(old_file_id)
                 print(f"🗑️ Deleted file resource {old_file_id}.")
             except Exception as e:
                 print(f"⚠️ Delete failed for {old_file_id}: {e} (may already be gone)")
@@ -493,7 +517,7 @@ safe_title: "{safe_title or ''}"
     try:
         for idx, files_chunk in enumerate(chunked(upload_files, 100), start=1):
             print(f"📦 Uploading batch {idx} ({len(files_chunk)} files)...")
-            batch = client.vector_stores.file_batches.upload_and_poll(
+            batch = openai_client.vector_stores.file_batches.upload_and_poll(
                 vector_store_id=VECTOR_STORE_ID,
                 files=files_chunk
             )
@@ -588,6 +612,10 @@ if HAS_STREAMLIT_CONTEXT:
         
 
     if authenticated:
+        if VECTORIZE_CONFIG_ERROR:
+            st.error(VECTORIZE_CONFIG_ERROR)
+            st.stop()
+
         # Admin-only content
         conn = get_connection()
         cursor = conn.cursor()
@@ -605,16 +633,13 @@ if HAS_STREAMLIT_CONTEXT:
         output_dir = "exported_markdown"
         os.makedirs(output_dir, exist_ok=True)
     
-        #st.title("Vector Store Sync Tool")
-        st.markdown(
-            f"""
-            <h1 style="display:flex; align-items:center; gap:.5rem; margin:0;">
-                {VECTORIZE_SVG}
-                Vector Store Management
-            </h1>
-            """,
-            unsafe_allow_html=True
-        )
+        heading_cols = st.columns([1, 8])
+        with heading_cols[0]:
+            if VECTORIZE_ICON_PATH.exists():
+                st.image(str(VECTORIZE_ICON_PATH), width=48)
+        with heading_cols[1]:
+            st.markdown("# Vector Store Management")
+
     
         # Quick explanation with performance info
         with st.expander("How this works", icon=":material/info:", expanded=False):
