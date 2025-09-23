@@ -8,6 +8,7 @@ from urllib.parse import quote_plus
 import psycopg2
 from functools import lru_cache
 import uuid
+import threading
 
 # ---- utilities ----
 from utils import (
@@ -184,6 +185,18 @@ def log_interaction(user_input, assistant_response, session_id=None, citation_js
                 print(f"✅ Successfully logged interaction with session_id: {session_id}")
     except psycopg2.Error as e:
         print(f"❌ DB logging error: {e}")
+
+
+def log_interaction_async(*args, **kwargs) -> None:
+    """Background wrapper so logging does not block the UI thread."""
+
+    def _runner():
+        try:
+            log_interaction(*args, **kwargs)
+        except Exception as exc:
+            print(f"⚠️ async log_interaction failed: {exc}")
+
+    threading.Thread(target=_runner, daemon=True).start()
 
 def get_urls_and_titles_by_file_ids(conn, file_ids):
     """Return metadata keyed by file_id for citation rendering."""
@@ -1375,7 +1388,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         reasoning_tok = (reasoning_tok or 0) + eval_reasoning_tok
 
         cost_usd = estimate_cost_usd(llm_config['model'], input_tok, output_tok)
-        log_interaction(
+        log_interaction_async(
             user_input=user_input,
             assistant_response=cleaned,
             session_id=st.session_state.session_id,
