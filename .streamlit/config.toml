@@ -7,3 +7,6 @@ font = "Arial, Helvetica, sans-serif"
 
 [client]
 showSidebarNavigation = false
+
+[browser]
+gatherUsageStats = false
