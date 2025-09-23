@@ -3,7 +3,7 @@ from openai import OpenAI, APIConnectionError, BadRequestError, RateLimitError, 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
-import json, re, html
+import json, re, html, os
 from urllib.parse import quote_plus
 import psycopg2
 from functools import lru_cache
@@ -18,7 +18,6 @@ from utils import (
     supports_reasoning_effort, get_kb_entries, estimate_cost_usd,
     create_request_classifications_table, get_request_classifications,
     get_filter_settings,
-    # NEW: ensure filter_settings table exists on app startup
     create_filter_settings_table,
     create_knowledge_base_table,
 )
@@ -26,6 +25,10 @@ from utils import (
 # -------------------------------------
 
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
+
+
+DBIS_MCP_SERVER_LABEL = "dbis"
+DBIS_MCP_ENV_KEY = f"OPENAI_MCP_SERVER_{DBIS_MCP_SERVER_LABEL.upper()}"
 
 
 # -------------------------------------
@@ -809,6 +812,32 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     if web_enabled:
         tool_cfg.append({"type": "web_search"})
 
+    if os.getenv(DBIS_MCP_ENV_KEY):
+        tool_cfg.extend(
+            [
+                {
+                    "type": "mcp",
+                    "server_label": DBIS_MCP_SERVER_LABEL,
+                    "tool_name": "dbis_list_subjects",
+                },
+                {
+                    "type": "mcp",
+                    "server_label": DBIS_MCP_SERVER_LABEL,
+                    "tool_name": "dbis_list_resource_ids",
+                },
+                {
+                    "type": "mcp",
+                    "server_label": DBIS_MCP_SERVER_LABEL,
+                    "tool_name": "dbis_get_resource",
+                },
+                {
+                    "type": "mcp",
+                    "server_label": DBIS_MCP_SERVER_LABEL,
+                    "tool_name": "dbis_list_resource_ids_by_subject",
+                },
+            ]
+        )
+
     if retrieval_filters is not None:
         # Apply filters only to the web search tool
         for tool in tool_cfg:
@@ -1430,6 +1459,14 @@ except KeyError:
     The app cannot function without an OpenAI API key.
     """)
     st.stop()
+
+dbis_cmd = st.secrets.get(DBIS_MCP_ENV_KEY)
+if dbis_cmd:
+    os.environ.setdefault(DBIS_MCP_ENV_KEY, dbis_cmd)
+
+dbis_org = st.secrets.get("DBIS_ORGANIZATION_ID")
+if dbis_org:
+    os.environ.setdefault("DBIS_ORGANIZATION_ID", str(dbis_org))
 # Helper function to get current LLM configuration
 def get_current_llm_config():
     """Get current LLM settings from database with fallback to defaults"""
