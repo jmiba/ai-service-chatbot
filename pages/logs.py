@@ -6,6 +6,7 @@ from pathlib import Path
 from utils import get_connection, admin_authentication, render_sidebar
 import base64
 import pandas as pd
+import math
 
 BASE_DIR = Path(__file__).parent.parent
 ICON_PATH = (BASE_DIR / "assets" / "search_activity.png")
@@ -191,6 +192,7 @@ if authenticated:
     tab1, tab2, tab3 = st.tabs(["Interaction Logs", "Session Analytics", "System Metrics"])
     
     with tab1:
+        st.header("View Interaction Logs")
         # Admin-only content
         filter_code = st.selectbox("Filter by code", options=["All", "E00", "E01", "E02", "E03"])
 
@@ -239,10 +241,8 @@ if authenticated:
         )
         log_entries = [dict(row) for row in logs]
 
-        st.header("View Interaction Logs")
-        st.markdown(f"### Showing {len(log_entries)} log entries")
-
         if not log_entries:
+            st.markdown("---")
             st.info("No log entries match the current filters.")
         elif group_by_session:
             groups: dict[str, list[dict]] = {}
@@ -256,7 +256,7 @@ if authenticated:
                 reverse=True,
             )
 
-            session_payloads = []
+            session_payloads: list[dict] = []
             for sid, entries in ordered:
                 entries_sorted = sorted(entries, key=lambda e: e["timestamp"])
                 n = len(entries_sorted)
@@ -274,104 +274,171 @@ if authenticated:
                     }
                 )
 
-            session_df = pd.DataFrame(
-                [
-                    {
-                        "Session": payload["session_id"],
-                        "Interactions": payload["interactions"],
-                        "First Seen": payload["first_seen"],
-                        "Last Seen": payload["last_seen"],
-                        "Errors": payload["errors"],
-                    }
-                    for payload in session_payloads
-                ]
-            )
+            if not session_payloads:
+                st.info("No sessions found for the current filters.")
+            else:
+                total_sessions = len(session_payloads)
+                #total_errors = sum(p["errors"] for p in session_payloads)
 
-            st.session_state.setdefault("logs_session_selected_idx", 0)
+                st.session_state.setdefault("logs_session_page_size", 25)
+                st.session_state.setdefault("logs_session_page", 1)
+                st.session_state.setdefault("logs_session_selected_idx", 0)
 
-            selection_enabled = True
-            try:
-                table_event = st.dataframe(
-                    session_df,
-                    hide_index=True,
-                    use_container_width=True,
-                    selection_mode="single-row",
-                    on_select="rerun",
-                    key="logs_session_table",
+                page_size_options = [10, 25, 50, 100]
+                current_page_size = st.session_state["logs_session_page_size"]
+                if current_page_size not in page_size_options:
+                    current_page_size = 25
+                    st.session_state["logs_session_page_size"] = current_page_size
+
+                page_size = st.selectbox(
+                    "Sessions per page",
+                    options=page_size_options,
+                    index=page_size_options.index(current_page_size),
+                    key="logs_session_page_size_select",
                 )
-            except TypeError:
-                selection_enabled = False
-                table_event = st.dataframe(
-                    session_df,
-                    hide_index=True,
-                    use_container_width=True,
-                    key="logs_session_table",
+                if page_size != st.session_state["logs_session_page_size"]:
+                    st.session_state["logs_session_page_size"] = page_size
+                    st.session_state["logs_session_page"] = 1
+                    
+                st.markdown("---")
+                st.markdown(f"### {total_sessions} sessions")
+
+                total_pages = max(
+                    1,
+                    math.ceil(total_sessions / st.session_state["logs_session_page_size"]),
+                )
+                current_page = st.session_state.get("logs_session_page", 1)
+                if current_page < 1 or current_page > total_pages:
+                    current_page = 1
+                    st.session_state["logs_session_page"] = 1
+
+                start_idx = (current_page - 1) * st.session_state["logs_session_page_size"]
+                end_idx = min(start_idx + st.session_state["logs_session_page_size"], total_sessions)
+                page_payloads = session_payloads[start_idx:end_idx]
+
+                paginator_col1, paginator_col2, paginator_col3 = st.columns([1, 2, 1])
+                with paginator_col1:
+                    if st.button(
+                        "◀ Previous",
+                        disabled=current_page <= 1,
+                        key="logs_session_prev_page",
+                    ):
+                        st.session_state["logs_session_page"] = max(1, current_page - 1)
+                with paginator_col2:
+                    st.markdown(
+                        f"**Page {current_page} of {total_pages}** &nbsp;&nbsp;"
+                        f"Showing sessions {start_idx + 1}–{end_idx} of {total_sessions}"
+                    )
+                with paginator_col3:
+                    if st.button(
+                        "Next ▶",
+                        disabled=current_page >= total_pages,
+                        key="logs_session_next_page",
+                    ):
+                        st.session_state["logs_session_page"] = min(
+                            total_pages, current_page + 1
+                        )
+
+                session_df = pd.DataFrame(
+                    [
+                        {
+                            "Session": payload["session_id"],
+                            "Interactions": payload["interactions"],
+                            "First Seen": payload["first_seen"],
+                            "Last Seen": payload["last_seen"],
+                            "Errors": payload["errors"],
+                        }
+                        for payload in page_payloads
+                    ]
                 )
 
-            selected_session_idx = st.session_state.get("logs_session_selected_idx", 0)
-            if selection_enabled:
-                selected_rows: list[int] = []
-                event_selection = getattr(table_event, "selection", None)
-                if isinstance(event_selection, dict):
-                    selected_rows = event_selection.get("rows", []) or []
+                selection_enabled = True
+                try:
+                    table_event = st.dataframe(
+                        session_df,
+                        hide_index=True,
+                        use_container_width=True,
+                        selection_mode="single-row",
+                        on_select="rerun",
+                        key="logs_session_table",
+                    )
+                except TypeError:
+                    selection_enabled = False
+                    table_event = st.dataframe(
+                        session_df,
+                        hide_index=True,
+                        use_container_width=True,
+                        key="logs_session_table",
+                    )
 
-                if selected_rows:
-                    selected_session_idx = selected_rows[0]
+                selected_session_idx = st.session_state.get(
+                    "logs_session_selected_idx", 0
+                )
+                if selection_enabled:
+                    selected_rows: list[int] = []
+                    event_selection = getattr(table_event, "selection", None)
+                    if isinstance(event_selection, dict):
+                        selected_rows = event_selection.get("rows", []) or []
+
+                    if selected_rows:
+                        row_idx = selected_rows[0]
+                        selected_session_idx = start_idx + row_idx
+                        st.session_state["logs_session_selected_idx"] = selected_session_idx
+
+                if not (0 <= selected_session_idx < total_sessions):
+                    selected_session_idx = start_idx if page_payloads else 0
                     st.session_state["logs_session_selected_idx"] = selected_session_idx
 
-            if not (0 <= selected_session_idx < len(session_payloads)):
-                selected_session_idx = 0
-                st.session_state["logs_session_selected_idx"] = selected_session_idx
-
-            if not selection_enabled and session_payloads:
-                fallback_labels = {
-                    f"{payload['session_id']} · {payload['interactions']} msgs · last {payload['last_seen']}": idx
-                    for idx, payload in enumerate(session_payloads)
-                }
-                fallback_default = next(
-                    (
-                        label
-                        for label, idx in fallback_labels.items()
-                        if idx == selected_session_idx
-                    ),
-                    None,
-                )
-                fallback_options = list(fallback_labels.keys())
-                fallback_index = (
-                    fallback_options.index(fallback_default)
-                    if fallback_default in fallback_options
-                    else 0
-                )
-                selected_label = st.radio(
-                    "Select session",
-                    options=fallback_options,
-                    index=fallback_index,
-                    key="logs_session_fallback",
-                )
-                selected_session_idx = fallback_labels[selected_label]
-                st.session_state["logs_session_selected_idx"] = selected_session_idx
-
-            if session_payloads:
-                selected_payload = session_payloads[selected_session_idx]
-                st.markdown(
-                    f"#### Session {selected_payload['session_id']} "
-                    f"— {selected_payload['interactions']} interactions"
-                )
-                st.caption(
-                    f"{selected_payload['first_seen']} → {selected_payload['last_seen']} • "
-                    f"Errors: {selected_payload['errors']}"
-                )
-
-                for idx, entry in enumerate(selected_payload["entries"]):
-                    st.markdown(
-                        f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`"
-                        f", **Citations:** {entry.get('citation_count', 0)}, **Topic:** "
-                        f"`{entry.get('request_classification') or '(unclassified)'}`",
-                        unsafe_allow_html=False,
+                if not selection_enabled and page_payloads:
+                    fallback_labels = {
+                        f"{payload['session_id']} · {payload['interactions']} msgs · last {payload['last_seen']}": start_idx
+                        + idx
+                        for idx, payload in enumerate(page_payloads)
+                    }
+                    fallback_default = next(
+                        (
+                            label
+                            for label, idx in fallback_labels.items()
+                            if idx == selected_session_idx
+                        ),
+                        None,
                     )
-                    render_log_details(entry)
-                    if idx < len(selected_payload["entries"]) - 1:
-                        st.markdown("---")
+                    fallback_options = list(fallback_labels.keys())
+                    fallback_index = (
+                        fallback_options.index(fallback_default)
+                        if fallback_default in fallback_options
+                        else 0
+                    )
+                    selected_label = st.radio(
+                        "Select session",
+                        options=fallback_options,
+                        index=fallback_index,
+                        key="logs_session_fallback",
+                    )
+                    selected_session_idx = fallback_labels[selected_label]
+                    st.session_state["logs_session_selected_idx"] = selected_session_idx
+
+                if page_payloads:
+                    selected_payload = session_payloads[selected_session_idx]
+                    st.markdown(
+                        f"#### Session {selected_payload['session_id']} "
+                        f"— {selected_payload['interactions']} interactions"
+                    )
+                    st.caption(
+                        f"{selected_payload['first_seen']} → {selected_payload['last_seen']} • "
+                        f"Errors: {selected_payload['errors']}"
+                    )
+
+                    for idx, entry in enumerate(selected_payload["entries"]):
+                        st.markdown(
+                            f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`"
+                            f", **Citations:** {entry.get('citation_count', 0)}, **Topic:** "
+                            f"`{entry.get('request_classification') or '(unclassified)'}`",
+                            unsafe_allow_html=False,
+                        )
+                        render_log_details(entry)
+                        if idx < len(selected_payload["entries"]) - 1:
+                            st.markdown("---")
         else:
             st.session_state.setdefault("logs_page_size", 25)
             st.session_state.setdefault("logs_page", 1)
@@ -389,6 +456,9 @@ if authenticated:
                 index=page_size_options.index(current_page_size),
                 key="logs_page_size_select",
             )
+            
+            st.markdown("---")
+            st.markdown(f"### {len(log_entries)} interactions")
             if page_size != st.session_state["logs_page_size"]:
                 st.session_state["logs_page_size"] = page_size
                 st.session_state["logs_page"] = 1
