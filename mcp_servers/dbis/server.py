@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Tuple
 
 import argparse
 import os
 import sys
 import json
+import asyncio
 
 import httpx
 from fastmcp import FastMCP, Context
@@ -68,6 +69,219 @@ def _resolve_org_id(request_org: Optional[str]) -> str:
             "DBIS organization_id is required. Pass it explicitly or set DBIS_ORGANIZATION_ID env var."
         )
     return org_id
+
+
+def _norm_text(v: Any) -> str:
+    try:
+        s = str(v or "").strip()
+    except Exception:
+        s = ""
+    return s
+
+
+def _candidate_fields(d: dict, names: List[str]) -> Optional[str]:
+    for n in names:
+        if n in d and _norm_text(d[n]):
+            return _norm_text(d[n])
+    return None
+
+
+async def _get_subjects() -> List[dict[str, Any]]:
+    url = f"{DBIS_BASE_URL}/subjects"
+    data = await _fetch_json(url)
+    # Expecting a list; fallback to []
+    if isinstance(data, list):
+        return data
+    # Sometimes wrapped
+    if isinstance(data, dict):
+        for key in ("subjects", "items", "data"):
+            v = data.get(key)
+            if isinstance(v, list):
+                return v
+    return []
+
+
+def _find_subject_id(subjects: List[dict[str, Any]], query: str) -> Tuple[Optional[str], Optional[str]]:
+    q = _norm_text(query).lower()
+    if not q:
+        return None, None
+
+    # Try direct ID use (numeric or exact id string)
+    for s in subjects:
+        sid = _candidate_fields(s, ["id", "subject_id", "code"]) or ""
+        if sid and (q == sid.lower()):
+            name = _candidate_fields(s, ["name", "title", "label"]) or sid
+            return sid, name
+    if q.isdigit():
+        # Assume it's a subject id
+        return q, None
+
+    # Exact name/title match (case-insensitive)
+    for s in subjects:
+        name = _candidate_fields(s, ["name", "title", "label"]) or ""
+        if name and name.lower() == q:
+            sid = _candidate_fields(s, ["id", "subject_id", "code"]) or None
+            return sid, name
+
+    # Startswith match
+    for s in subjects:
+        name = _candidate_fields(s, ["name", "title", "label"]) or ""
+        if name and name.lower().startswith(q):
+            sid = _candidate_fields(s, ["id", "subject_id", "code"]) or None
+            return sid, name
+
+    # Contains match
+    for s in subjects:
+        name = _candidate_fields(s, ["name", "title", "label"]) or ""
+        if name and q in name.lower():
+            sid = _candidate_fields(s, ["id", "subject_id", "code"]) or None
+            return sid, name
+
+    return None, None
+
+
+def _extract_resource_title(res: dict[str, Any]) -> str:
+    return (
+        _candidate_fields(res, [
+            "title", "name", "label", "short_title", "shortTitle", "display_title",
+        ])
+        or _candidate_fields(res.get("resource", {}), ["title", "name"])  # nested fallback
+        or "Untitled resource"
+    )
+
+
+def _extract_resource_urls(res: dict[str, Any]) -> List[str]:
+    urls: List[str] = []
+    # common direct fields
+    for k in ["url", "portalUrl", "portal_url", "homepage", "providerUrl", "provider_url", "link", "website"]:
+        v = _norm_text(res.get(k))
+        if v and v.startswith("http"):
+            urls.append(v)
+    # nested possibilities
+    resource = res.get("resource")
+    if isinstance(resource, dict):
+        for k in ["url", "portalUrl", "homepage", "website", "link"]:
+            v = _norm_text(resource.get(k))
+            if v and v.startswith("http"):
+                urls.append(v)
+        links = resource.get("links")
+        if isinstance(links, list):
+            for lk in links:
+                if isinstance(lk, dict):
+                    v = _norm_text(lk.get("href") or lk.get("url"))
+                    if v and v.startswith("http"):
+                        urls.append(v)
+                elif isinstance(lk, str) and lk.startswith("http"):
+                    urls.append(lk)
+    # Deduplicate, preserve order
+    seen = set()
+    out = []
+    for u in urls:
+        if u not in seen:
+            out.append(u)
+            seen.add(u)
+    return out
+
+
+async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any]:
+    url = f"{DBIS_BASE_URL}/resource/{resource_id}/organization/{org_id}"
+    try:
+        data = await _fetch_json(url)
+        # Ensure dict
+        if not isinstance(data, dict):
+            data = {"data": data}
+        title = _extract_resource_title(data)
+        urls = _extract_resource_urls(data)
+        item = {
+            "id": resource_id,
+            "title": title,
+            "urls": urls,
+            "api_url": url,
+        }
+        if urls:
+            item["link"] = urls[0]
+        return item
+    except httpx.TimeoutException:
+        return {"id": resource_id, "error": "timeout", "api_url": url}
+    except Exception as e:
+        return {"id": resource_id, "error": str(e), "api_url": url}
+
+
+def _build_markdown(items: List[dict[str, Any]]) -> str:
+    lines: List[str] = []
+    for it in items:
+        title = _norm_text(it.get("title")) or "Untitled resource"
+        link = _norm_text(it.get("link"))
+        if link:
+            lines.append(f"- [{title}]({link})")
+        else:
+            lines.append(f"- {title}")
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="dbis_top_resources",
+    description=(
+        "Return a concise, opinionated top list of DBIS resources for the given subject name or id. "
+        "Defaults to organization from DBIS_ORGANIZATION_ID. Accepts: subject_name (str), limit (int, default 6). "
+        "Do not ask follow-up questions; assume Viadrina/EUV by default. Return clickable links when available."
+    ),
+)
+async def top_resources(
+    context: Context,
+    subject_name: str,
+    limit: Optional[int] = 6,
+    organization_id: Optional[str] = None,
+    format: Optional[str] = "markdown",
+) -> dict[str, Any]:
+    print("[MCP] dbis_top_resources: start", file=sys.stderr, flush=True)
+    try:
+        org_id = _resolve_org_id(organization_id)
+        subjects = await _get_subjects()
+        sid, resolved_name = _find_subject_id(subjects, subject_name)
+        if not sid:
+            msg = f"Subject not found for query: {subject_name}"
+            print(f"[MCP] dbis_top_resources: {msg}", file=sys.stderr, flush=True)
+            return {"error": msg, "query": subject_name}
+
+        # List resource IDs by subject
+        url_ids = f"{DBIS_BASE_URL}/resourceIdsBySubject/{sid}/organization/{org_id}"
+        ids_payload = await _fetch_json(url_ids)
+        if isinstance(ids_payload, dict):
+            resource_ids = ids_payload.get("resource_ids") or ids_payload.get("ids") or []
+        else:
+            resource_ids = ids_payload or []
+        resource_ids = [str(r) for r in resource_ids if r is not None]
+        if limit is None or not isinstance(limit, int) or limit <= 0:
+            limit = 6
+        resource_ids = resource_ids[:limit]
+
+        # Fetch details concurrently
+        tasks = [
+            _fetch_resource_detail(rid, org_id)
+            for rid in resource_ids
+        ]
+        items = await asyncio.gather(*tasks)
+
+        # Build output
+        md = _build_markdown(items)
+        result = {
+            "organization_id": org_id,
+            "subject": {"id": sid, "name": resolved_name or subject_name},
+            "count": len(items),
+            "items": items,
+        }
+        if (format or "").lower() == "markdown":
+            result["md"] = md
+        print("[MCP] dbis_top_resources: ok", file=sys.stderr, flush=True)
+        return result
+    except httpx.TimeoutException:
+        msg = "Timeout while fetching DBIS top resources."
+        print(f"[MCP] dbis_top_resources: {msg}", file=sys.stderr, flush=True)
+        return {"error": msg}
+    except Exception as e:
+        print(f"[MCP] dbis_top_resources: error: {e}", file=sys.stderr, flush=True)
+        return {"error": str(e)}
 
 
 @mcp.tool(

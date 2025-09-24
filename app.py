@@ -9,6 +9,7 @@ import psycopg2
 from functools import lru_cache
 import uuid
 import threading
+import httpx
 
 # ---- utilities ----
 from utils import (
@@ -32,6 +33,42 @@ DBIS_MCP_ENV_KEY = f"OPENAI_MCP_SERVER_{DBIS_MCP_SERVER_LABEL.upper()}"
 DBIS_MCP_SERVER_URL_KEY = "DBIS_MCP_SERVER_URL"
 DBIS_MCP_AUTH_KEY = "DBIS_MCP_AUTHORIZATION"
 DBIS_MCP_HEADERS_KEY = "DBIS_MCP_HEADERS"
+
+
+def _mcp_preflight(url: str, headers: dict | None, authorization: str | None, timeout_s: float = 3.0) -> tuple[bool, str | None]:
+    """Quick reachability/auth check for MCP server URL.
+    Returns (ok, reason). Ok means reachable enough for the OpenAI client to try.
+    If 401/403, returns ok=False with reason "unauthorized".
+    If connect/DNS/TLS errors, returns ok=False with a short reason.
+    Note: Some SSE servers delay response headers; a read-timeout is treated as reachable.
+    """
+    if not url:
+        return False, "missing-url"
+    req_headers = dict(headers or {})
+    if authorization and "Authorization" not in req_headers:
+        req_headers["Authorization"] = str(authorization)
+    # Many MCP servers require SSE Accept header even for discovery endpoints
+    if "Accept" not in req_headers:
+        req_headers["Accept"] = "text/event-stream"
+    try:
+        resp = httpx.get(
+            url,
+            headers=req_headers or None,
+            timeout=httpx.Timeout(timeout_s, read=timeout_s),
+            follow_redirects=True,
+        )
+        if resp.status_code in (401, 403):
+            return False, "unauthorized"
+        if 200 <= resp.status_code < 500:
+            return True, None
+        return False, f"server-error-{resp.status_code}"
+    except httpx.ReadTimeout:
+        # Connected but no bytes in time (common with SSE); treat as reachable
+        return True, "slow"
+    except (httpx.ConnectTimeout, httpx.ConnectError):
+        return False, "connect-error"
+    except httpx.HTTPError as e:
+        return False, f"http-error: {type(e).__name__}"
 
 
 # -------------------------------------
@@ -863,13 +900,31 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
     print(DBIS_MCP_ENV_KEY, dbis_mcp_command)
     if dbis_mcp_url:
-        print(DBIS_MCP_SERVER_URL_KEY, dbis_mcp_url)
+        #print(DBIS_MCP_SERVER_URL_KEY, dbis_mcp_url)
 
     if dbis_disabled:
         print(
             "DBIS MCP connector disabled for this session due to previous errors.",
             flush=True,
         )
+
+    # Preflight MCP reachability/auth once per session or when URL changes
+    if dbis_mcp_url and not dbis_disabled:
+        ok, reason = _mcp_preflight(dbis_mcp_url, dbis_mcp_headers, dbis_mcp_auth)
+        if not ok:
+            st.session_state["dbis_mcp_disabled"] = True
+            warn = "⚠️ DBIS MCP is disabled for this session: "
+            if reason == "unauthorized":
+                warn += "server responded with 401/403 (check DBIS_MCP_AUTHORIZATION/DBIS_MCP_HEADERS)."
+            elif reason and reason.startswith("server-error"):
+                warn += f"server error ({reason.split('-')[-1]})."
+            else:
+                warn += "server is unreachable."
+            try:
+                st.warning(warn)
+            except Exception:
+                print(warn, flush=True)
+            dbis_disabled = True
 
     if not dbis_disabled:
         if dbis_mcp_url:
@@ -878,11 +933,13 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 "server_label": DBIS_MCP_SERVER_LABEL,
                 "server_url": dbis_mcp_url,
                 "allowed_tools": [
+                    "dbis_top_resources",
                     "dbis_list_subjects",
                     "dbis_list_resource_ids",
                     "dbis_get_resource",
                     "dbis_list_resource_ids_by_subject",
                 ],
+                "require_approval": "never",
             }
             if dbis_mcp_auth:
                 dbis_tool_cfg["authorization"] = str(dbis_mcp_auth)
@@ -1002,7 +1059,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             
             # Measure latency of main API call
             t_start = datetime.now()
-            with client.responses.stream(**api_params) as stream:
+            with client.responses.stream(timeout=30, **api_params) as stream:
                 for event in stream:
                     # Keep spinner until the model is done emitting text.
                     if event.type == "response.output_text.complete":
@@ -1115,7 +1172,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                             fallback_api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
                         fallback_api_params['text'] = {'verbosity': llm_config['text_verbosity']}
                     t_start = datetime.now()
-                    final = client.responses.create(**fallback_api_params)
+                    final = client.responses.create(timeout=30, **fallback_api_params)
                     t_end = datetime.now()
                     main_latency_ms = int((t_end - t_start).total_seconds() * 1000)
                     buf = _get_attr(final, "output_text", "") or ""
@@ -1462,6 +1519,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # Get current LLM configuration from database
         llm_config = get_current_llm_config()
         structured = client.responses.create(
+            timeout=30,
             model=llm_config['model'],
             input=[
                 {"role": "system", "content": evaluation_system_prompt},
@@ -1698,7 +1756,7 @@ col1, col2 = st.columns([3, 3])
 with col1:
     st.image(BASE_DIR / "assets/viadrina-ub-logo.png", width=300)
 with col2:
-    st.markdown('<div id="chatbot-title"><h1>Viadrina Library Assistant</h1></div>', unsafe_allow_html=True)
+       st.markdown('<div id="chatbot-title"><h1>Viadrina Library Assistant</h1></div>', unsafe_allow_html=True)
 st.markdown('<div id="special-hr"><hr></div>', unsafe_allow_html=True)
 
 # replay chat history
