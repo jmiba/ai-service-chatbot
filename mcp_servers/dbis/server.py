@@ -261,6 +261,26 @@ def _derive_links(urls: List[str], resource_id: str, org_id: str) -> tuple[Optio
     return vendor_link, dbis_link, ordered
 
 
+async def _fetch_text(url: str) -> str:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, read=6.0), headers=(DBIS_UPSTREAM_HEADERS or None)) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return resp.text or ""
+
+
+async def _extract_vendor_from_dbis_html(dbis_detail_url: str) -> Optional[str]:
+    try:
+        html = await _fetch_text(dbis_detail_url)
+        # find external http(s) links; prefer the first that is not dbis.ur.de
+        candidates = re.findall(r'href=["\'](https?://[^"\']+)["\']', html, flags=re.IGNORECASE)
+        for u in candidates:
+            if not _is_dbis_url(u):
+                return u
+    except Exception:
+        pass
+    return None
+
+
 async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any]:
     url = f"{DBIS_BASE_URL}/resource/{resource_id}/organization/{org_id}"
     try:
@@ -271,6 +291,11 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
         title = _extract_resource_title(data)
         urls = _extract_resource_urls(data)
         vendor_link, dbis_link, urls_pref = _derive_links(urls, resource_id, org_id)
+        # If no vendor link from API, try to extract one from the DBIS detail page HTML
+        if not vendor_link and dbis_link:
+            vendor_link = await _extract_vendor_from_dbis_html(dbis_link)
+            if vendor_link and vendor_link not in urls_pref:
+                urls_pref = [vendor_link] + [u for u in urls_pref if u != vendor_link]
         desc = _extract_resource_description(data)
         item = {
             "id": resource_id,
