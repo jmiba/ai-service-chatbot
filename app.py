@@ -899,8 +899,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     dbis_mcp_command = os.getenv(DBIS_MCP_ENV_KEY)
 
     print(DBIS_MCP_ENV_KEY, dbis_mcp_command)
-    if dbis_mcp_url:
-        #print(DBIS_MCP_SERVER_URL_KEY, dbis_mcp_url)
+    # if dbis_mcp_url:
+    #     print(DBIS_MCP_SERVER_URL_KEY, dbis_mcp_url)
 
     if dbis_disabled:
         print(
