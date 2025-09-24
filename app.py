@@ -994,7 +994,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             _dbis_org = os.getenv("DBIS_ORGANIZATION_ID") or str(st.secrets.get("DBIS_ORGANIZATION_ID", "")).strip()
         except Exception:
             _dbis_org = None
-        print("DBIS_ORGANIZATION_ID:", _dbis_org)
+        
         if _dbis_org:
             conversation.append({
                 "role": "system",
