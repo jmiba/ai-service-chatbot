@@ -1152,7 +1152,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     "content": (
                         f"When calling any DBIS MCP tools (dbis_*), always include the argument "
                         f"organization_id='{_dbis_org}'. If organization_id is omitted, default to '{_dbis_org}'."
-                        f"Process annotations."
                     )
                 })
         except Exception:
