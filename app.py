@@ -834,9 +834,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     web_enabled = True
     if web_tool_extras and isinstance(web_tool_extras, dict):
         web_enabled = bool(web_tool_extras.get("web_search_enabled", True))
-    # Add web_search when enabled; filters are attached only if present
-    if web_enabled:
-        tool_cfg.append({"type": "web_search"})
+    
+    # Add DBIS MCP tool if configured
     dbis_mcp_url = (
         str(st.secrets.get(DBIS_MCP_SERVER_URL_KEY, "") or os.getenv(DBIS_MCP_SERVER_URL_KEY, "")).strip()
     ) or None
@@ -896,6 +895,10 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 "Skipping MCP tool registration because the OpenAI API requires an accessible server URL.",
                 flush=True,
             )
+            
+    # Add web_search when enabled; filters are attached only if present
+    if web_enabled:
+        tool_cfg.append({"type": "web_search"})
 
     if retrieval_filters is not None:
         # Apply filters only to the web search tool
@@ -914,7 +917,14 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
     # Build conversation context (last 10 exchanges to stay within limits)
     def build_conversation_context():
-        conversation = [{"role": "system", "content": system_instructions}]
+        conversation = [
+            {"role": "system", "content": system_instructions},
+            {"role": "system", "content": (
+                "Tool policy: Prefer DBIS MCP and file_search for known-library content. "
+                "Only use web_search when the knowledge base and DBIS MCP cannot answer "
+                "or when the user explicitly requests the open web."
+            )},
+        ]
         
         # Add recent conversation history (each user has their own st.session_state)
         recent_messages = st.session_state.messages[-10:] if st.session_state.messages else []
