@@ -29,6 +29,7 @@ st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initi
 
 DBIS_MCP_SERVER_LABEL = "dbis"
 DBIS_MCP_ENV_KEY = f"OPENAI_MCP_SERVER_{DBIS_MCP_SERVER_LABEL.upper()}"
+DBIS_MCP_SERVER_URL_KEY = "DBIS_MCP_SERVER_URL"
 
 
 # -------------------------------------
@@ -811,32 +812,49 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     # Add web_search when enabled; filters are attached only if present
     if web_enabled:
         tool_cfg.append({"type": "web_search"})
+    dbis_mcp_url = (
+        str(st.secrets.get(DBIS_MCP_SERVER_URL_KEY, "") or os.getenv(DBIS_MCP_SERVER_URL_KEY, "")).strip()
+    ) or None
 
-    if os.getenv(DBIS_MCP_ENV_KEY):
-        tool_cfg.extend(
-            [
-                {
-                    "type": "mcp",
-                    "server_label": DBIS_MCP_SERVER_LABEL,
-                    "tool_name": "dbis_list_subjects",
-                },
-                {
-                    "type": "mcp",
-                    "server_label": DBIS_MCP_SERVER_LABEL,
-                    "tool_name": "dbis_list_resource_ids",
-                },
-                {
-                    "type": "mcp",
-                    "server_label": DBIS_MCP_SERVER_LABEL,
-                    "tool_name": "dbis_get_resource",
-                },
-                {
-                    "type": "mcp",
-                    "server_label": DBIS_MCP_SERVER_LABEL,
-                    "tool_name": "dbis_list_resource_ids_by_subject",
-                },
-            ]
+    last_url = st.session_state.get("dbis_mcp_last_url")
+    if dbis_mcp_url and dbis_mcp_url != last_url:
+        st.session_state["dbis_mcp_last_url"] = dbis_mcp_url
+        st.session_state.pop("dbis_mcp_disabled", None)
+
+    dbis_disabled = st.session_state.get("dbis_mcp_disabled", False)
+    dbis_mcp_command = os.getenv(DBIS_MCP_ENV_KEY)
+
+    print(DBIS_MCP_ENV_KEY, dbis_mcp_command)
+    if dbis_mcp_url:
+        print(DBIS_MCP_SERVER_URL_KEY, dbis_mcp_url)
+
+    if dbis_disabled:
+        print(
+            "DBIS MCP connector disabled for this session due to previous errors.",
+            flush=True,
         )
+
+    if not dbis_disabled:
+        if dbis_mcp_url:
+            tool_cfg.append(
+                {
+                    "type": "mcp",
+                    "server_label": DBIS_MCP_SERVER_LABEL,
+                    "server_url": dbis_mcp_url,
+                    "allowed_tools": [
+                        "dbis_list_subjects",
+                        "dbis_list_resource_ids",
+                        "dbis_get_resource",
+                        "dbis_list_resource_ids_by_subject",
+                    ],
+                }
+            )
+        elif dbis_mcp_command:
+            print(
+                "DBIS MCP command is configured but no DBIS_MCP_SERVER_URL was provided. "
+                "Skipping MCP tool registration because the OpenAI API requires an accessible server URL.",
+                flush=True,
+            )
 
     if retrieval_filters is not None:
         # Apply filters only to the web search tool
@@ -986,6 +1004,39 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             main_latency_ms = int((t_end - t_start).total_seconds() * 1000)
 
         except (BadRequestError, APIConnectionError, RateLimitError, APIError) as e:
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            error_text = getattr(e, "message", "") or str(e)
+            mcp_tool_present = any(tool.get("type") == "mcp" for tool in tool_cfg)
+            is_mcp_tool_error = (
+                status_code == 424
+                and "Error retrieving tool list" in error_text
+                and mcp_tool_present
+            )
+            fallback_api_params = None
+
+            if is_mcp_tool_error:
+                st.session_state["dbis_mcp_disabled"] = True
+                warning_msg = (
+                    "⚠️ DBIS tools are temporarily disabled because the MCP server "
+                    "could not be reached. The chat will continue without DBIS access."
+                )
+                try:
+                    st.warning(warning_msg)
+                except Exception:
+                    print(warning_msg, flush=True)
+                tool_cfg = [tool for tool in tool_cfg if tool.get("type") != "mcp"]
+                # Prepare fallback params without MCP tools so the non-streaming retry succeeds
+                llm_config = get_current_llm_config()
+                fallback_api_params = {
+                    'model': llm_config['model'],
+                    'input': conversation_input,
+                    'tools': tool_cfg,
+                    'parallel_tool_calls': llm_config['parallel_tool_calls']
+                }
+                if supports_reasoning_effort(llm_config['model']):
+                    fallback_api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
+                fallback_api_params['text'] = {'verbosity': llm_config['text_verbosity']}
+
             print(f"❌ OpenAI API error during streaming: {e}", flush=True)
             # Ensure spinner is closed before fallback/error
             try:
@@ -997,19 +1048,20 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 # Fallback: non-streaming request rendered inside same bubble
                 with st.spinner("Thinking…"):
                     # Get current LLM configuration from database
-                    llm_config = get_current_llm_config()
-                    # Build API parameters conditionally based on model support
-                    api_params = {
-                        'model': llm_config['model'],
-                        'input': conversation_input,
-                        'tools': tool_cfg,
-                        'parallel_tool_calls': llm_config['parallel_tool_calls']
-                    }
-                    if supports_reasoning_effort(llm_config['model']):
-                        api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
-                    api_params['text'] = {'verbosity': llm_config['text_verbosity']}
+                    if fallback_api_params is None:
+                        llm_config = get_current_llm_config()
+                        # Build API parameters conditionally based on model support
+                        fallback_api_params = {
+                            'model': llm_config['model'],
+                            'input': conversation_input,
+                            'tools': tool_cfg,
+                            'parallel_tool_calls': llm_config['parallel_tool_calls']
+                        }
+                        if supports_reasoning_effort(llm_config['model']):
+                            fallback_api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
+                        fallback_api_params['text'] = {'verbosity': llm_config['text_verbosity']}
                     t_start = datetime.now()
-                    final = client.responses.create(**api_params)
+                    final = client.responses.create(**fallback_api_params)
                     t_end = datetime.now()
                     main_latency_ms = int((t_end - t_start).total_seconds() * 1000)
                     buf = _get_attr(final, "output_text", "") or ""
@@ -1461,8 +1513,11 @@ except KeyError:
     st.stop()
 
 dbis_cmd = st.secrets.get(DBIS_MCP_ENV_KEY)
-if dbis_cmd:
+dbis_url_secret = st.secrets.get(DBIS_MCP_SERVER_URL_KEY)
+if dbis_cmd and not dbis_url_secret:
     os.environ.setdefault(DBIS_MCP_ENV_KEY, dbis_cmd)
+if dbis_url_secret:
+    os.environ.setdefault(DBIS_MCP_SERVER_URL_KEY, str(dbis_url_secret))
 
 dbis_org = st.secrets.get("DBIS_ORGANIZATION_ID")
 if dbis_org:

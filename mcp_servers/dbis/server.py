@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, Dict, Optional
 
+import argparse
 import os
+import sys
+
 import httpx
 from fastmcp import FastMCP, Context
 
@@ -13,7 +15,7 @@ DBIS_BASE_URL = "https://dbis.ur.de/api/v1"
 DEFAULT_TIMEOUT = httpx.Timeout(10.0, read=30.0)
 
 mcp = FastMCP("dbis")
-
+print("DBIS MCP server initialized.", file=sys.stderr, flush=True)
 
 async def _fetch_json(url: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
@@ -83,8 +85,43 @@ async def list_resource_ids_by_subject(
     }
 
 
-def main() -> None:
-    asyncio.run(mcp.run())
+def main(argv: Optional[list[str]] = None) -> None:
+    parser = argparse.ArgumentParser(description="Run the DBIS MCP server.")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http", "sse", "streamable-http"],
+        default="stdio",
+        help="Transport protocol to expose (default: stdio).",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.getenv("DBIS_MCP_HOST", "127.0.0.1"),
+        help="Bind host when using an HTTP-based transport (default: 127.0.0.1).",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("DBIS_MCP_PORT", "8765")),
+        help="Bind port when using an HTTP-based transport (default: 8765).",
+    )
+    parser.add_argument(
+        "--no-banner",
+        action="store_true",
+        help="Suppress the startup banner emitted by FastMCP.",
+    )
+
+    args = parser.parse_args(argv)
+
+    transport_kwargs: Dict[str, Any] = {}
+    if args.transport != "stdio":
+        transport_kwargs["host"] = args.host
+        transport_kwargs["port"] = args.port
+
+    mcp.run(
+        transport=args.transport,
+        show_banner=not args.no_banner,
+        **transport_kwargs,
+    )
 
 
 if __name__ == "__main__":
