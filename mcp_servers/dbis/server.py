@@ -381,8 +381,6 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
             "title": title,
             "vendor_link": vendor_link,
             "dbis_link": dbis_link,
-            # Primary link for inline display defaults to vendor when available
-            "link": vendor_link or dbis_link,
             "description": desc,
         }
         return item

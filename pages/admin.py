@@ -362,6 +362,7 @@ if authenticated:
                 if ul_country and len(ul_country.strip()) not in (0,2):
                     st.error("Country should be a 2-letter code (ISO 3166-1 alpha-2), e.g., 'US', 'DE'.")
                     st.stop()
+                print(ul_city)
 
                 settings = {
                     'web_search_enabled': enabled,

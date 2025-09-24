@@ -877,10 +877,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             "vector_store_ids": [st.secrets["VECTOR_STORE_ID"]],
         })
     
-    web_enabled = True
-    if web_tool_extras and isinstance(web_tool_extras, dict):
-        web_enabled = bool(web_tool_extras.get("web_search_enabled", True))
-    
     # Add DBIS MCP tool if configured
     dbis_mcp_url = (
         str(st.secrets.get(DBIS_MCP_SERVER_URL_KEY, "") or os.getenv(DBIS_MCP_SERVER_URL_KEY, "")).strip()
@@ -982,8 +978,12 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 "Skipping MCP tool registration because the OpenAI API requires an accessible server URL.",
                 flush=True,
             )
+    
+    # Add web_search when enabled; filters are attached only if present        
+    web_enabled = True
+    if web_tool_extras and isinstance(web_tool_extras, dict):
+        web_enabled = bool(web_tool_extras.get("web_search_enabled", True))
             
-    # Add web_search when enabled; filters are attached only if present
     if web_enabled:
         tool_cfg.append({"type": "web_search"})
 
@@ -1009,7 +1009,9 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         ]
         # Instruct the model to include the org ID when invoking DBIS MCP tools
         try:
-            _dbis_org = os.getenv("DBIS_ORGANIZATION_ID") or str(st.secrets.get("DBIS_ORGANIZATION_ID", "")).strip()
+            _dbis_org = None
+            if web_tool_extras and isinstance(web_tool_extras, dict):
+                _dbis_org = (web_tool_extras.get("dbis_org_id") or "").strip() or None
         except Exception:
             _dbis_org = None
         
@@ -1019,6 +1021,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 "content": (
                     f"When calling any DBIS MCP tools (dbis_*), always include the argument "
                     f"organization_id='{_dbis_org}'. If organization_id is omitted, default to '{_dbis_org}'."
+                    f"Process urls in the response in this format `vendor_link ([DBIS: title](dbis_link))`."
                 )
             })
         
@@ -1541,106 +1544,118 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     if len(st.session_state.messages) > MAX_HISTORY:
         st.session_state.messages = st.session_state.messages[-MAX_HISTORY:]
 
-    # --- Structured evaluation follow-up (request classification + response evaluation) ---
-    request_classification = "other"
-    evaluation_notes = ""
-    confidence = 0.0
-    error_code = None
-    try:
+    # --- Structured evaluation follow-up (background, cheaper model) ---
+    def _run_eval_and_log_bg(user_input, cleaned, citation_map, session_id, main_latency_ms, base_usage):
+        """Run evaluation with a cheaper model in background, then log interaction."""
         try:
             evaluation_system_prompt = EVALUATION_SYSTEM_TEMPLATE.format(
-                citation_count=len(citation_map),
+                citation_count=len(citation_map or {}),
                 allowed_topics=", ".join(get_allowed_request_classifications()),
             )
-        except KeyError as exc:
-            raise RuntimeError(f"Evaluation prompt template missing placeholder: {exc}") from exc
-
-        # Get current LLM configuration from database
-        llm_config = get_current_llm_config()
-        structured = client.responses.create(
-            timeout=30,
-            model=llm_config['model'],
-            input=[
-                {"role": "system", "content": evaluation_system_prompt},
-                {"role": "user", "content": f"Original user request: {user_input}"},
-                {"role": "assistant", "content": f"Assistant response: {cleaned}"},
-                {"role": "user", "content": "Please evaluate this interaction and return the JSON evaluation."}
-            ]
-        )
-
-        # Capture evaluation usage to include in totals/cost
-        try:
-            e_in, e_out, e_total, e_reason = _get_usage_from_final(structured)
-            eval_input_tok = int(e_in or 0)
-            eval_output_tok = int(e_out or 0)
-            eval_total_tok = int(e_total or 0)
-            eval_reasoning_tok = int(e_reason or 0)
         except Exception:
-            pass
+            evaluation_system_prompt = EVALUATION_SYSTEM_TEMPLATE
 
-        payload_text = _safe_output_text(structured)
-        if not payload_text:
-            st.warning("No evaluation payload returned from structured call.")
-        else:
-            # Show evaluation when debugging
-            if debug_one:
-                with st.expander("🔎 Response Evaluation (JSON)", expanded=False):
-                    st.code(payload_text, language="json")
+        eval_model = st.secrets.get("EVAL_MODEL", "gpt-4o-mini")
 
-            payload = json.loads(payload_text)
+        # Defaults in case eval fails
+        e_in = e_out = e_total = e_reason = 0
+        confidence = 0.0
+        error_code = None
+        request_classification = "other"
+        evaluation_notes = ""
+
+        try:
+            structured = client.responses.create(
+                timeout=30,
+                model=eval_model,
+                input=[
+                    {"role": "system", "content": evaluation_system_prompt},
+                    {"role": "user", "content": f"Original user request: {user_input}"},
+                    {"role": "assistant", "content": f"Assistant response: {cleaned}"},
+                    {"role": "user", "content": "Please evaluate this interaction and return the JSON evaluation."}
+                ]
+            )
+            e_in, e_out, e_total, e_reason = _get_usage_from_final(structured)
+            payload_text = _safe_output_text(structured) or ""
+            try:
+                payload = json.loads(payload_text) if payload_text.strip() else {}
+            except Exception:
+                payload = {}
             confidence = float(payload.get("confidence", 0.0))
             ec = payload.get("error_code")
             error_code = f"E0{ec}" if ec is not None else None
             request_classification = payload.get("request_classification", "other")
             evaluation_notes = payload.get("evaluation_notes", "")
+        except Exception as e:
+            if debug_one:
+                print(f"⚠️ Evaluation in background failed: {e}")
 
-    except BadRequestError as e:
-        st.error(f"Evaluation call failed (BadRequest): {e}")
-    except RateLimitError as e:
-        st.error("Evaluation call rate-limited. Please try again shortly.")
-    except APIConnectionError as e:
-        st.error(f"Evaluation call connection error: {e}")
-    except APIError as e:
-        st.error(f"Evaluation call server error: {e}")
-    except Exception as e:
-        if debug_one:
-            st.error(f"Evaluation call unexpected error: {e}")
-        # Silently continue with default values for production
+        # Compose usage and cost (main + eval priced per model)
+        try:
+            main_model = get_current_llm_config()['model']
+        except Exception:
+            main_model = st.secrets.get("MODEL", "gpt-4o-mini")
 
-    try:
-        # Debug: Check session ID before logging
-        print(f"🔎 About to log interaction with session_id: {st.session_state.session_id}")
-        # Determine model (from current config)
-        llm_config = get_current_llm_config()
+        main_in = int(base_usage.get("in", 0) or 0)
+        main_out = int(base_usage.get("out", 0) or 0)
+        main_total = int(base_usage.get("total", main_in + main_out) or 0)
+        main_reason = int(base_usage.get("reason", 0) or 0)
 
-        # Include evaluation usage in totals before computing cost
-        input_tok = (input_tok or 0) + eval_input_tok
-        output_tok = (output_tok or 0) + eval_output_tok
-        total_tok = (total_tok or 0) + eval_total_tok
-        reasoning_tok = (reasoning_tok or 0) + eval_reasoning_tok
+        # Totals include eval usage
+        input_tok = main_in + int(e_in or 0)
+        output_tok = main_out + int(e_out or 0)
+        total_tok = main_total + int(e_total or 0)
+        reasoning_tok = main_reason + int(e_reason or 0)
 
-        cost_usd = estimate_cost_usd(llm_config['model'], input_tok, output_tok)
-        log_interaction_async(
-            user_input=user_input,
-            assistant_response=cleaned,
-            session_id=st.session_state.session_id,
-            citation_json=json.dumps(citation_map, ensure_ascii=False) if citation_map else None,
-            citation_count=len(citation_map),
-            confidence=confidence,
-            error_code=error_code,
-            request_classification=request_classification,
-            evaluation_notes=evaluation_notes,
-            model=llm_config['model'],
-            usage_input_tokens=input_tok,
-            usage_output_tokens=output_tok,
-            usage_total_tokens=total_tok,
-            usage_reasoning_tokens=reasoning_tok,
-            api_cost_usd=cost_usd,
-            response_time_ms=main_latency_ms if 'main_latency_ms' in locals() else None,
-        )
-    except Exception as log_error:
-        # Silently fail for logging - don't interrupt user experience
-        print(f"Warning: Failed to log interaction: {log_error}")
+        try:
+            main_cost = estimate_cost_usd(main_model, main_in, main_out) or 0.0
+        except Exception:
+            main_cost = 0.0
+        try:
+            eval_cost = estimate_cost_usd(eval_model, int(e_in or 0), int(e_out or 0)) or 0.0
+        except Exception:
+            eval_cost = 0.0
+        cost_usd = float(main_cost) + float(eval_cost)
+
+        try:
+            # Debug: Check session ID before logging
+            print(f"🔎 About to log interaction (bg) with session_id: {session_id}")
+            log_interaction_async(
+                user_input=user_input,
+                assistant_response=cleaned,
+                session_id=session_id,
+                citation_json=json.dumps(citation_map, ensure_ascii=False) if citation_map else None,
+                citation_count=len(citation_map or {}),
+                confidence=confidence,
+                error_code=error_code,
+                request_classification=request_classification,
+                evaluation_notes=evaluation_notes,
+                model=main_model,
+                usage_input_tokens=int(input_tok),
+                usage_output_tokens=int(output_tok),
+                usage_total_tokens=int(total_tok),
+                usage_reasoning_tokens=int(reasoning_tok),
+                api_cost_usd=cost_usd,
+                response_time_ms=main_latency_ms if isinstance(main_latency_ms, int) else None,
+            )
+        except Exception as log_error:
+            # Silently fail for logging - don't interrupt user experience
+            print(f"Warning: Failed to log interaction (bg): {log_error}")
+
+    # Schedule background evaluation + logging so UI is not blocked
+    base_usage = {
+        "in": input_tok,
+        "out": output_tok,
+        "total": total_tok,
+        "reason": reasoning_tok,
+    }
+    threading.Thread(
+        target=_run_eval_and_log_bg,
+        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage),
+        daemon=True,
+    ).start()
+
+    # NOTE: Logging happens in the background after evaluation. The UI has already been updated above.
 
 # ---------- App init ----------
 # Check for required OpenAI API key
@@ -1648,19 +1663,21 @@ try:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 except KeyError:
     st.error("🔑 **OpenAI API Key Required**")
-    st.info("""
-    Please add your OpenAI API key to Streamlit Cloud settings:
-    
-    1. **Go to your app settings** in Streamlit Cloud
-    2. **Add this secret**:
-       ```
-       OPENAI_API_KEY = "your-openai-api-key-here"
-       ```
-    3. **Get an API key** from [OpenAI Platform](https://platform.openai.com/api-keys)
-    4. **Redeploy the app**
-    
-    The app cannot function without an OpenAI API key.
-    """)
+    st.info(
+        """
+        Please add your OpenAI API key to Streamlit Cloud settings:
+        
+        1. **Go to your app settings** in Streamlit Cloud
+        2. **Add this secret**:
+           ```
+           OPENAI_API_KEY = "your-openai-api-key-here"
+           ```
+        3. **Get an API key** from [OpenAI Platform](https://platform.openai.com/api-keys)
+        4. **Redeploy the app**
+        
+        The app cannot function without an OpenAI API key.
+        """
+    )
     st.stop()
 
 dbis_cmd = st.secrets.get(DBIS_MCP_ENV_KEY)
@@ -1679,9 +1696,6 @@ if dbis_headers_secret:
     else:
         os.environ.setdefault(DBIS_MCP_HEADERS_KEY, str(dbis_headers_secret))
 
-dbis_org = st.secrets.get("DBIS_ORGANIZATION_ID")
-if dbis_org:
-    os.environ.setdefault("DBIS_ORGANIZATION_ID", str(dbis_org))
 # Helper function to get current LLM configuration
 def get_current_llm_config():
     """Get current LLM settings from database with fallback to defaults"""
@@ -1828,8 +1842,6 @@ if user_input:
     st.chat_message("user", avatar= AVATAR_USER).markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
 
-    # Optional: scope retrieval (adjust to your ingestion metadata)
-    # retrieval_filters = {"department": "library", "year": {"$in": [2023, 2024, 2025]}}
     # Build web_search filters from admin settings
     fs = get_filter_settings()
     web_filters = {}
@@ -1850,6 +1862,23 @@ if user_input:
         domains = fs.get('web_domains') or []
         if domains:
             web_filters['allowed_domains'] = domains
+        # user_location
+        ul_type = (fs.get('web_userloc_type') or '').strip()
+        ul_country = (fs.get('web_userloc_country') or '').strip()
+        ul_city = (fs.get('web_userloc_city') or '').strip()
+        ul_region = (fs.get('web_userloc_region') or '').strip()
+        ul_timezone = (fs.get('web_userloc_timezone') or '').strip()
+        if ul_type:
+            loc = {
+                'type': ul_type,
+                'country': ul_country or None,
+                'city': ul_city or None,
+            }
+            if ul_region:
+                loc['region'] = ul_region
+            if ul_timezone:
+                loc['timezone'] = ul_timezone
+            tool_extras['user_location'] = loc
     # If no filters defined, pass None so tool has no restrictions
     retrieval_filters = web_filters if web_filters else None
 
