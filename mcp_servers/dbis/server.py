@@ -248,6 +248,22 @@ def _extract_resource_urls(res: dict[str, Any]) -> List[str]:
     return out
 
 
+def _strip_html(s: str) -> str:
+    if not s:
+        return s
+    return re.sub(r"<[^>]+>", "", s)
+
+
+def _shorten(s: str, limit: int = 160) -> str:
+    s = _norm_text(s)
+    if not s:
+        return s
+    if len(s) <= limit:
+        return s
+    cut = s[:limit].rsplit(" ", 1)[0]
+    return cut + "…"
+
+
 def _extract_resource_description(res: dict[str, Any]) -> str:
     # Try common fields for a short description/summary
     for path in [
@@ -270,9 +286,10 @@ def _extract_resource_description(res: dict[str, Any]) -> str:
                     break
             text = _norm_text(cur)
             if text:
-                # collapse whitespace, keep it short
+                # strip HTML, collapse whitespace, and shorten
+                text = _strip_html(text)
                 text = re.sub(r"\s+", " ", text).strip()
-                return text
+                return _shorten(text, 160)
         except Exception:
             continue
     return ""
@@ -354,29 +371,25 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
             data = {"data": data}
         title = _extract_resource_title(data)
         urls = _extract_resource_urls(data)
-        vendor_link, dbis_link, urls_pref = _derive_links(urls, resource_id, org_id)
+        vendor_link, dbis_link, _ = _derive_links(urls, resource_id, org_id)
         # If no vendor link from API, try to extract one from the DBIS detail page HTML
         if not vendor_link and dbis_link:
             vendor_link = await _extract_vendor_from_dbis_html(dbis_link)
-            if vendor_link and vendor_link not in urls_pref:
-                urls_pref = [vendor_link] + [u for u in urls_pref if u != vendor_link]
         desc = _extract_resource_description(data)
         item = {
             "id": resource_id,
             "title": title,
-            "urls": urls_pref,
             "vendor_link": vendor_link,
             "dbis_link": dbis_link,
             # Primary link for inline display defaults to vendor when available
             "link": vendor_link or dbis_link,
             "description": desc,
-            "api_url": url,
         }
         return item
     except httpx.TimeoutException:
-        return {"id": resource_id, "error": "timeout", "api_url": url}
+        return {"id": resource_id, "error": "timeout"}
     except Exception as e:
-        return {"id": resource_id, "error": str(e), "api_url": url}
+        return {"id": resource_id, "error": str(e)}
 
 
 def _build_markdown(items: List[dict[str, Any]]) -> str:
@@ -385,17 +398,11 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
         title = _norm_text(it.get("title")) or "Untitled resource"
         vendor = _norm_text(it.get("vendor_link"))
         dbis = _norm_text(it.get("dbis_link"))
-        desc = _norm_text(it.get("description"))
-
-        # Inline: show direct vendor URL if present (angle-bracketed so it is clickable but not a [text](url) MD link)
-        # Reference: include a Markdown link to DBIS so the app's renderer turns it into a numbered citation.
         parts: List[str] = [f"- {title}"]
         if vendor:
             parts.append(f"— <{vendor}>")
         if dbis:
             parts.append(f"— [DBIS]({dbis})")
-        if desc:
-            parts.append(f"— {desc}")
         lines.append(" ".join(parts))
     return "\n".join(lines)
 
@@ -403,10 +410,8 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
 @mcp.tool(
     name="dbis_top_resources",
     description=(
-        "Return a concise, opinionated top list of DBIS resources for the given subject name or id. "
-        "Defaults to organization from DBIS_ORGANIZATION_ID. Accepts: subject_name (str), limit (int, default 6). "
-        "Prefer DBIS resource description links over vendor links and include brief descriptions when available. "
-        "Do not ask follow-up questions."
+        "Top DBIS resources for a subject. Params: subject_name, limit (default 6). "
+        "Returns compact items with vendor_link and DBIS link; default org from env."
     ),
 )
 async def top_resources(

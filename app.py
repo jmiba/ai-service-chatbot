@@ -861,12 +861,22 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         st.stop()
 
     # Build tools with optional web_search based on settings
-    tool_cfg = [
-        {
+    def _likely_dbis_query(q: str) -> bool:
+        try:
+            s = (q or "").lower()
+            return any(k in s for k in ["dbis", "datenbank", "datenbanken", "database", "databases"]) \
+                or ("welche" in s and "datenbank" in s)
+        except Exception:
+            return False
+
+    tool_cfg = []
+    include_file_search = not _likely_dbis_query(user_input)
+    if include_file_search:
+        tool_cfg.append({
             "type": "file_search",
             "vector_store_ids": [st.secrets["VECTOR_STORE_ID"]],
-        }
-    ]
+        })
+    
     web_enabled = True
     if web_tool_extras and isinstance(web_tool_extras, dict):
         web_enabled = bool(web_tool_extras.get("web_search_enabled", True))
