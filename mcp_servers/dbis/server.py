@@ -153,27 +153,59 @@ def _extract_resource_title(res: dict[str, Any]) -> str:
 
 def _extract_resource_urls(res: dict[str, Any]) -> List[str]:
     urls: List[str] = []
-    # common direct fields
-    for k in ["url", "portalUrl", "portal_url", "homepage", "providerUrl", "provider_url", "link", "website"]:
-        v = _norm_text(res.get(k))
+
+    def _add(u: Optional[str]):
+        v = _norm_text(u)
         if v and v.startswith("http"):
             urls.append(v)
-    # nested possibilities
+
+    # common direct fields
+    for k in ["url", "portalUrl", "portal_url", "homepage", "providerUrl", "provider_url", "link", "website"]:
+        _add(res.get(k))
+
+    # nested possibilities under resource
     resource = res.get("resource")
     if isinstance(resource, dict):
         for k in ["url", "portalUrl", "homepage", "website", "link"]:
-            v = _norm_text(resource.get(k))
-            if v and v.startswith("http"):
-                urls.append(v)
+            _add(resource.get(k))
         links = resource.get("links")
         if isinstance(links, list):
             for lk in links:
                 if isinstance(lk, dict):
-                    v = _norm_text(lk.get("href") or lk.get("url"))
-                    if v and v.startswith("http"):
-                        urls.append(v)
-                elif isinstance(lk, str) and lk.startswith("http"):
-                    urls.append(lk)
+                    _add(lk.get("href") or lk.get("url"))
+                elif isinstance(lk, str):
+                    _add(lk)
+
+    # DBIS API often places access URLs under licenses -> accesses
+    licenses = res.get("licenses")
+    if isinstance(licenses, list):
+        for lic in licenses:
+            if not isinstance(lic, dict):
+                continue
+            accesses = lic.get("accesses")
+            if isinstance(accesses, list):
+                for acc in accesses:
+                    if not isinstance(acc, dict):
+                        continue
+                    for key in ("accessUrl", "manualUrl", "_404Url"):
+                        _add(acc.get(key))
+
+    # api_urls may also contain useful links
+    api_urls = res.get("api_urls")
+    if isinstance(api_urls, list):
+        for au in api_urls:
+            if isinstance(au, str):
+                _add(au)
+            elif isinstance(au, dict):
+                # in case of objects with href/url
+                _add(au.get("href") or au.get("url"))
+
+    # instructions field might embed HTML with links
+    instr = res.get("instructions") or (resource.get("instructions") if isinstance(resource, dict) else None)
+    if isinstance(instr, str):
+        for match in re.findall(r'href=["\'](https?://[^"\']+)["\']', instr, flags=re.IGNORECASE):
+            _add(match)
+
     # Deduplicate, preserve order
     seen = set()
     out = []
