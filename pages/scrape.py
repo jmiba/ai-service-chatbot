@@ -1794,7 +1794,7 @@ def main():
                             save_url_configs(st.session_state.url_configs)
                             st.success(f"Configuration {i+1} saved!", icon=":material/check_circle:")
                         except Exception as e:
-                            st.error(f"Failed to save configuration {i+1}: {e}")
+                                                       st.error(f"Failed to save configuration {i+1}: {e}")
                             
                 with col_delete:
                     if st.button(f"Delete Config {i+1}", icon=":material/delete:", key=f"delete_config_{i}", type="secondary"):
@@ -2403,7 +2403,7 @@ def main():
                         table_event = st.dataframe(
                             table_df,
                             hide_index=True,
-                            use_container_width=True,
+                            width='stretch',
                             selection_mode="single-row",
                             on_select="rerun",
                             key="kb_table",
@@ -2413,7 +2413,7 @@ def main():
                         table_event = st.dataframe(
                             table_df,
                             hide_index=True,
-                            use_container_width=True,
+                            width='stretch',
                             key="kb_table",
                         )
 

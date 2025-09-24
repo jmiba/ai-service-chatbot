@@ -357,7 +357,7 @@ if authenticated:
                     table_event = st.dataframe(
                         session_df,
                         hide_index=True,
-                        use_container_width=True,
+                        width='stretch',
                         selection_mode="single-row",
                         on_select="rerun",
                         key="logs_session_table",
@@ -367,7 +367,7 @@ if authenticated:
                     table_event = st.dataframe(
                         session_df,
                         hide_index=True,
-                        use_container_width=True,
+                        width='stretch',
                         key="logs_session_table",
                     )
 
@@ -505,7 +505,7 @@ if authenticated:
                 table_event = st.dataframe(
                     table_df,
                     hide_index=True,
-                    use_container_width=True,
+                    width='stretch',
                     selection_mode="single-row",
                     on_select="rerun",
                     key="logs_table",
@@ -515,7 +515,7 @@ if authenticated:
                 table_event = st.dataframe(
                     table_df,
                     hide_index=True,
-                    use_container_width=True,
+                    width='stretch',
                     key="logs_table",
                 )
 
@@ -667,7 +667,7 @@ if authenticated:
                         )
                         .properties(height=320)
                     )
-                    st.altair_chart(pie, use_container_width=True)
+                    st.altair_chart(pie)
             except Exception as exc:
                 st.warning("Falling back to table view due to a charting error.")
                 try:
@@ -857,9 +857,9 @@ if authenticated:
                 "cost_usd": [daily_tokens[d]["cost"] for d in days_sorted],
                 "avg_latency_ms": [ (sum(daily_tokens[d]["lat"])/len(daily_tokens[d]["lat"])) if daily_tokens[d]["lat"] else 0 for d in days_sorted ],
             }
-            st.line_chart(chart_data, x="day", y=["input_tokens","output_tokens","total_tokens"], use_container_width=True)
-            st.area_chart({"day": chart_data["day"], "cost_usd": chart_data["cost_usd"]}, x="day", y="cost_usd", use_container_width=True)
-            st.line_chart({"day": chart_data["day"], "avg_latency_ms": chart_data["avg_latency_ms"]}, x="day", y="avg_latency_ms", use_container_width=True)
+            st.line_chart(chart_data, x="day", y=["input_tokens","output_tokens","total_tokens"]) 
+            st.area_chart({"day": chart_data["day"], "cost_usd": chart_data["cost_usd"]}, x="day", y="cost_usd")
+            st.line_chart({"day": chart_data["day"], "avg_latency_ms": chart_data["avg_latency_ms"]}, x="day", y="avg_latency_ms")
 
         # Breakdown by model (add latency)
         model_agg = defaultdict(lambda: {"input":0, "output":0, "total":0, "reason":0, "cost":0.0, "latencies":[]})

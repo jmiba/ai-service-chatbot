@@ -11,6 +11,15 @@ import uuid
 import threading
 import httpx
 
+# Try to import Streamlit's script run context helper (safe fallback if unavailable)
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_ctx as _st_add_ctx  # type: ignore
+except Exception:  # pragma: no cover - compatibility
+    _st_add_ctx = None
+
+# Global OpenAI client placeholder (set later after loading API key)
+client: OpenAI | None = None
+
 # ---- utilities ----
 from utils import (
     get_connection,
@@ -263,7 +272,24 @@ def log_interaction_async(*args, **kwargs) -> None:
         except Exception as exc:
             print(f"⚠️ async log_interaction failed: {exc}")
 
-    threading.Thread(target=_runner, daemon=True).start()
+    t = threading.Thread(target=_runner, daemon=True, name="log_interaction_async")
+    try:
+        if _st_add_ctx:
+            _st_add_ctx(t)
+    except Exception:
+        pass
+    t.start()
+
+# Small helper to start background threads with Streamlit context attached
+def _start_thread(target, *, name: str, args: tuple = ()):  # noqa: N802
+    t = threading.Thread(target=target, args=args, daemon=True, name=name)
+    try:
+        if _st_add_ctx:
+            _st_add_ctx(t)
+    except Exception:
+        pass
+    t.start()
+    return t
 
 def get_urls_and_titles_by_file_ids(conn, file_ids):
     """Return metadata keyed by file_id for citation rendering."""
@@ -1365,7 +1391,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     curr_len += len(pre)
                     anchor = m.group(1).strip()
                     url = m.group(2).strip()
-                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                     display_anchor = "" if looks_like_url else anchor
                     start_idx = curr_len
                     rebuilt.append(display_anchor)
@@ -1560,18 +1586,9 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         st.session_state.messages = st.session_state.messages[-MAX_HISTORY:]
 
     # --- Structured evaluation follow-up (background, cheaper model) ---
-    def _run_eval_and_log_bg(user_input, cleaned, citation_map, session_id, main_latency_ms, base_usage):
+    def _run_eval_and_log_bg(user_input, cleaned, citation_map, session_id, main_latency_ms, base_usage,
+                             eval_model, main_model, evaluation_system_prompt):
         """Run evaluation with a cheaper model in background, then log interaction."""
-        try:
-            evaluation_system_prompt = EVALUATION_SYSTEM_TEMPLATE.format(
-                citation_count=len(citation_map or {}),
-                allowed_topics=", ".join(get_allowed_request_classifications()),
-            )
-        except Exception:
-            evaluation_system_prompt = EVALUATION_SYSTEM_TEMPLATE
-
-        eval_model = st.secrets.get("EVAL_MODEL", "gpt-4o-mini")
-
         # Defaults in case eval fails
         e_in = e_out = e_total = e_reason = 0
         confidence = 0.0
@@ -1602,15 +1619,9 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             request_classification = payload.get("request_classification", "other")
             evaluation_notes = payload.get("evaluation_notes", "")
         except Exception as e:
-            if debug_one:
-                print(f"⚠️ Evaluation in background failed: {e}")
+            print(f"⚠️ Evaluation in background failed: {e}")
 
         # Compose usage and cost (main + eval priced per model)
-        try:
-            main_model = get_current_llm_config()['model']
-        except Exception:
-            main_model = st.secrets.get("MODEL", "gpt-4o-mini")
-
         main_in = int(base_usage.get("in", 0) or 0)
         main_out = int(base_usage.get("out", 0) or 0)
         main_total = int(base_usage.get("total", main_in + main_out) or 0)
@@ -1664,18 +1675,32 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         "total": total_tok,
         "reason": reasoning_tok,
     }
-    threading.Thread(
-        target=_run_eval_and_log_bg,
-        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage),
-        daemon=True,
-    ).start()
+    # Compute models and prompt on main thread to avoid st.* in background
+    try:
+        main_model_val = get_current_llm_config()['model']
+    except Exception:
+        main_model_val = st.secrets.get("MODEL", "gpt-4o-mini")
+    eval_model_val = st.secrets.get("EVAL_MODEL", "gpt-4o-mini")
+    # Prepare evaluation system prompt once (also compute allowed topics here)
+    try:
+        eval_sys_prompt = EVALUATION_SYSTEM_TEMPLATE.format(
+            citation_count=len(citation_map or {}),
+            allowed_topics=", ".join(get_allowed_request_classifications()),
+        )
+    except Exception:
+        eval_sys_prompt = EVALUATION_SYSTEM_TEMPLATE
+
+    _start_thread(
+        _run_eval_and_log_bg,
+        name="_run_eval_and_log_bg",
+        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage, eval_model_val, main_model_val, eval_sys_prompt),
+    )
 
     # NOTE: Logging happens in the background after evaluation. The UI has already been updated above.
-
 # ---------- App init ----------
 # Check for required OpenAI API key
 try:
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])  # type: ignore[assignment]
 except KeyError:
     st.error("🔑 **OpenAI API Key Required**")
     st.info(
@@ -1731,21 +1756,33 @@ def get_current_llm_config():
             'text_verbosity': 'medium'
         }
 
+# Cached one-time DB initialization helper
+@st.cache_resource(show_spinner=False)
+def _ensure_db_initialized(default_prompt_value: str) -> bool:
+    try:
+        create_knowledge_base_table()
+        initialize_default_prompt_if_empty(default_prompt_value)
+        create_llm_settings_table()
+        create_request_classifications_table()
+        create_filter_settings_table()
+        return True
+    except Exception as e:
+        print(f"⚠️ DB init encountered an error (continuing): {e}")
+        return False
+
 # Initialize database and tables
 database_available = False
 try:
     database_available = create_database_if_not_exists()
     if database_available:
-        create_knowledge_base_table()
-        initialize_default_prompt_if_empty(DEFAULT_PROMPT)
-        create_llm_settings_table()  # Initialize LLM settings table
-        create_request_classifications_table()  # Initialize request classifications
-        create_filter_settings_table()  # Initialize filter settings table
+        # Run one-time DB initialization via cache guard
+        _ = _ensure_db_initialized(DEFAULT_PROMPT)
         #print("✅ Database initialization completed successfully.")
     else:
         # Show database configuration instructions when no database is available
         st.warning("🔧 **Database Configuration Needed**")
-        st.info("""
+        st.info(
+            """
         To enable full functionality, please configure a PostgreSQL database:
         
         1. **Create a cloud PostgreSQL database**
@@ -1758,7 +1795,6 @@ try:
            ```
            [postgres]
            host = "your-postgres-host"
-
            port = "5432"
            database = "your-database-name"
            user = "your-username"
@@ -1767,7 +1803,8 @@ try:
         3. **Redeploy the app**
         
         The chat functionality will work without database, but logging and admin features will be disabled.
-        """)
+        """
+        )
         print("⚠️ Database not available. Continuing without database functionality.")
 except Exception as e:
     error_str = str(e)
@@ -1776,7 +1813,8 @@ except Exception as e:
         "postgres" in error_str or "Missing PostgreSQL" in error_str or
         ("KeyError" in error_str and "postgres" in error_str.lower())):
         st.warning("🔧 **Database Configuration Needed**")
-        st.info("""
+        st.info(
+            """
         To enable full functionality, please configure a PostgreSQL database:
         
         1. **Create a cloud PostgreSQL database** (e.g., Neon.tech, Supabase, or ElephantSQL)
@@ -1792,7 +1830,8 @@ except Exception as e:
         3. **Redeploy the app**
         
         The chat functionality will work without database, but logging and admin features will be disabled.
-        """)
+        """
+        )
     else:
         st.error(f"Database initialization failed: {e}")
         st.warning("The app may have limited functionality without database access.")
@@ -1862,7 +1901,6 @@ if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
 
     # Build web_search filters from admin settings
-    # Remove duplicate call; rely on try/except below
     web_filters = {}
     tool_extras = {}
     try:

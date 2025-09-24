@@ -748,7 +748,8 @@ def save_llm_settings(model, parallel_tool_calls=True, reasoning_effort="medium"
     cursor = conn.cursor()
     
     # Update the single row (we only keep one active configuration)
-    cursor.execute("""
+    cursor.execute(
+        """
         UPDATE llm_settings SET 
             model = %s,
             parallel_tool_calls = %s,
@@ -762,6 +763,12 @@ def save_llm_settings(model, parallel_tool_calls=True, reasoning_effort="medium"
     conn.commit()
     cursor.close()
     conn.close()
+    
+    # Invalidate cached reads
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 def supports_reasoning_effort(model_name):
     """Check if a model supports the reasoning.effort parameter"""
@@ -780,17 +787,19 @@ def supports_full_verbosity(model_name):
     """Check if a model supports all verbosity options (low/medium/high)"""
     return supports_reasoning_effort(model_name)  # Same as reasoning effort for now
 
-@lru_cache(maxsize=1)
+@st.cache_data(ttl=300)
 def get_llm_settings():
     """Get current LLM settings from database (future-ready with reasoning effort and verbosity)"""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT model, parallel_tool_calls, reasoning_effort, text_verbosity, updated_by, updated_at
         FROM llm_settings
         ORDER BY updated_at DESC
         LIMIT 1
-    """)
+    """
+    )
     result = cursor.fetchone()
     cursor.close()
     conn.close()
@@ -899,8 +908,14 @@ def save_filter_settings(settings, updated_by="admin"):
     )
 
     conn.commit(); cursor.close(); conn.close()
+    # Invalidate cached reads
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 
+@st.cache_data(ttl=120)
 def get_filter_settings():
     """Get current web search filter settings from database"""
     conn = get_connection()
@@ -976,6 +991,7 @@ def create_request_classifications_table():
     cur.close()
     conn.close()
 
+@st.cache_data(ttl=300)
 def get_request_classifications():
     """Return the most recently updated list of categories from DB (fallback to defaults)."""
     try:
@@ -1029,6 +1045,11 @@ def save_request_classifications(categories, updated_by='admin'):
             (norm, updated_by)
         )
     conn.commit(); cur.close(); conn.close()
+    # Invalidate cached reads
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
 
 def get_document_status_counts() -> dict[str, int]:
     conn = get_connection()
