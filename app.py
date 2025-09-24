@@ -17,8 +17,88 @@ try:
 except Exception:  # pragma: no cover - compatibility
     _st_add_ctx = None
 
+PRELIGHT_TTL_SECONDS = 600  # 10 minutes
+
+@st.cache_resource(show_spinner=False)
+def _get_httpx_client() -> httpx.Client:
+    """Singleton HTTP client with keep-alive. Try HTTP/2; fall back to HTTP/1.1 if unavailable."""
+    try:
+        return httpx.Client(http2=True, timeout=httpx.Timeout(5.0, read=5.0), follow_redirects=True)
+    except Exception:
+        # Fallback when 'h2' is not installed or http2 isn't supported in the env
+        return httpx.Client(timeout=httpx.Timeout(5.0, read=5.0), follow_redirects=True)
+
+def _headers_cache_fingerprint(h: dict | None) -> str:
+    if not h:
+        return "{}"
+    # Lowercase keys, stable order; limit very long values for memory hygiene
+    items = sorted([(str(k).lower(), str(v)[:128]) for k, v in h.items()])
+    try:
+        return json.dumps(items, separators=(",", ":"))
+    except Exception:
+        return str(items)
+
 # Global OpenAI client placeholder (set later after loading API key)
 client: OpenAI | None = None
+
+def _mcp_preflight(url: str, headers: dict | None, authorization: str | None, timeout_s: float = 3.0) -> tuple[bool, str | None]:
+    """Quick reachability/auth check for MCP server URL with caching.
+    Returns (ok, reason). Ok means reachable enough for the OpenAI client to try.
+    If 401/403, returns ok=False with reason "unauthorized".
+    If connect/DNS/TLS errors, returns ok=False with a short reason.
+    Note: Some SSE servers delay response headers; a read-timeout is treated as reachable.
+    """
+    if not url:
+        return False, "missing-url"
+
+    req_headers = dict(headers or {})
+    if authorization and "Authorization" not in req_headers:
+        req_headers["Authorization"] = str(authorization)
+    # Many MCP servers require SSE Accept header even for discovery endpoints
+    if "Accept" not in req_headers:
+        req_headers["Accept"] = "text/event-stream"
+
+    # Cache lookup (per URL + header fingerprint)
+    cache_key = f"{url}|{_headers_cache_fingerprint(req_headers)}"
+    now = datetime.now().timestamp()
+    cache = st.session_state.get("dbis_mcp_preflight_cache", {})
+    if isinstance(cache, dict):
+        entry = cache.get(cache_key)
+        if entry and isinstance(entry, dict):
+            ts = entry.get("ts", 0)
+            if (now - float(ts)) < PRELIGHT_TTL_SECONDS:
+                return bool(entry.get("ok", False)), entry.get("reason")
+
+    client_http = _get_httpx_client()
+    try:
+        resp = client_http.get(
+            url,
+            headers=req_headers or None,
+            timeout=httpx.Timeout(timeout_s, read=timeout_s),
+        )
+        if resp.status_code in (401, 403):
+            ok, reason = (False, "unauthorized")
+        elif 200 <= resp.status_code < 500:
+            ok, reason = (True, None)
+        else:
+            ok, reason = (False, f"server-error-{resp.status_code}")
+    except httpx.ReadTimeout:
+        ok, reason = (True, "slow")  # treat as reachable
+    except (httpx.ConnectTimeout, httpx.ConnectError):
+        ok, reason = (False, "connect-error")
+    except httpx.HTTPError as e:
+        ok, reason = (False, f"http-error: {type(e).__name__}")
+
+    # Store in cache
+    try:
+        if not isinstance(cache, dict):
+            cache = {}
+        cache[cache_key] = {"ok": ok, "reason": reason, "ts": now}
+        st.session_state["dbis_mcp_preflight_cache"] = cache
+    except Exception:
+        pass
+
+    return ok, reason
 
 # ---- utilities ----
 from utils import (
@@ -46,7 +126,7 @@ DBIS_MCP_HEADERS_KEY = "DBIS_MCP_HEADERS"
 
 
 def _mcp_preflight(url: str, headers: dict | None, authorization: str | None, timeout_s: float = 3.0) -> tuple[bool, str | None]:
-    """Quick reachability/auth check for MCP server URL.
+    """Quick reachability/auth check for MCP server URL with caching.
     Returns (ok, reason). Ok means reachable enough for the OpenAI client to try.
     If 401/403, returns ok=False with reason "unauthorized".
     If connect/DNS/TLS errors, returns ok=False with a short reason.
@@ -54,31 +134,55 @@ def _mcp_preflight(url: str, headers: dict | None, authorization: str | None, ti
     """
     if not url:
         return False, "missing-url"
+
     req_headers = dict(headers or {})
     if authorization and "Authorization" not in req_headers:
         req_headers["Authorization"] = str(authorization)
     # Many MCP servers require SSE Accept header even for discovery endpoints
     if "Accept" not in req_headers:
         req_headers["Accept"] = "text/event-stream"
+
+    # Cache lookup (per URL + header fingerprint)
+    cache_key = f"{url}|{_headers_cache_fingerprint(req_headers)}"
+    now = datetime.now().timestamp()
+    cache = st.session_state.get("dbis_mcp_preflight_cache", {})
+    if isinstance(cache, dict):
+        entry = cache.get(cache_key)
+        if entry and isinstance(entry, dict):
+            ts = entry.get("ts", 0)
+            if (now - float(ts)) < PRELIGHT_TTL_SECONDS:
+                return bool(entry.get("ok", False)), entry.get("reason")
+
+    client_http = _get_httpx_client()
     try:
-        resp = httpx.get(
+        resp = client_http.get(
             url,
             headers=req_headers or None,
             timeout=httpx.Timeout(timeout_s, read=timeout_s),
-            follow_redirects=True,
         )
         if resp.status_code in (401, 403):
-            return False, "unauthorized"
-        if 200 <= resp.status_code < 500:
-            return True, None
-        return False, f"server-error-{resp.status_code}"
+            ok, reason = (False, "unauthorized")
+        elif 200 <= resp.status_code < 500:
+            ok, reason = (True, None)
+        else:
+            ok, reason = (False, f"server-error-{resp.status_code}")
     except httpx.ReadTimeout:
-        # Connected but no bytes in time (common with SSE); treat as reachable
-        return True, "slow"
+        ok, reason = (True, "slow")  # treat as reachable
     except (httpx.ConnectTimeout, httpx.ConnectError):
-        return False, "connect-error"
+        ok, reason = (False, "connect-error")
     except httpx.HTTPError as e:
-        return False, f"http-error: {type(e).__name__}"
+        ok, reason = (False, f"http-error: {type(e).__name__}")
+
+    # Store in cache
+    try:
+        if not isinstance(cache, dict):
+            cache = {}
+        cache[cache_key] = {"ok": ok, "reason": reason, "ts": now}
+        st.session_state["dbis_mcp_preflight_cache"] = cache
+    except Exception:
+        pass
+
+    return ok, reason
 
 
 # -------------------------------------
@@ -1128,7 +1232,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             
             # Measure latency of main API call
             t_start = datetime.now()
-            with client.responses.stream(timeout=30, **api_params) as stream:
+            with client.responses.stream(timeout=60, **api_params) as stream:
                 for event in stream:
                     # Keep spinner until the model is done emitting text.
                     if event.type == "response.output_text.complete":
@@ -1241,7 +1345,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                             fallback_api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
                         fallback_api_params['text'] = {'verbosity': llm_config['text_verbosity']}
                     t_start = datetime.now()
-                    final = client.responses.create(timeout=30, **fallback_api_params)
+                    final = client.responses.create(timeout=60, **fallback_api_params)
                     t_end = datetime.now()
                     main_latency_ms = int((t_end - t_start).total_seconds() * 1000)
                     buf = _get_attr(final, "output_text", "") or ""
@@ -1645,6 +1749,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
         try:
             # Debug: Check session ID before logging
+           
             print(f"🔎 About to log interaction (bg) with session_id: {session_id}")
             log_interaction_async(
                 user_input=user_input,
