@@ -345,7 +345,7 @@ def _strip_markdown_links_preserve_md(md_text: str) -> str:
         def repl(m: re.Match) -> str:
             anchor = m.group(1)
             # keep EXACT spacing/newlines around the match; only change the link itself
-            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
             return "" if looks_like_url else anchor
 
         safe = _LINK_RE.sub(repl, part)
@@ -762,7 +762,7 @@ def human_event_label(event):
         return "Searching my knowledge base…"
     if "tool_call" in et or et.endswith("_call") or "tool" in et:
         short = et.split(".")[-1] if "." in et else et
-        return f"Tool: {short.replace('_', ' ')}"
+        return f"Using Tools {short.replace('_', ' ')}"
     if et.startswith("response.output_text"):
         if et.endswith("start"):
             return "Generating answer…"
@@ -865,7 +865,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         {
             "type": "file_search",
             "vector_store_ids": [st.secrets["VECTOR_STORE_ID"]],
-            # "max_num_results": 4,  # tune for latency/recall
         }
     ]
     web_enabled = True
@@ -889,6 +888,19 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             "Provide JSON (e.g. '{\"Authorization\": \"Bearer ...\"}') or 'Header: value' format.",
             flush=True,
         )
+
+    # Ensure the organization id is transmitted to the MCP server via header
+    try:
+        _dbis_org = st.secrets.get("DBIS_ORGANIZATION_ID")
+        if _dbis_org is None:
+            _dbis_org = os.getenv("DBIS_ORGANIZATION_ID")
+        if _dbis_org:
+            if dbis_mcp_headers is None:
+                dbis_mcp_headers = {}
+            # Do not overwrite if user provided explicitly
+            dbis_mcp_headers.setdefault("X-DBIS-Organization-Id", str(_dbis_org))
+    except Exception:
+        pass
 
     last_url = st.session_state.get("dbis_mcp_last_url")
     if dbis_mcp_url and dbis_mcp_url != last_url:
@@ -977,6 +989,20 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         conversation = [
             {"role": "system", "content": system_instructions},
         ]
+        # Instruct the model to include the org ID when invoking DBIS MCP tools
+        try:
+            _dbis_org = os.getenv("DBIS_ORGANIZATION_ID") or str(st.secrets.get("DBIS_ORGANIZATION_ID", "")).strip()
+        except Exception:
+            _dbis_org = None
+        print("DBIS_ORGANIZATION_ID:", _dbis_org)
+        if _dbis_org:
+            conversation.append({
+                "role": "system",
+                "content": (
+                    f"When calling any DBIS MCP tools (dbis_*), always include the argument "
+                    f"organization_id='{_dbis_org}'. If organization_id is omitted, default to '{_dbis_org}'."
+                )
+            })
         
         # Add recent conversation history (each user has their own st.session_state)
         recent_messages = st.session_state.messages[-10:] if st.session_state.messages else []

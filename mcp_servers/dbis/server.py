@@ -63,8 +63,40 @@ async def _fetch_json(url: str, params: Optional[dict[str, Any]] = None) -> dict
 DEFAULT_ORG_ID = os.getenv("DBIS_ORGANIZATION_ID")
 
 
-def _resolve_org_id(request_org: Optional[str]) -> str:
-    org_id = request_org or DEFAULT_ORG_ID
+def _get_header_case_insensitive(headers: Any, key: str) -> Optional[str]:
+    try:
+        if isinstance(headers, dict):
+            # common variants
+            return (
+                headers.get(key)
+                or headers.get(key.lower())
+                or headers.get(key.upper())
+            )
+    except Exception:
+        pass
+    return None
+
+
+def _org_from_context_headers(context: Context) -> Optional[str]:
+    # Try a few likely locations for headers depending on transport/host
+    for attr in ("headers", "meta", "metadata"):
+        hdrs = getattr(context, attr, None)
+        val = _get_header_case_insensitive(hdrs, "X-DBIS-Organization-Id")
+        if val:
+            return str(val).strip()
+    # Some hosts expose request headers
+    req = getattr(context, "request", None)
+    if req is not None:
+        hdrs = getattr(req, "headers", None)
+        val = _get_header_case_insensitive(hdrs, "X-DBIS-Organization-Id")
+        if val:
+            return str(val).strip()
+    return None
+
+
+def _resolve_org_id(request_org: Optional[str], context: Optional[Context] = None) -> str:
+    # Priority: explicit arg -> per-request header -> env default
+    org_id = request_org or (_org_from_context_headers(context) if context else None) or DEFAULT_ORG_ID
     if not org_id:
         raise ValueError(
             "DBIS organization_id is required. Pass it explicitly or set DBIS_ORGANIZATION_ID env var."
@@ -374,7 +406,7 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
         "Return a concise, opinionated top list of DBIS resources for the given subject name or id. "
         "Defaults to organization from DBIS_ORGANIZATION_ID. Accepts: subject_name (str), limit (int, default 6). "
         "Prefer DBIS resource description links over vendor links and include brief descriptions when available. "
-        "Do not ask follow-up questions; assume Viadrina/EUV by default."
+        "Do not ask follow-up questions."
     ),
 )
 async def top_resources(
@@ -386,7 +418,7 @@ async def top_resources(
 ) -> dict[str, Any]:
     print("[MCP] dbis_top_resources: start", file=sys.stderr, flush=True)
     try:
-        org_id = _resolve_org_id(organization_id)
+        org_id = _resolve_org_id(organization_id, context)
         subjects = await _get_subjects()
         sid, resolved_name = _find_subject_id(subjects, subject_name)
         if not sid:
@@ -441,7 +473,7 @@ async def top_resources(
 async def list_resource_ids(context: Context, organization_id: Optional[str] = None) -> dict[str, Any]:
     print("[MCP] dbis_list_resource_ids: start", file=sys.stderr, flush=True)
     try:
-        org_id = _resolve_org_id(organization_id)
+        org_id = _resolve_org_id(organization_id, context)
         url = f"{DBIS_BASE_URL}/resourceIds/organization/{org_id}"
         data = await _fetch_json(url)
         result = {"organization_id": org_id, "resource_ids": data}
@@ -463,7 +495,7 @@ async def list_resource_ids(context: Context, organization_id: Optional[str] = N
 async def get_resource(context: Context, resource_id: str, organization_id: Optional[str] = None) -> dict[str, Any]:
     print("[MCP] dbis_get_resource: start", file=sys.stderr, flush=True)
     try:
-        org_id = _resolve_org_id(organization_id)
+        org_id = _resolve_org_id(organization_id, context)
         url = f"{DBIS_BASE_URL}/resource/{resource_id}/organization/{org_id}"
         data = await _fetch_json(url)
         print("[MCP] dbis_get_resource: ok", file=sys.stderr, flush=True)
@@ -506,7 +538,7 @@ async def list_resource_ids_by_subject(
 ) -> dict[str, Any]:
     print("[MCP] dbis_list_resource_ids_by_subject: start", file=sys.stderr, flush=True)
     try:
-        org_id = _resolve_org_id(organization_id)
+        org_id = _resolve_org_id(organization_id, context)
         url = f"{DBIS_BASE_URL}/resourceIdsBySubject/{subject_id}/organization/{org_id}"
         data = await _fetch_json(url)
         result = {
