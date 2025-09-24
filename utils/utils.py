@@ -872,6 +872,10 @@ def save_filter_settings(settings, updated_by="admin"):
     ul_region = (settings.get('web_userloc_region') or '').strip() or None
     ul_timezone = (settings.get('web_userloc_timezone') or '').strip() or None
 
+    # New MCP fields
+    dbis_mcp_enabled = bool(settings.get('dbis_mcp_enabled', True))
+    dbis_org_id = (settings.get('dbis_org_id') or '').strip() or None
+
     cursor.execute(
         """
         UPDATE filter_settings SET 
@@ -884,11 +888,14 @@ def save_filter_settings(settings, updated_by="admin"):
             web_userloc_city = %s,
             web_userloc_region = %s,
             web_userloc_timezone = %s,
+            dbis_mcp_enabled = %s,
+            dbis_org_id = %s,
             updated_by = %s,
             updated_at = NOW()
         WHERE id = (SELECT MIN(id) FROM filter_settings)
         """,
-        (enabled, web_locale, web_domains_norm, mode, ul_type, ul_country, ul_city, ul_region, ul_timezone, updated_by)
+        (enabled, web_locale, web_domains_norm, mode, ul_type, ul_country, ul_city, ul_region, ul_timezone,
+         dbis_mcp_enabled, dbis_org_id, updated_by)
     )
 
     conn.commit(); cursor.close(); conn.close()
@@ -903,6 +910,7 @@ def get_filter_settings():
         SELECT web_search_enabled, web_locale, web_domains, web_domains_mode,
                web_userloc_type, web_userloc_country, web_userloc_city,
                web_userloc_region, web_userloc_timezone,
+               dbis_mcp_enabled, dbis_org_id,
                updated_by, updated_at
         FROM filter_settings
         ORDER BY updated_at DESC
@@ -924,8 +932,10 @@ def get_filter_settings():
             'web_userloc_city': row[6] or '',
             'web_userloc_region': row[7] or '',
             'web_userloc_timezone': row[8] or '',
-            'updated_by': row[9],
-            'updated_at': row[10]
+            'dbis_mcp_enabled': bool(row[9]) if row[9] is not None else True,
+            'dbis_org_id': row[10] or '',
+            'updated_by': row[11],
+            'updated_at': row[12]
         }
     else:
         return {
@@ -938,6 +948,8 @@ def get_filter_settings():
             'web_userloc_city': '',
             'web_userloc_region': '',
             'web_userloc_timezone': '',
+            'dbis_mcp_enabled': True,
+            'dbis_org_id': '',
             'updated_by': 'system',
             'updated_at': None
         }

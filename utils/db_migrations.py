@@ -266,6 +266,25 @@ def _migration_9(conn: PGConnection) -> None:
         )
 
 
+def _migration_10(conn: PGConnection) -> None:
+    """Add DBIS MCP tool settings to filter_settings."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            ALTER TABLE filter_settings
+            ADD COLUMN IF NOT EXISTS dbis_mcp_enabled BOOLEAN DEFAULT TRUE,
+            ADD COLUMN IF NOT EXISTS dbis_org_id TEXT
+            """
+        )
+        # Seed defaults if row exists but values are NULL
+        cur.execute(
+            """
+            UPDATE filter_settings
+            SET dbis_mcp_enabled = COALESCE(dbis_mcp_enabled, TRUE)
+            """
+        )
+
+
 MIGRATIONS: Dict[int, MigrationFunc] = {
     1: _migration_1,
     2: _migration_2,
@@ -276,6 +295,7 @@ MIGRATIONS: Dict[int, MigrationFunc] = {
     7: _migration_7,
     8: _migration_8,
     9: _migration_9,
+    10: _migration_10,
 }
 
 

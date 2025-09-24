@@ -901,9 +901,11 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
     # Ensure the organization id is transmitted to the MCP server via header
     try:
-        _dbis_org = st.secrets.get("DBIS_ORGANIZATION_ID")
-        if _dbis_org is None:
-            _dbis_org = os.getenv("DBIS_ORGANIZATION_ID")
+        # Override with admin setting if provided
+        admin_dbis_org = None
+        if web_tool_extras and isinstance(web_tool_extras, dict):
+            admin_dbis_org = (web_tool_extras.get("dbis_org_id") or "").strip() or None
+        _dbis_org = admin_dbis_org or st.secrets.get("DBIS_ORGANIZATION_ID") or os.getenv("DBIS_ORGANIZATION_ID")
         if _dbis_org:
             if dbis_mcp_headers is None:
                 dbis_mcp_headers = {}
@@ -917,7 +919,13 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         st.session_state["dbis_mcp_last_url"] = dbis_mcp_url
         st.session_state.pop("dbis_mcp_disabled", None)
 
-    dbis_disabled = st.session_state.get("dbis_mcp_disabled", False)
+    # Honor admin toggle for DBIS MCP tool
+    admin_dbis_enabled = True
+    if web_tool_extras and isinstance(web_tool_extras, dict):
+        if "dbis_mcp_enabled" in web_tool_extras:
+            admin_dbis_enabled = bool(web_tool_extras.get("dbis_mcp_enabled", True))
+
+    dbis_disabled = st.session_state.get("dbis_mcp_disabled", False) or (not admin_dbis_enabled)
     dbis_mcp_command = os.getenv(DBIS_MCP_ENV_KEY)
 
     print(DBIS_MCP_ENV_KEY, dbis_mcp_command)
@@ -1439,7 +1447,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     for idx_link, lm in enumerate(group_links):
                         anchor = lm.group(1).strip()
                         url = lm.group(2).strip()
-                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-Za:z]{2,})$', anchor.strip(), re.I))
+                        looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                         display_anchor = "" if looks_like_url else anchor
                         start_idx = sum(len(p) for p in rebuilt)
                         rebuilt.append(display_anchor)
@@ -1834,27 +1842,14 @@ if user_input:
     if fs:
         # enable flag
         tool_extras['web_search_enabled'] = bool(fs.get('web_search_enabled', True))
+        # MCP toggles and org id
+        tool_extras['dbis_mcp_enabled'] = bool(fs.get('dbis_mcp_enabled', True))
+        if fs.get('dbis_org_id'):
+            tool_extras['dbis_org_id'] = str(fs.get('dbis_org_id')).strip()
         # allowed_domains: only include if provided; otherwise no restrictions
         domains = fs.get('web_domains') or []
         if domains:
             web_filters['allowed_domains'] = domains
-        # user_location
-        ul_type = (fs.get('web_userloc_type') or '').strip()
-        ul_country = (fs.get('web_userloc_country') or '').strip()
-        ul_city = (fs.get('web_userloc_city') or '').strip()
-        ul_region = (fs.get('web_userloc_region') or '').strip()
-        ul_timezone = (fs.get('web_userloc_timezone') or '').strip()
-        if ul_type:
-            loc = {
-                'type': ul_type,
-                'country': ul_country or None,
-                'city': ul_city or None,
-            }
-            if ul_region:
-                loc['region'] = ul_region
-            if ul_timezone:
-                loc['timezone'] = ul_timezone
-            tool_extras['user_location'] = loc
     # If no filters defined, pass None so tool has no restrictions
     retrieval_filters = web_filters if web_filters else None
 

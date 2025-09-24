@@ -94,10 +94,10 @@ if authenticated:
         st.header("LLM & API Settings")
     
     # Create tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["System Prompt", "Language Model", "Request Categories", "Filters"])
+    tab1, tab2, tab3, tab4 = st.tabs(["System Prompt", "Language Model", "Request Categories", "Web Search & Tools"])
     
     with tab1:
-        st.header("Edit System Prompt")
+        st.subheader("Edit System Prompt")
 
         current_prompt, current_note = get_latest_prompt()
         current_prompt = current_prompt or ""
@@ -124,7 +124,7 @@ if authenticated:
                 st.info(prompt)
                 
     with tab2:
-        st.header("Language Model Settings")
+        st.subheader("Language Model Settings")
         
         # Get current settings from database
         current_settings = get_llm_settings()
@@ -278,8 +278,8 @@ if authenticated:
                 st.error(f"Error saving categories: {e}")
 
     with tab4:
-        st.header("Web Search Filters")
-        st.info("Configure domain allow-list and user location for the OpenAI web search tool")
+        st.subheader("Web Search and Tools Configuration")
+        st.caption("Configure domain allow-list and user location for the OpenAI web search tool")
         
         # Load current filter settings
         try:
@@ -341,7 +341,22 @@ if authenticated:
                     placeholder="Europe/Berlin, America/New_York"
                 )
 
-            submitted_filters = st.form_submit_button("Save Web Search Settings", type="primary", icon=":material/save:")
+            st.divider()
+            st.subheader("MCP Tools")
+            dbis_enabled = st.toggle(
+                "Enable DBIS MCP Tool",
+                value=current_filter_settings.get('dbis_mcp_enabled', True),
+                help="Turn the DBIS MCP tool on/off"
+            )
+            dbis_org_default = st.secrets.get("DBIS_ORGANIZATION_ID", "")
+            dbis_org_id = st.text_input(
+                "DBIS Organization ID",
+                value=current_filter_settings.get('dbis_org_id', dbis_org_default),
+                placeholder=dbis_org_default or "EUV",
+                help="Overrides the server's default organization for DBIS requests"
+            )
+
+            submitted_filters = st.form_submit_button("Save Web & MCP Settings", type="primary", icon=":material/save:")
             if submitted_filters:
                 # basic validations
                 if ul_country and len(ul_country.strip()) not in (0,2):
@@ -356,14 +371,17 @@ if authenticated:
                     'web_userloc_city': ul_city,
                     'web_userloc_region': ul_region,
                     'web_userloc_timezone': ul_timezone,
+                    # MCP settings
+                    'dbis_mcp_enabled': bool(dbis_enabled),
+                    'dbis_org_id': (dbis_org_id or '').strip(),
                 }
                 try:
                     save_filter_settings(settings, updated_by=(st.session_state.get("admin_email") or "admin@viadrina.de"))
-                    st.success("Web search settings saved!", icon=":material/check_circle:")
+                    st.success("Settings saved!", icon=":material/check_circle:")
                 except Exception as e:
                     st.error(f"Error saving settings: {e}", icon=":material/error:")
 
-        st.caption("These settings affect only the web_search tool; file_search remains unchanged.")
+        st.caption("These settings affect the web_search tool and DBIS MCP tool at runtime.")
         
         # Reset button outside the form
         if st.button("Reset to Defaults", icon=":material/cached:",):
