@@ -1275,6 +1275,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 # Build a new cleaned string where each markdown link is replaced by its anchor text
                 text_orig = normalized_part.get("text", "") or ""
                 rebuilt = []
+                curr_len = 0
                 placements_map = []  # (char_index_in_rebuilt, title, url)
                 last = 0
                 pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
@@ -1328,18 +1329,21 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         # We found a parenthesized group of links from pos_left .. group_end
                         pre = text_orig[last:pos_left]
                         rebuilt.append(pre)
+                        curr_len += len(pre)
                         # iterate each link in the group and append only anchor-display (or empty)
                         for idx_link, lm in enumerate(group_links):
                             anchor = lm.group(1).strip()
                             url = lm.group(2).strip()
-                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                             display_anchor = "" if looks_like_url else anchor
-                            start_idx = sum(len(p) for p in rebuilt)
+                            start_idx = curr_len
                             rebuilt.append(display_anchor)
+                            curr_len += len(display_anchor)
                             placements_map.append((start_idx, anchor, url))
                             # add a single separating space between anchors so supers don't concatenate
                             if idx_link != len(group_links) - 1:
                                 rebuilt.append(" ")
+                                curr_len += 1
                         last = group_end + 1
                         i = last
                         continue
@@ -1357,17 +1361,20 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         post_advance = m.end()
 
                     rebuilt.append(pre)
+                    curr_len += len(pre)
                     anchor = m.group(1).strip()
                     url = m.group(2).strip()
-                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                    looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                     display_anchor = "" if looks_like_url else anchor
-                    start_idx = sum(len(p) for p in rebuilt)
+                    start_idx = curr_len
                     rebuilt.append(display_anchor)
+                    curr_len += len(display_anchor)
                     placements_map.append((start_idx, anchor, url))
                     last = post_advance
                     i = last
             
                 rebuilt.append(text_orig[last:])
+                curr_len += len(text_orig[last:])
                 cleaned = "".join(rebuilt).strip()
 
                 # Add to citation_map using positions computed in rebuilt text
@@ -1408,6 +1415,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             text_orig = cleaned
             pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
             rebuilt = []
+            curr_len = 0
             placements_map = []
             last = 0
             i = 0
@@ -1447,16 +1455,19 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     # emit pre, then each link anchor (no commas), separated by single spaces
                     pre = text_orig[last:pos_left]
                     rebuilt.append(pre)
+                    curr_len += len(pre)
                     for idx_link, lm in enumerate(group_links):
                         anchor = lm.group(1).strip()
                         url = lm.group(2).strip()
                         looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                         display_anchor = "" if looks_like_url else anchor
-                        start_idx = sum(len(p) for p in rebuilt)
+                        start_idx = curr_len
                         rebuilt.append(display_anchor)
+                        curr_len += len(display_anchor)
                         placements_map.append((start_idx, anchor, url))
                         if idx_link != len(group_links) - 1:
                             rebuilt.append(" ")
+                            curr_len += 1
                     last = group_end + 1
                     i = last
                     continue
@@ -1474,16 +1485,19 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     post_advance = m.end()
 
                 rebuilt.append(pre)
+                curr_len += len(pre)
                 anchor = m.group(1).strip()
                 url = m.group(2).strip()
                 looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                 display_anchor = "" if looks_like_url else anchor
-                start_idx = sum(len(p) for p in rebuilt)
+                start_idx = curr_len
                 rebuilt.append(display_anchor)
+                curr_len += len(display_anchor)
                 placements_map.append((start_idx, anchor, url))
                 last = post_advance
                 i = last
             rebuilt.append(text_orig[last:])
+            curr_len += len(text_orig[last:])
             cleaned = "".join(rebuilt).strip()
 
             if placements_map:
@@ -1743,6 +1757,7 @@ try:
            ```
            [postgres]
            host = "your-postgres-host"
+
            port = "5432"
            database = "your-database-name"
            user = "your-username"
