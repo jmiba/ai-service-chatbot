@@ -17,6 +17,27 @@ from fastmcp import FastMCP, Context
 DBIS_BASE_URL = "https://dbis.ur.de/api/v1"
 DEFAULT_TIMEOUT = httpx.Timeout(10.0, read=30.0)
 
+# ---- HTTP client reuse (keep-alive, HTTP/2 fallback) ----
+_ASYNC_CLIENT: Optional[httpx.AsyncClient] = None
+
+def _get_async_client() -> httpx.AsyncClient:
+    global _ASYNC_CLIENT
+    if _ASYNC_CLIENT is None:
+        try:
+            _ASYNC_CLIENT = httpx.AsyncClient(http2=True, timeout=DEFAULT_TIMEOUT, headers=(DBIS_UPSTREAM_HEADERS or None))
+        except Exception:
+            _ASYNC_CLIENT = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, headers=(DBIS_UPSTREAM_HEADERS or None))
+    return _ASYNC_CLIENT
+
+# ---- Simple caches and limits ----
+_SUBJECTS_CACHE: Dict[str, Any] = {"ts": 0.0, "data": []}
+_SUBJECTS_TTL = 600.0  # seconds
+_FETCH_SEM = asyncio.Semaphore(10)
+
+# ---- Precompiled regexes ----
+_HREF_RE = re.compile(r'href=["\'](https?://[^"\']+)["\']', re.IGNORECASE)
+_MD_ESCAPES = re.compile(r'([\[\]\(\)])')
+
 # Parse optional headers for upstream DBIS API from environment.
 # Supports either JSON (e.g. '{"Authorization":"Bearer ..."}')
 # or newline/semicolon separated 'Key: Value' pairs. Also supports
@@ -53,11 +74,27 @@ mcp = FastMCP("dbis")
 print("DBIS MCP server initialized.", file=sys.stderr, flush=True)
 
 async def _fetch_json(url: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    # Ensure every upstream call uses timeouts and optional headers
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, headers=(DBIS_UPSTREAM_HEADERS or None)) as client:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        return resp.json()
+    """HTTP GET JSON with small retry for transient failures."""
+    client = _get_async_client()
+    backoff = 0.3
+    for attempt in range(3):
+        try:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            if attempt < 2:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+                continue
+            raise e
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status and status >= 500 and attempt < 2:
+                await asyncio.sleep(backoff)
+                backoff *= 2
+                continue
+            raise e
 
 
 DEFAULT_ORG_ID = os.getenv("DBIS_ORGANIZATION_ID")
@@ -120,18 +157,26 @@ def _candidate_fields(d: dict, names: List[str]) -> Optional[str]:
 
 
 async def _get_subjects() -> List[dict[str, Any]]:
+    # Cache subjects for a short TTL
+    import time
+    now = time.time()
+    if _SUBJECTS_CACHE.get("data") and (now - float(_SUBJECTS_CACHE.get("ts", 0.0))) < _SUBJECTS_TTL:
+        return list(_SUBJECTS_CACHE["data"])  # shallow copy
     url = f"{DBIS_BASE_URL}/subjects"
     data = await _fetch_json(url)
     # Expecting a list; fallback to []
+    out: List[dict[str, Any]] = []
     if isinstance(data, list):
-        return data
-    # Sometimes wrapped
-    if isinstance(data, dict):
+        out = data
+    elif isinstance(data, dict):
         for key in ("subjects", "items", "data"):
             v = data.get(key)
             if isinstance(v, list):
-                return v
-    return []
+                out = v
+                break
+    _SUBJECTS_CACHE["data"] = out
+    _SUBJECTS_CACHE["ts"] = now
+    return out
 
 
 def _find_subject_id(subjects: List[dict[str, Any]], query: str) -> Tuple[Optional[str], Optional[str]]:
@@ -264,6 +309,29 @@ def _shorten(s: str, limit: int = 160) -> str:
     return cut + "…"
 
 
+# Markdown helpers
+
+def _escape_md_text(s: str) -> str:
+    return _MD_ESCAPES.sub(r"\\\1", s or "")
+
+
+def _build_md_line(title: str, vendor_link: Optional[str], dbis_link: Optional[str], *, style: str = "inline") -> str:
+    """Construct a stable markdown line for one item.
+    style="inline": "- Title — <vendor> — [DBIS](dbis)"
+    style="paren":  "- Title — <vendor> ([DBIS: Title](dbis))"
+    """
+    t = _escape_md_text(title) or "Untitled resource"
+    parts: List[str] = [f"- {t}"]
+    if vendor_link:
+        parts.append(f"— <{vendor_link}>")
+    if dbis_link:
+        if style == "paren":
+            parts.append(f"([DBIS: {t}]({dbis_link}))")
+        else:
+            parts.append(f"— [DBIS]({dbis_link})")
+    return " ".join(parts)
+
+
 def _extract_resource_description(res: dict[str, Any]) -> str:
     # Try common fields for a short description/summary
     for path in [
@@ -343,17 +411,20 @@ def _derive_links(urls: List[str], resource_id: str, org_id: str) -> tuple[Optio
 
 
 async def _fetch_text(url: str) -> str:
-    async with httpx.AsyncClient(timeout=httpx.Timeout(6.0, read=6.0), headers=(DBIS_UPSTREAM_HEADERS or None)) as client:
-        resp = await client.get(url)
+    client = _get_async_client()
+    try:
+        resp = await client.get(url, timeout=httpx.Timeout(6.0, read=6.0))
         resp.raise_for_status()
         return resp.text or ""
+    except Exception:
+        return ""
 
 
 async def _extract_vendor_from_dbis_html(dbis_detail_url: str) -> Optional[str]:
     try:
         html = await _fetch_text(dbis_detail_url)
         # find external http(s) links; prefer the first that is not dbis.ur.de
-        candidates = re.findall(r'href=["\'](https?://[^"\']+)["\']', html, flags=re.IGNORECASE)
+        candidates = _HREF_RE.findall(html)
         for u in candidates:
             if not _is_dbis_url(u):
                 return u
@@ -362,7 +433,7 @@ async def _extract_vendor_from_dbis_html(dbis_detail_url: str) -> Optional[str]:
     return None
 
 
-async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any]:
+async def _fetch_resource_detail(resource_id: str, org_id: str, *, style: str = "inline") -> dict[str, Any]:
     url = f"{DBIS_BASE_URL}/resource/{resource_id}/organization/{org_id}"
     try:
         data = await _fetch_json(url)
@@ -372,21 +443,17 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
         title = _extract_resource_title(data)
         urls = _extract_resource_urls(data)
         vendor_link, dbis_link, _ = _derive_links(urls, resource_id, org_id)
-        # If no vendor link from API, try to extract one from the DBIS detail page HTML
+        # If no vendor link from API, try to extract one from the DBIS detail page HTML (best-effort)
         if not vendor_link and dbis_link:
             vendor_link = await _extract_vendor_from_dbis_html(dbis_link)
         desc = _extract_resource_description(data)
-        # Compose a single markdown line that keeps vendor inline and DBIS as a markdown link
-        parts: List[str] = [f"{vendor_link}"]
-        if dbis_link:
-            parts.append(f"([DBIS: {title}]({dbis_link}))")
-        md_line = " ".join(parts)
+        md_line = _build_md_line(title, vendor_link, dbis_link, style=style)
         item = {
             "id": resource_id,
             "title": title,
-            # Intentionally omit raw 'dbis_link' to avoid models printing it inline
-            # 'md_line' provides the intended presentation
-            "annotation": md_line,
+            "vendor_link": vendor_link,
+            # Intentionally omit raw 'dbis_link' to discourage inline dumping; md_line carries presentation
+            "md_line": md_line,
             "description": desc,
         }
         return item
@@ -399,26 +466,23 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
 def _build_markdown(items: List[dict[str, Any]]) -> str:
     lines: List[str] = []
     for it in items:
-        # Prefer prebuilt line to keep formatting deterministic
-        if "annotation" in it and it["annotation"]:
-            lines.append(str(it["annotation"]))
+        md_line = it.get("md_line")
+        if md_line:
+            lines.append(str(md_line))
             continue
         title = _norm_text(it.get("title")) or "Untitled resource"
         vendor = _norm_text(it.get("vendor_link"))
-        dbis = _norm_text(it.get("dbis_link"))  # may be missing by design
-        parts: List[str] = [f"{vendor}"]
-        if dbis:
-            parts.append(f"([DBIS: ]({dbis}))")
-        lines.append(" ".join(parts))
+        # dbis_link may be intentionally omitted; only include if present
+        dbis = _norm_text(it.get("dbis_link"))
+        lines.append(_build_md_line(title, vendor, dbis))
     return "\n".join(lines)
 
 
 @mcp.tool(
     name="dbis_top_resources",
     description=(
-        "Top DBIS resources for a subject. Params: subject_name, limit (default 6). "
-        "Returns compact items with vendor_link and DBIS link; default org from env."
-    ),
+        "Top DBIS resources for a subject. Params: subject_name, limit (default 6), style ('inline'|'paren'), format ('markdown'|'json'). "
+        "Returns compact items with vendor (inline) and DBIS (as markdown link). Organization defaults from env/headers."),
 )
 async def top_resources(
     context: Context,
@@ -426,6 +490,7 @@ async def top_resources(
     limit: Optional[int] = 6,
     organization_id: Optional[str] = None,
     format: Optional[str] = "markdown",
+    style: Optional[str] = "inline",
 ) -> dict[str, Any]:
     print("[MCP] dbis_top_resources: start", file=sys.stderr, flush=True)
     try:
@@ -435,7 +500,7 @@ async def top_resources(
         if not sid:
             msg = f"Subject not found for query: {subject_name}"
             print(f"[MCP] dbis_top_resources: {msg}", file=sys.stderr, flush=True)
-            return {"error": msg, "query": subject_name}
+            return {"error": msg, "query": subject_name, "error_code": "subject_not_found"}
 
         # List resource IDs by subject
         url_ids = f"{DBIS_BASE_URL}/resourceIdsBySubject/{sid}/organization/{org_id}"
@@ -449,15 +514,15 @@ async def top_resources(
             limit = 6
         resource_ids = resource_ids[:limit]
 
-        # Fetch details concurrently
-        tasks = [
-            _fetch_resource_detail(rid, org_id)
-            for rid in resource_ids
-        ]
+        # Fetch details concurrently with a limit
+        async def _bounded_fetch(rid: str):
+            async with _FETCH_SEM:
+                return await _fetch_resource_detail(rid, org_id, style=style or "inline")
+
+        tasks = [_bounded_fetch(rid) for rid in resource_ids]
         items = await asyncio.gather(*tasks)
 
-        # Build output
-        md = _build_markdown(items)
+        # Build output (compact)
         result = {
             "organization_id": org_id,
             "subject": {"id": sid, "name": resolved_name or subject_name},
@@ -465,16 +530,16 @@ async def top_resources(
             "items": items,
         }
         if (format or "").lower() == "markdown":
-            result["md"] = md
+            result["md"] = _build_markdown(items)
         print("[MCP] dbis_top_resources: ok", file=sys.stderr, flush=True)
         return result
     except httpx.TimeoutException:
         msg = "Timeout while fetching DBIS top resources."
         print(f"[MCP] dbis_top_resources: {msg}", file=sys.stderr, flush=True)
-        return {"error": msg}
+        return {"error": msg, "error_code": "timeout"}
     except Exception as e:
         print(f"[MCP] dbis_top_resources: error: {e}", file=sys.stderr, flush=True)
-        return {"error": str(e)}
+        return {"error": str(e), "error_code": "unexpected"}
 
 
 @mcp.tool(
