@@ -376,11 +376,20 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
         if not vendor_link and dbis_link:
             vendor_link = await _extract_vendor_from_dbis_html(dbis_link)
         desc = _extract_resource_description(data)
+        # Compose a single markdown line that keeps vendor inline and DBIS as a markdown link
+        parts: List[str] = [f"- {title}"]
+        if vendor_link:
+            parts.append(f"— <{vendor_link}>")
+        if dbis_link:
+            parts.append(f"— [DBIS]({dbis_link})")
+        md_line = " ".join(parts)
         item = {
             "id": resource_id,
             "title": title,
             "vendor_link": vendor_link,
-            "dbis_link": dbis_link,
+            # Intentionally omit raw 'dbis_link' to avoid models printing it inline
+            # 'md_line' provides the intended presentation
+            "md_line": md_line,
             "description": desc,
         }
         return item
@@ -393,9 +402,13 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
 def _build_markdown(items: List[dict[str, Any]]) -> str:
     lines: List[str] = []
     for it in items:
+        # Prefer prebuilt line to keep formatting deterministic
+        if "md_line" in it and it["md_line"]:
+            lines.append(str(it["md_line"]))
+            continue
         title = _norm_text(it.get("title")) or "Untitled resource"
         vendor = _norm_text(it.get("vendor_link"))
-        dbis = _norm_text(it.get("dbis_link"))
+        dbis = _norm_text(it.get("dbis_link"))  # may be missing by design
         parts: List[str] = [f"- {title}"]
         if vendor:
             parts.append(f"— <{vendor}>")

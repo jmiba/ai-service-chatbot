@@ -477,7 +477,10 @@ def _strip_markdown_links_preserve_md(md_text: str) -> str:
             anchor = m.group(1)
             # keep EXACT spacing/newlines around the match; only change the link itself
             looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
-            return "" if looks_like_url else anchor
+            dbis_anchor = bool(re.match(r'^\s*dbis\b', anchor.strip(), re.I))
+            display_anchor = "" if (looks_like_url or dbis_anchor) else anchor
+
+            return display_anchor
 
         safe = _LINK_RE.sub(repl, part)
 
@@ -788,7 +791,6 @@ def _extract_markdown_links(text):
     return results
 
 # New helper: replace inline filecite markers by ordered supers based on placements
-# ...existing code...
 def replace_filecite_markers_with_sup(text, citation_map, placements, annotations=None):
     """
     Replace markers like: fileciteturn0file1turn0file3
@@ -1490,7 +1492,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                             anchor = lm.group(1).strip()
                             url = lm.group(2).strip()
                             looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
-                            display_anchor = "" if looks_like_url else anchor
+                            dbis_anchor = bool(re.match(r'^\s*dbis\b', anchor.strip(), re.I))
+                            display_anchor = "" if (looks_like_url or dbis_anchor) else anchor
                             start_idx = curr_len
                             rebuilt.append(display_anchor)
                             curr_len += len(display_anchor)
@@ -1520,7 +1523,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     anchor = m.group(1).strip()
                     url = m.group(2).strip()
                     looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
-                    display_anchor = "" if looks_like_url else anchor
+                    dbis_anchor = bool(re.match(r'^\s*dbis\b', anchor.strip(), re.I))
+                    display_anchor = "" if (looks_like_url or dbis_anchor) else anchor
                     start_idx = curr_len
                     rebuilt.append(display_anchor)
                     curr_len += len(display_anchor)
@@ -1615,7 +1619,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         anchor = lm.group(1).strip()
                         url = lm.group(2).strip()
                         looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
-                        display_anchor = "" if looks_like_url else anchor
+                        dbis_anchor = bool(re.match(r'^\s*dbis\b', anchor.strip(), re.I))
+                        display_anchor = "" if (looks_like_url or dbis_anchor) else anchor
                         start_idx = curr_len
                         rebuilt.append(display_anchor)
                         curr_len += len(display_anchor)
@@ -1644,7 +1649,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 anchor = m.group(1).strip()
                 url = m.group(2).strip()
                 looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
-                display_anchor = "" if looks_like_url else anchor
+                dbis_anchor = bool(re.match(r'^\s*dbis\b', anchor.strip(), re.I))
+                display_anchor = "" if (looks_like_url or dbis_anchor) else anchor
                 start_idx = curr_len
                 rebuilt.append(display_anchor)
                 curr_len += len(display_anchor)
@@ -1671,6 +1677,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     next_num += 1
 
             rendered = replace_filecite_markers_with_sup(cleaned, citation_map, placements, annotations=None)
+            # Final cleanup to remove stray parentheses or separators left after replacements
+            rendered = _trim_separator_artifacts(rendered)
 
         # Safety cleanup: remove any remaining filecite markers that might have been missed
         # Match the full marker like: filecite... (non-greedy, DOTALL so newlines are covered)
