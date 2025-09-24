@@ -225,17 +225,40 @@ def _dbis_fallback_url(resource_id: str, org_id: str) -> str:
     return f"{DBIS_BASE_URL}/resource/{rid or 'UNKNOWN'}/organization/{oid or 'UNKNOWN'}"
 
 
-def _prefer_dbis_link(urls: List[str], resource_id: str, org_id: str) -> Tuple[str, List[str]]:
-    # If any candidate is a DBIS page, prefer it; otherwise, add a constructed DBIS URL first
+def _is_dbis_url(u: str) -> bool:
+    return "dbis.ur.de" in (u or "")
+
+
+def _derive_links(urls: List[str], resource_id: str, org_id: str) -> tuple[Optional[str], str, List[str]]:
+    """Return (vendor_link, dbis_link, ordered_urls).
+    - vendor_link: first non-DBIS URL if present, else None
+    - dbis_link: existing DBIS URL or constructed fallback detail.php
+    - ordered_urls: vendor first (if any), then DBIS, then others (deduped)
+    """
+    vendor_link: Optional[str] = None
+    dbis_link: Optional[str] = None
+
     for u in urls:
-        if "dbis.ur.de" in u:
-            # Put DBIS first
-            reordered = [u] + [x for x in urls if x != u]
-            return u, reordered
-    constructed = _dbis_fallback_url(resource_id, org_id)
-    if constructed not in urls:
-        return constructed, [constructed] + urls
-    return constructed, urls
+        if _is_dbis_url(u) and not dbis_link:
+            dbis_link = u
+        if (not _is_dbis_url(u)) and not vendor_link:
+            vendor_link = u
+
+    if not dbis_link:
+        dbis_link = _dbis_fallback_url(resource_id, org_id)
+
+    ordered: List[str] = []
+    if vendor_link:
+        ordered.append(vendor_link)
+    if dbis_link and dbis_link not in ordered:
+        ordered.append(dbis_link)
+    # append remaining unique
+    seen = set(ordered)
+    for u in urls:
+        if u not in seen:
+            ordered.append(u)
+            seen.add(u)
+    return vendor_link, dbis_link, ordered
 
 
 async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any]:
@@ -247,13 +270,16 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
             data = {"data": data}
         title = _extract_resource_title(data)
         urls = _extract_resource_urls(data)
-        dbis_link, urls_pref = _prefer_dbis_link(urls, resource_id, org_id)
+        vendor_link, dbis_link, urls_pref = _derive_links(urls, resource_id, org_id)
         desc = _extract_resource_description(data)
         item = {
             "id": resource_id,
             "title": title,
             "urls": urls_pref,
-            "link": dbis_link,
+            "vendor_link": vendor_link,
+            "dbis_link": dbis_link,
+            # Primary link for inline display defaults to vendor when available
+            "link": vendor_link or dbis_link,
             "description": desc,
             "api_url": url,
         }
@@ -268,16 +294,20 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
     lines: List[str] = []
     for it in items:
         title = _norm_text(it.get("title")) or "Untitled resource"
-        link = _norm_text(it.get("link"))
+        vendor = _norm_text(it.get("vendor_link"))
+        dbis = _norm_text(it.get("dbis_link"))
         desc = _norm_text(it.get("description"))
-        if link:
-            line = f"- [{title}]({link})"
-        else:
-            line = f"- {title}"
+
+        # Inline: show direct vendor URL if present (angle-bracketed so it is clickable but not a [text](url) MD link)
+        # Reference: include a Markdown link to DBIS so the app's renderer turns it into a numbered citation.
+        parts: List[str] = [f"- {title}"]
+        if vendor:
+            parts.append(f"— <{vendor}>")
+        if dbis:
+            parts.append(f"— [DBIS]({dbis})")
         if desc:
-            # add a short em dash + description
-            line += f" — {desc}"
-        lines.append(line)
+            parts.append(f"— {desc}")
+        lines.append(" ".join(parts))
     return "\n".join(lines)
 
 

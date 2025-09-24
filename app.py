@@ -976,11 +976,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     def build_conversation_context():
         conversation = [
             {"role": "system", "content": system_instructions},
-            {"role": "system", "content": (
-                "Tool policy: Prefer DBIS MCP and file_search for known-library content. "
-                "Only use web_search when the knowledge base and DBIS MCP cannot answer "
-                "or when the user explicitly requests the open web."
-            )},
         ]
         
         # Add recent conversation history (each user has their own st.session_state)
