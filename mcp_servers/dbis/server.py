@@ -377,16 +377,13 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
             vendor_link = await _extract_vendor_from_dbis_html(dbis_link)
         desc = _extract_resource_description(data)
         # Compose a single markdown line that keeps vendor inline and DBIS as a markdown link
-        parts: List[str] = [f"- {title}"]
-        if vendor_link:
-            parts.append(f"— <{vendor_link}>")
+        parts: List[str] = [f"{vendor_link}"]
         if dbis_link:
-            parts.append(f"([DBIS]({dbis_link}))")
+            parts.append(f"([DBIS: {title}]({dbis_link}))")
         md_line = " ".join(parts)
         item = {
             "id": resource_id,
             "title": title,
-            "vendor_link": vendor_link,
             # Intentionally omit raw 'dbis_link' to avoid models printing it inline
             # 'md_line' provides the intended presentation
             "annotation": md_line,
@@ -409,11 +406,9 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
         title = _norm_text(it.get("title")) or "Untitled resource"
         vendor = _norm_text(it.get("vendor_link"))
         dbis = _norm_text(it.get("dbis_link"))  # may be missing by design
-        parts: List[str] = [f"- {title}"]
-        if vendor:
-            parts.append(f"— <{vendor}>")
+        parts: List[str] = [f"{vendor}"]
         if dbis:
-            parts.append(f"([DBIS]({dbis}))")
+            parts.append(f"([DBIS: ]({dbis}))")
         lines.append(" ".join(parts))
     return "\n".join(lines)
 
