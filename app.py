@@ -1138,36 +1138,60 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         conversation = [
             {"role": "system", "content": system_instructions},
         ]
-        # Instruct the model to include the org ID when invoking DBIS MCP tools
+
+        # If an organization id is configured, instruct the model to include it in dbis_* tool calls
         try:
             _dbis_org = None
             if web_tool_extras and isinstance(web_tool_extras, dict):
                 _dbis_org = (web_tool_extras.get("dbis_org_id") or "").strip() or None
+            if _dbis_org:
+                conversation.append({
+                    "role": "system",
+                    "content": (
+                        f"When calling any DBIS MCP tools (dbis_*), always include the argument "
+                        f"organization_id='{_dbis_org}'. If organization_id is omitted, default to '{_dbis_org}'."
+                    )
+                })
         except Exception:
-            _dbis_org = None
-        
-        if _dbis_org:
-            conversation.append({
-                "role": "system",
-                "content": (
-                    f"When calling any DBIS MCP tools (dbis_*), always include the argument "
-                    f"organization_id='{_dbis_org}'. If organization_id is omitted, default to '{_dbis_org}'."
-                    f"Process urls in the response in this format `vendor_link ([DBIS: title](dbis_link))`."
-                )
-            })
-        
+            pass
+
         # Add recent conversation history (each user has their own st.session_state)
         recent_messages = st.session_state.messages[-10:] if st.session_state.messages else []
-        
-        for msg in recent_messages:
-            if msg["role"] == "user":
-                conversation.append({"role": "user", "content": msg["content"]})
-            elif msg["role"] == "assistant":
-                # Use raw_text if available (cleaner), otherwise rendered
-                content = msg.get("raw_text", msg.get("rendered", msg.get("content", "")))
+        keep_full_tail = 2  # keep last 2 messages untrimmed
+        total = len(recent_messages)
+
+        for idx, msg in enumerate(recent_messages):
+            role = msg.get("role")
+            is_tail = (total - idx) <= keep_full_tail
+
+            if role == "user":
+                text = (msg.get("content") or "").strip()
+                if not is_tail and text:
+                    # Trim older user messages lightly
+                    max_len = 800
+                    if len(text) > max_len:
+                        text = text[:max_len].rstrip() + " …"
+                if text:
+                    conversation.append({"role": "user", "content": text})
+
+            elif role == "assistant":
+                # Prefer raw_text if available (cleaner), otherwise rendered/content
+                content = msg.get("raw_text", msg.get("rendered", msg.get("content", ""))) or ""
                 # Remove HTML tags for cleaner context
-                content = re.sub(r'<[^>]+>', '', content) if content else ""
-                conversation.append({"role": "assistant", "content": content})
+                content = re.sub(r'<[^>]+>', '', content)
+                # Drop any trailing "References" section if present
+                content = re.split(r"\n+references\b", content, flags=re.IGNORECASE|re.DOTALL)[0]
+                # Remove numeric citation markers like [12]
+                content = re.sub(r"\[\d+\]", "", content)
+                content = content.strip()
+
+                if not is_tail and content:
+                    # Trim older assistant messages more aggressively
+                    max_len = 600
+                    if len(content) > max_len:
+                        content = content[:max_len].rstrip() + " …"
+                if content:
+                    conversation.append({"role": "assistant", "content": content})
         
         # Add current user input
         conversation.append({"role": "user", "content": user_input})
@@ -1729,6 +1753,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         main_in = int(base_usage.get("in", 0) or 0)
         main_out = int(base_usage.get("out", 0) or 0)
         main_total = int(base_usage.get("total", main_in + main_out) or 0)
+
         main_reason = int(base_usage.get("reason", 0) or 0)
 
         # Totals include eval usage
@@ -1749,7 +1774,6 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
         try:
             # Debug: Check session ID before logging
-           
             print(f"🔎 About to log interaction (bg) with session_id: {session_id}")
             log_interaction_async(
                 user_input=user_input,
@@ -1802,6 +1826,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     )
 
     # NOTE: Logging happens in the background after evaluation. The UI has already been updated above.
+
 # ---------- App init ----------
 # Check for required OpenAI API key
 try:
@@ -1841,6 +1866,20 @@ if dbis_headers_secret:
     else:
         os.environ.setdefault(DBIS_MCP_HEADERS_KEY, str(dbis_headers_secret))
 
+# Cached one-time DB initialization helper
+@st.cache_resource(show_spinner=False)
+def _ensure_db_initialized(default_prompt_value: str) -> bool:
+    try:
+        create_knowledge_base_table()
+        initialize_default_prompt_if_empty(default_prompt_value)
+        create_llm_settings_table()
+        create_request_classifications_table()
+        create_filter_settings_table()
+        return True
+    except Exception as e:
+        print(f"⚠️ DB init encountered an error (continuing): {e}")
+        return False
+
 # Helper function to get current LLM configuration
 def get_current_llm_config():
     """Get current LLM settings from database with fallback to defaults"""
@@ -1860,20 +1899,6 @@ def get_current_llm_config():
             'reasoning_effort': 'medium',
             'text_verbosity': 'medium'
         }
-
-# Cached one-time DB initialization helper
-@st.cache_resource(show_spinner=False)
-def _ensure_db_initialized(default_prompt_value: str) -> bool:
-    try:
-        create_knowledge_base_table()
-        initialize_default_prompt_if_empty(default_prompt_value)
-        create_llm_settings_table()
-        create_request_classifications_table()
-        create_filter_settings_table()
-        return True
-    except Exception as e:
-        print(f"⚠️ DB init encountered an error (continuing): {e}")
-        return False
 
 # Initialize database and tables
 database_available = False
