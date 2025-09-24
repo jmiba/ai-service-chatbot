@@ -21,6 +21,7 @@ from utils import (
     get_filter_settings,
     create_filter_settings_table,
     create_knowledge_base_table,
+    get_document_status_counts,
 )
 
 # -------------------------------------
@@ -1334,7 +1335,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         for idx_link, lm in enumerate(group_links):
                             anchor = lm.group(1).strip()
                             url = lm.group(2).strip()
-                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-Za-z0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
+                            looks_like_url = bool(re.match(r'^(https?://|www\.|[A-ZaZ0-9.-]+\.[A-ZaZ]{2,})$', anchor.strip(), re.I))
                             display_anchor = "" if looks_like_url else anchor
                             start_idx = curr_len
                             rebuilt.append(display_anchor)
@@ -1808,9 +1809,12 @@ def _format_prompt(template: str, *, datetime: str, doc_count: int | None = None
 
 if database_available:
     try:
-        # Get current document count and latest prompt from database 
-        all_entries = get_kb_entries()
-        doc_count = len(all_entries)
+        # Get current document count and latest prompt from database using a lightweight COUNT(*)
+        try:
+            status_counts = get_document_status_counts()
+            doc_count = int(status_counts.get("total_docs", 0))
+        except Exception:
+            doc_count = 0
         current_prompt, _ = get_latest_prompt()
         CUSTOM_INSTRUCTIONS = _format_prompt(current_prompt, datetime=formatted_time, doc_count=doc_count)
     except Exception as e:
@@ -1858,7 +1862,7 @@ if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
 
     # Build web_search filters from admin settings
-    fs = get_filter_settings()
+    # Remove duplicate call; rely on try/except below
     web_filters = {}
     tool_extras = {}
     try:
@@ -1877,23 +1881,6 @@ if user_input:
         domains = fs.get('web_domains') or []
         if domains:
             web_filters['allowed_domains'] = domains
-        # user_location
-        ul_type = (fs.get('web_userloc_type') or '').strip()
-        ul_country = (fs.get('web_userloc_country') or '').strip()
-        ul_city = (fs.get('web_userloc_city') or '').strip()
-        ul_region = (fs.get('web_userloc_region') or '').strip()
-        ul_timezone = (fs.get('web_userloc_timezone') or '').strip()
-        if ul_type:
-            loc = {
-                'type': ul_type,
-                'country': ul_country or None,
-                'city': ul_city or None,
-            }
-            if ul_region:
-                loc['region'] = ul_region
-            if ul_timezone:
-                loc['timezone'] = ul_timezone
-            tool_extras['user_location'] = loc
     # If no filters defined, pass None so tool has no restrictions
     retrieval_filters = web_filters if web_filters else None
 
