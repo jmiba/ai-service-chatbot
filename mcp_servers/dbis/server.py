@@ -9,6 +9,7 @@ import os
 import sys
 import json
 import asyncio
+import re
 
 import httpx
 from fastmcp import FastMCP, Context
@@ -183,6 +184,60 @@ def _extract_resource_urls(res: dict[str, Any]) -> List[str]:
     return out
 
 
+def _extract_resource_description(res: dict[str, Any]) -> str:
+    # Try common fields for a short description/summary
+    for path in [
+        ("description",),
+        ("short_description",),
+        ("summary",),
+        ("abstract",),
+        ("resource", "description"),
+        ("resource", "short_description"),
+        ("resource", "summary"),
+        ("resource", "abstract"),
+    ]:
+        cur: Any = res
+        try:
+            for key in path:
+                if isinstance(cur, dict):
+                    cur = cur.get(key)
+                else:
+                    cur = None
+                    break
+            text = _norm_text(cur)
+            if text:
+                # collapse whitespace, keep it short
+                text = re.sub(r"\s+", " ", text).strip()
+                return text
+        except Exception:
+            continue
+    return ""
+
+
+def _dbis_fallback_url(resource_id: str, org_id: str) -> str:
+    # Best-effort construction of the DBIS resource description URL
+    # Known pattern in DBIS: detail page includes bib_id (org) and titel_id/resource id.
+    rid = _norm_text(resource_id)
+    oid = _norm_text(org_id)
+    if rid and oid:
+        return f"https://dbis.ur.de/dbinfo/detail.php?bib_id={oid}&titel_id={rid}"
+    # Fallback to API URL if data is missing
+    return f"{DBIS_BASE_URL}/resource/{rid or 'UNKNOWN'}/organization/{oid or 'UNKNOWN'}"
+
+
+def _prefer_dbis_link(urls: List[str], resource_id: str, org_id: str) -> Tuple[str, List[str]]:
+    # If any candidate is a DBIS page, prefer it; otherwise, add a constructed DBIS URL first
+    for u in urls:
+        if "dbis.ur.de" in u:
+            # Put DBIS first
+            reordered = [u] + [x for x in urls if x != u]
+            return u, reordered
+    constructed = _dbis_fallback_url(resource_id, org_id)
+    if constructed not in urls:
+        return constructed, [constructed] + urls
+    return constructed, urls
+
+
 async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any]:
     url = f"{DBIS_BASE_URL}/resource/{resource_id}/organization/{org_id}"
     try:
@@ -192,14 +247,16 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
             data = {"data": data}
         title = _extract_resource_title(data)
         urls = _extract_resource_urls(data)
+        dbis_link, urls_pref = _prefer_dbis_link(urls, resource_id, org_id)
+        desc = _extract_resource_description(data)
         item = {
             "id": resource_id,
             "title": title,
-            "urls": urls,
+            "urls": urls_pref,
+            "link": dbis_link,
+            "description": desc,
             "api_url": url,
         }
-        if urls:
-            item["link"] = urls[0]
         return item
     except httpx.TimeoutException:
         return {"id": resource_id, "error": "timeout", "api_url": url}
@@ -212,10 +269,15 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
     for it in items:
         title = _norm_text(it.get("title")) or "Untitled resource"
         link = _norm_text(it.get("link"))
+        desc = _norm_text(it.get("description"))
         if link:
-            lines.append(f"- [{title}]({link})")
+            line = f"- [{title}]({link})"
         else:
-            lines.append(f"- {title}")
+            line = f"- {title}"
+        if desc:
+            # add a short em dash + description
+            line += f" — {desc}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -224,7 +286,8 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
     description=(
         "Return a concise, opinionated top list of DBIS resources for the given subject name or id. "
         "Defaults to organization from DBIS_ORGANIZATION_ID. Accepts: subject_name (str), limit (int, default 6). "
-        "Do not ask follow-up questions; assume Viadrina/EUV by default. Return clickable links when available."
+        "Prefer DBIS resource description links over vendor links and include brief descriptions when available. "
+        "Do not ask follow-up questions; assume Viadrina/EUV by default."
     ),
 )
 async def top_resources(
