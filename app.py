@@ -30,6 +30,8 @@ st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initi
 DBIS_MCP_SERVER_LABEL = "dbis"
 DBIS_MCP_ENV_KEY = f"OPENAI_MCP_SERVER_{DBIS_MCP_SERVER_LABEL.upper()}"
 DBIS_MCP_SERVER_URL_KEY = "DBIS_MCP_SERVER_URL"
+DBIS_MCP_AUTH_KEY = "DBIS_MCP_AUTHORIZATION"
+DBIS_MCP_HEADERS_KEY = "DBIS_MCP_HEADERS"
 
 
 # -------------------------------------
@@ -60,6 +62,29 @@ def _safe_output_text(resp_obj):
                 if isinstance(ptxt, dict) and isinstance(ptxt.get("value"), str) and ptxt["value"].strip():
                     return ptxt["value"]
     return ""
+
+
+def _parse_headers_setting(header_value):
+    """Parse headers configuration from secrets/env into a dict of strings."""
+    if not header_value:
+        return None
+    if isinstance(header_value, dict):
+        return {str(k): str(v) for k, v in header_value.items()}
+    if isinstance(header_value, str):
+        trimmed = header_value.strip()
+        if not trimmed:
+            return None
+        try:
+            parsed = json.loads(trimmed)
+        except json.JSONDecodeError:
+            if ":" in trimmed:
+                key, _, val = trimmed.partition(":")
+                return {key.strip(): val.strip()}
+            return None
+        else:
+            if isinstance(parsed, dict):
+                return {str(k): str(v) for k, v in parsed.items()}
+    return None
 
 # ---------- UI + constants ----------
 # Check if user is authenticated (admin)
@@ -815,6 +840,19 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     dbis_mcp_url = (
         str(st.secrets.get(DBIS_MCP_SERVER_URL_KEY, "") or os.getenv(DBIS_MCP_SERVER_URL_KEY, "")).strip()
     ) or None
+    dbis_mcp_auth = st.secrets.get(DBIS_MCP_AUTH_KEY)
+    if dbis_mcp_auth is None:
+        dbis_mcp_auth = os.getenv(DBIS_MCP_AUTH_KEY)
+    dbis_mcp_headers_raw = st.secrets.get(DBIS_MCP_HEADERS_KEY)
+    if dbis_mcp_headers_raw is None:
+        dbis_mcp_headers_raw = os.getenv(DBIS_MCP_HEADERS_KEY)
+    dbis_mcp_headers = _parse_headers_setting(dbis_mcp_headers_raw)
+    if dbis_mcp_headers_raw and dbis_mcp_headers is None:
+        print(
+            "Warning: DBIS_MCP_HEADERS could not be parsed into a dictionary. "
+            "Provide JSON (e.g. '{\"Authorization\": \"Bearer ...\"}') or 'Header: value' format.",
+            flush=True,
+        )
 
     last_url = st.session_state.get("dbis_mcp_last_url")
     if dbis_mcp_url and dbis_mcp_url != last_url:
@@ -836,19 +874,22 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
     if not dbis_disabled:
         if dbis_mcp_url:
-            tool_cfg.append(
-                {
-                    "type": "mcp",
-                    "server_label": DBIS_MCP_SERVER_LABEL,
-                    "server_url": dbis_mcp_url,
-                    "allowed_tools": [
-                        "dbis_list_subjects",
-                        "dbis_list_resource_ids",
-                        "dbis_get_resource",
-                        "dbis_list_resource_ids_by_subject",
-                    ],
-                }
-            )
+            dbis_tool_cfg = {
+                "type": "mcp",
+                "server_label": DBIS_MCP_SERVER_LABEL,
+                "server_url": dbis_mcp_url,
+                "allowed_tools": [
+                    "dbis_list_subjects",
+                    "dbis_list_resource_ids",
+                    "dbis_get_resource",
+                    "dbis_list_resource_ids_by_subject",
+                ],
+            }
+            if dbis_mcp_auth:
+                dbis_tool_cfg["authorization"] = str(dbis_mcp_auth)
+            if dbis_mcp_headers:
+                dbis_tool_cfg["headers"] = dbis_mcp_headers
+            tool_cfg.append(dbis_tool_cfg)
         elif dbis_mcp_command:
             print(
                 "DBIS MCP command is configured but no DBIS_MCP_SERVER_URL was provided. "
@@ -1007,6 +1048,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             status_code = getattr(getattr(e, "response", None), "status_code", None)
             error_text = getattr(e, "message", "") or str(e)
             mcp_tool_present = any(tool.get("type") == "mcp" for tool in tool_cfg)
+            auth_error = "401" in error_text or "Unauthorized" in error_text
             is_mcp_tool_error = (
                 status_code == 424
                 and "Error retrieving tool list" in error_text
@@ -1020,6 +1062,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     "⚠️ DBIS tools are temporarily disabled because the MCP server "
                     "could not be reached. The chat will continue without DBIS access."
                 )
+                if auth_error:
+                    warning_msg += " (Server responded with 401 Unauthorized—check MCP credentials.)"
                 try:
                     st.warning(warning_msg)
                 except Exception:
@@ -1518,6 +1562,15 @@ if dbis_cmd and not dbis_url_secret:
     os.environ.setdefault(DBIS_MCP_ENV_KEY, dbis_cmd)
 if dbis_url_secret:
     os.environ.setdefault(DBIS_MCP_SERVER_URL_KEY, str(dbis_url_secret))
+dbis_auth_secret = st.secrets.get(DBIS_MCP_AUTH_KEY)
+if dbis_auth_secret:
+    os.environ.setdefault(DBIS_MCP_AUTH_KEY, str(dbis_auth_secret))
+dbis_headers_secret = st.secrets.get(DBIS_MCP_HEADERS_KEY)
+if dbis_headers_secret:
+    if isinstance(dbis_headers_secret, dict):
+        os.environ.setdefault(DBIS_MCP_HEADERS_KEY, json.dumps(dbis_headers_secret))
+    else:
+        os.environ.setdefault(DBIS_MCP_HEADERS_KEY, str(dbis_headers_secret))
 
 dbis_org = st.secrets.get("DBIS_ORGANIZATION_ID")
 if dbis_org:
