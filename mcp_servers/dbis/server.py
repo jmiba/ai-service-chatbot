@@ -289,7 +289,7 @@ def _extract_resource_description(res: dict[str, Any]) -> str:
                 # strip HTML, collapse whitespace, and shorten
                 text = _strip_html(text)
                 text = re.sub(r"\s+", " ", text).strip()
-                return _shorten(text, 160)
+                return _shorten(text, 600)
         except Exception:
             continue
     return ""
@@ -381,7 +381,7 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
         if vendor_link:
             parts.append(f"— <{vendor_link}>")
         if dbis_link:
-            parts.append(f"— [DBIS]({dbis_link})")
+            parts.append(f"([DBIS]({dbis_link}))")
         md_line = " ".join(parts)
         item = {
             "id": resource_id,
@@ -389,7 +389,7 @@ async def _fetch_resource_detail(resource_id: str, org_id: str) -> dict[str, Any
             "vendor_link": vendor_link,
             # Intentionally omit raw 'dbis_link' to avoid models printing it inline
             # 'md_line' provides the intended presentation
-            "md_line": md_line,
+            "annotation": md_line,
             "description": desc,
         }
         return item
@@ -403,8 +403,8 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
     lines: List[str] = []
     for it in items:
         # Prefer prebuilt line to keep formatting deterministic
-        if "md_line" in it and it["md_line"]:
-            lines.append(str(it["md_line"]))
+        if "annotation" in it and it["annotation"]:
+            lines.append(str(it["annotation"]))
             continue
         title = _norm_text(it.get("title")) or "Untitled resource"
         vendor = _norm_text(it.get("vendor_link"))
@@ -413,7 +413,7 @@ def _build_markdown(items: List[dict[str, Any]]) -> str:
         if vendor:
             parts.append(f"— <{vendor}>")
         if dbis:
-            parts.append(f"— [DBIS]({dbis})")
+            parts.append(f"([DBIS]({dbis}))")
         lines.append(" ".join(parts))
     return "\n".join(lines)
 

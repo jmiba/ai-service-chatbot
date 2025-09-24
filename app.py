@@ -895,7 +895,7 @@ def human_event_label(event):
         return "Searching my knowledge base…"
     if "tool_call" in et or et.endswith("_call") or "tool" in et:
         short = et.split(".")[-1] if "." in et else et
-        return f"Using Tools {short.replace('_', ' ')}"
+        return f"Tool use {short.replace('_', ' ')}"
     if et.startswith("response.output_text"):
         if et.endswith("start"):
             return "Generating answer…"
