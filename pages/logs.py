@@ -324,6 +324,7 @@ if authenticated:
                         key="logs_session_prev_page",
                     ):
                         st.session_state["logs_session_page"] = max(1, current_page - 1)
+                        st.rerun()
                 with paginator_col2:
                     st.markdown(
                         f"**Page {current_page} of {total_pages}** &nbsp;&nbsp;"
@@ -338,6 +339,7 @@ if authenticated:
                         st.session_state["logs_session_page"] = min(
                             total_pages, current_page + 1
                         )
+                        st.rerun()
 
                 session_df = pd.DataFrame(
                     [
@@ -478,6 +480,7 @@ if authenticated:
             with paginator_col1:
                 if st.button("◀ Previous", disabled=current_page <= 1, key="logs_prev_page"):
                     st.session_state["logs_page"] = max(1, current_page - 1)
+                    st.rerun()
             with paginator_col2:
                 st.markdown(
                     f"**Page {current_page} of {total_pages}** &nbsp;&nbsp;"
@@ -486,6 +489,7 @@ if authenticated:
             with paginator_col3:
                 if st.button("Next ▶", disabled=current_page >= total_pages, key="logs_next_page"):
                     st.session_state["logs_page"] = min(total_pages, current_page + 1)
+                    st.rerun()
 
             table_rows = []
             for entry in page_entries:

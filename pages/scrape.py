@@ -1407,7 +1407,14 @@ def scrape(url,
                 continue
 
             # Skip non-HTML resources by extension
-            if re.search(r'\.(pdf|docx?|xlsx?|pptx?|zip|rar|tar\.gz|7z|jpg|jpeg|png|gif|svg|mp4|webm)$', parsed_link.path, re.IGNORECASE):
+            if re.search(
+                r"\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z|tar(?:\.gz)?|tgz|gz|bz2|xz|"
+                r"jpg|jpeg|png|gif|svg|webp|tiff?|bmp|ico|heic|"
+                r"mp4|webm|mov|mkv|avi|mp3|m4a|wav|ogg|flac|"
+                r"exe|dmg|pkg|iso|apk|woff2?|ttf)$",
+                parsed_link.path,
+                re.IGNORECASE
+                ):
                 continue
 
             # Avoid common query-driven loopers unless whitelisted
@@ -2334,6 +2341,7 @@ def main():
                     with pagination_col1:
                         if st.button("◀ Previous", disabled=current_page <= 1, key="kb_prev_page"):
                             st.session_state["kb_page"] = max(1, current_page - 1)
+                            rerun_app()
                     with pagination_col2:
                         st.markdown(
                             f"**Page {current_page} of {total_pages}** &nbsp;&nbsp;"
@@ -2342,6 +2350,7 @@ def main():
                     with pagination_col3:
                         if st.button("Next ▶", disabled=current_page >= total_pages, key="kb_next_page"):
                             st.session_state["kb_page"] = min(total_pages, current_page + 1)
+                            rerun_app()
 
                 page_entries = page_entries or []
 
