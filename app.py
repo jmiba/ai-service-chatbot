@@ -1057,7 +1057,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     dbis_disabled = st.session_state.get("dbis_mcp_disabled", False) or (not admin_dbis_enabled)
     dbis_mcp_command = os.getenv(DBIS_MCP_ENV_KEY)
 
-    print(DBIS_MCP_ENV_KEY, dbis_mcp_command)
+    #print(DBIS_MCP_ENV_KEY, dbis_mcp_command) # this is only interesting if you use a local mcp server
     # if dbis_mcp_url:
     #     print(DBIS_MCP_SERVER_URL_KEY, dbis_mcp_url)
 
