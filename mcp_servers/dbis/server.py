@@ -10,6 +10,13 @@ import sys
 import json
 import asyncio
 import re
+import atexit
+import signal
+import random
+import time as _time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import logging
 
 import httpx
 from fastmcp import FastMCP, Context
@@ -17,17 +24,136 @@ from fastmcp import FastMCP, Context
 DBIS_BASE_URL = "https://dbis.ur.de/api/v1"
 DEFAULT_TIMEOUT = httpx.Timeout(10.0, read=30.0)
 
+# ---- Logging (structured, leveled to stderr) ----
+_LOG_LEVEL = os.getenv("DBIS_LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    stream=sys.stderr,
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+_base_logger = logging.getLogger("dbis")
+
+
+class ContextualAdapter(logging.LoggerAdapter):
+    """LoggerAdapter that appends context as key=value pairs to the message."""
+
+    def process(self, msg, kwargs):
+        extra = dict(self.extra)
+        provided = kwargs.pop("extra", {}) or {}
+        extra.update({k: v for k, v in provided.items() if v is not None})
+        if extra:
+            suffix = " ".join(f"{k}={v}" for k, v in extra.items())
+            msg = f"{msg} {suffix}"
+        return msg, kwargs
+
+
+def _extract_request_id(context: Optional[Context]) -> Optional[str]:
+    """Best-effort extraction of a request id from FastMCP Context."""
+    try:
+        if context is None:
+            return None
+        for attr in ("request_id", "id"):
+            v = getattr(context, attr, None)
+            if v:
+                return str(v)
+        req = getattr(context, "request", None)
+        if req is not None:
+            v = getattr(req, "id", None)
+            if v:
+                return str(v)
+            hdrs = getattr(req, "headers", None)
+            rid = _get_header_case_insensitive(hdrs, "X-Request-Id") or _get_header_case_insensitive(hdrs, "Request-Id")
+            if rid:
+                return str(rid)
+        for attr in ("headers", "meta", "metadata"):
+            hdrs = getattr(context, attr, None)
+            rid = _get_header_case_insensitive(hdrs, "X-Request-Id") or _get_header_case_insensitive(hdrs, "Request-Id")
+            if rid:
+                return str(rid)
+    except Exception:
+        return None
+    return None
+
+
 # ---- HTTP client reuse (keep-alive, HTTP/2 fallback) ----
 _ASYNC_CLIENT: Optional[httpx.AsyncClient] = None
+
+# Connection pool limits (configurable via env)
+_DBIS_MAX_CONNECTIONS = int(os.getenv("DBIS_MAX_CONNECTIONS", "20"))
+_DBIS_MAX_KEEPALIVE = int(os.getenv("DBIS_MAX_KEEPALIVE", "10"))
+_HTTP_LIMITS = httpx.Limits(
+    max_connections=_DBIS_MAX_CONNECTIONS,
+    max_keepalive_connections=_DBIS_MAX_KEEPALIVE,
+)
+
+# Retry config (env configurable)
+_DBIS_RETRY_ATTEMPTS = int(os.getenv("DBIS_RETRY_MAX_ATTEMPTS", "4"))
+_DBIS_RETRY_BASE = float(os.getenv("DBIS_RETRY_BASE", "0.3"))
+_DBIS_RETRY_MAX_TIME = float(os.getenv("DBIS_RETRY_MAX_TIME", "12.0"))
+
 
 def _get_async_client() -> httpx.AsyncClient:
     global _ASYNC_CLIENT
     if _ASYNC_CLIENT is None:
         try:
-            _ASYNC_CLIENT = httpx.AsyncClient(http2=True, timeout=DEFAULT_TIMEOUT, headers=(DBIS_UPSTREAM_HEADERS or None))
+            _ASYNC_CLIENT = httpx.AsyncClient(
+                http2=True,
+                timeout=DEFAULT_TIMEOUT,
+                headers=(DBIS_UPSTREAM_HEADERS or None),
+                limits=_HTTP_LIMITS,
+            )
         except Exception:
-            _ASYNC_CLIENT = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, headers=(DBIS_UPSTREAM_HEADERS or None))
+            _ASYNC_CLIENT = httpx.AsyncClient(
+                timeout=DEFAULT_TIMEOUT,
+                headers=(DBIS_UPSTREAM_HEADERS or None),
+                limits=_HTTP_LIMITS,
+            )
     return _ASYNC_CLIENT
+
+
+async def _aclose_async_client() -> None:
+    """Close the shared AsyncClient if it exists."""
+    global _ASYNC_CLIENT
+    if _ASYNC_CLIENT is not None:
+        try:
+            await _ASYNC_CLIENT.aclose()
+        except Exception:
+            pass
+        _ASYNC_CLIENT = None
+
+
+def _close_client_blocking() -> None:
+    """Best-effort close for shutdown hooks (works with/without running loop)."""
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            loop.create_task(_aclose_async_client())
+        else:
+            asyncio.run(_aclose_async_client())
+    except Exception:
+        pass
+
+
+def _install_shutdown_hooks_once() -> None:
+    """Register atexit and signal handlers to close HTTP client on shutdown."""
+    # atexit always runs
+    atexit.register(_close_client_blocking)
+    # Try to handle SIGINT/SIGTERM as well
+    def _handler(signum, frame):  # type: ignore[no-untyped-def]
+        _close_client_blocking()
+    for sig in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+        if sig is not None:
+            try:
+                signal.signal(sig, _handler)
+            except Exception:
+                pass
+
+
+# Install hooks at import time
+_install_shutdown_hooks_once()
 
 # ---- Simple caches and limits ----
 _SUBJECTS_CACHE: Dict[str, Any] = {"ts": 0.0, "data": []}
@@ -71,30 +197,67 @@ def _parse_dbis_headers_from_env() -> Dict[str, str]:
 DBIS_UPSTREAM_HEADERS = _parse_dbis_headers_from_env()
 
 mcp = FastMCP("dbis")
-print("DBIS MCP server initialized.", file=sys.stderr, flush=True)
+_base_logger.info("MCP server initialized")
 
 async def _fetch_json(url: str, params: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """HTTP GET JSON with small retry for transient failures."""
+    """HTTP GET JSON with robust retries for transient failures.
+
+    Retries on connection/timeout issues and HTTP 5xx/408/429. Honors Retry-After
+    header when present, applies jittered exponential backoff, and caps total retry time.
+    """
     client = _get_async_client()
-    backoff = 0.3
-    for attempt in range(3):
+    start = _time.monotonic()
+    attempts = max(1, _DBIS_RETRY_ATTEMPTS)
+    base = max(0.05, _DBIS_RETRY_BASE)
+    max_total = max(0.1, _DBIS_RETRY_MAX_TIME)
+
+    def _time_left() -> float:
+        return max(0.0, max_total - (_time.monotonic() - start))
+
+    for attempt in range(attempts):
         try:
             resp = await client.get(url, params=params)
             resp.raise_for_status()
             return resp.json()
-        except (httpx.ReadTimeout, httpx.ConnectError, httpx.RemoteProtocolError) as e:
-            if attempt < 2:
-                await asyncio.sleep(backoff)
-                backoff *= 2
-                continue
-            raise e
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            # Transient network issues
+            if attempt >= attempts - 1:
+                raise e
+            delay = base * (2 ** attempt)
+            delay += random.uniform(0, delay * 0.3)  # jitter
+            if delay > _time_left():
+                raise e
+            await asyncio.sleep(delay)
+            continue
         except httpx.HTTPStatusError as e:
             status = e.response.status_code if e.response is not None else None
-            if status and status >= 500 and attempt < 2:
-                await asyncio.sleep(backoff)
-                backoff *= 2
-                continue
-            raise e
+            headers = e.response.headers if e.response is not None else {}
+            can_retry = bool(status and (status >= 500 or status in (408, 429)))
+            if not can_retry or attempt >= attempts - 1:
+                raise e
+
+            # Honor Retry-After when present (seconds or HTTP-date)
+            retry_after_hdr = headers.get("Retry-After")
+            retry_after: Optional[float] = None
+            if retry_after_hdr:
+                try:
+                    if retry_after_hdr.isdigit():
+                        retry_after = float(retry_after_hdr)
+                    else:
+                        dt = parsedate_to_datetime(retry_after_hdr)
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        retry_after = max(0.0, (dt - datetime.now(timezone.utc)).total_seconds())
+                except Exception:
+                    retry_after = None
+
+            backoff_delay = base * (2 ** attempt)
+            delay = max(retry_after or 0.0, backoff_delay)
+            delay += random.uniform(0, max(0.01, delay * 0.3))  # jitter
+            if delay > _time_left():
+                raise e
+            await asyncio.sleep(delay)
+            continue
 
 
 DEFAULT_ORG_ID = os.getenv("DBIS_ORGANIZATION_ID")
@@ -492,14 +655,21 @@ async def top_resources(
     format: Optional[str] = "markdown",
     style: Optional[str] = "inline",
 ) -> dict[str, Any]:
-    print("[MCP] dbis_top_resources: start", file=sys.stderr, flush=True)
+    org_id = None
     try:
         org_id = _resolve_org_id(organization_id, context)
+        log = ContextualAdapter(_base_logger, {
+            "tool": "dbis_top_resources",
+            "org_id": org_id,
+            "subject": subject_name,
+            "request_id": _extract_request_id(context),
+        })
+        log.info("start")
         subjects = await _get_subjects()
         sid, resolved_name = _find_subject_id(subjects, subject_name)
         if not sid:
             msg = f"Subject not found for query: {subject_name}"
-            print(f"[MCP] dbis_top_resources: {msg}", file=sys.stderr, flush=True)
+            log.warning("subject_not_found", extra={"query": subject_name})
             return {"error": msg, "query": subject_name, "error_code": "subject_not_found"}
 
         # List resource IDs by subject
@@ -531,14 +701,18 @@ async def top_resources(
         }
         if (format or "").lower() == "markdown":
             result["md"] = _build_markdown(items)
-        print("[MCP] dbis_top_resources: ok", file=sys.stderr, flush=True)
+        log.info("ok", extra={"count": len(items)})
         return result
     except httpx.TimeoutException:
         msg = "Timeout while fetching DBIS top resources."
-        print(f"[MCP] dbis_top_resources: {msg}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {
+            "tool": "dbis_top_resources", "org_id": org_id, "subject": subject_name, "request_id": _extract_request_id(context)
+        }).warning("timeout")
         return {"error": msg, "error_code": "timeout"}
     except Exception as e:
-        print(f"[MCP] dbis_top_resources: error: {e}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {
+            "tool": "dbis_top_resources", "org_id": org_id, "subject": subject_name, "request_id": _extract_request_id(context)
+        }).error(f"error: {e}", exc_info=True)
         return {"error": str(e), "error_code": "unexpected"}
 
 
@@ -547,20 +721,26 @@ async def top_resources(
     description="List DBIS resource IDs for an organization."
 )
 async def list_resource_ids(context: Context, organization_id: Optional[str] = None) -> dict[str, Any]:
-    print("[MCP] dbis_list_resource_ids: start", file=sys.stderr, flush=True)
+    org_id = None
     try:
         org_id = _resolve_org_id(organization_id, context)
+        log = ContextualAdapter(_base_logger, {
+            "tool": "dbis_list_resource_ids",
+            "org_id": org_id,
+            "request_id": _extract_request_id(context),
+        })
+        log.info("start")
         url = f"{DBIS_BASE_URL}/resourceIds/organization/{org_id}"
         data = await _fetch_json(url)
         result = {"organization_id": org_id, "resource_ids": data}
-        print("[MCP] dbis_list_resource_ids: ok", file=sys.stderr, flush=True)
+        log.info("ok", extra={"count": len(data) if isinstance(data, list) else None})
         return result
     except httpx.TimeoutException:
         msg = "Timeout while contacting DBIS for resource IDs."
-        print(f"[MCP] dbis_list_resource_ids: {msg}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {"tool": "dbis_list_resource_ids", "org_id": org_id, "request_id": _extract_request_id(context)}).warning("timeout")
         return {"error": msg}
     except Exception as e:
-        print(f"[MCP] dbis_list_resource_ids: error: {e}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {"tool": "dbis_list_resource_ids", "org_id": org_id, "request_id": _extract_request_id(context)}).error(f"error: {e}", exc_info=True)
         return {"error": str(e)}
 
 
@@ -569,19 +749,26 @@ async def list_resource_ids(context: Context, organization_id: Optional[str] = N
     description="Fetch a single DBIS resource for a given organization."
 )
 async def get_resource(context: Context, resource_id: str, organization_id: Optional[str] = None) -> dict[str, Any]:
-    print("[MCP] dbis_get_resource: start", file=sys.stderr, flush=True)
+    org_id = None
     try:
         org_id = _resolve_org_id(organization_id, context)
+        log = ContextualAdapter(_base_logger, {
+            "tool": "dbis_get_resource",
+            "org_id": org_id,
+            "request_id": _extract_request_id(context),
+            "resource_id": resource_id,
+        })
+        log.info("start")
         url = f"{DBIS_BASE_URL}/resource/{resource_id}/organization/{org_id}"
         data = await _fetch_json(url)
-        print("[MCP] dbis_get_resource: ok", file=sys.stderr, flush=True)
+        log.info("ok")
         return data
     except httpx.TimeoutException:
         msg = "Timeout while fetching DBIS resource."
-        print(f"[MCP] dbis_get_resource: {msg}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {"tool": "dbis_get_resource", "org_id": org_id, "request_id": _extract_request_id(context), "resource_id": resource_id}).warning("timeout")
         return {"error": msg, "resource_id": resource_id}
     except Exception as e:
-        print(f"[MCP] dbis_get_resource: error: {e}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {"tool": "dbis_get_resource", "org_id": org_id, "request_id": _extract_request_id(context), "resource_id": resource_id}).error(f"error: {e}", exc_info=True)
         return {"error": str(e), "resource_id": resource_id}
 
 
@@ -590,18 +777,22 @@ async def get_resource(context: Context, resource_id: str, organization_id: Opti
     description="Return the list of DBIS subjects (disciplines)."
 )
 async def list_subjects(context: Context) -> dict[str, Any]:
-    print("[MCP] dbis_list_subjects: start", file=sys.stderr, flush=True)
     try:
+        log = ContextualAdapter(_base_logger, {
+            "tool": "dbis_list_subjects",
+            "request_id": _extract_request_id(context),
+        })
+        log.info("start")
         url = f"{DBIS_BASE_URL}/subjects"
         data = await _fetch_json(url)
-        print("[MCP] dbis_list_subjects: ok", file=sys.stderr, flush=True)
+        log.info("ok", extra={"count": len(data) if isinstance(data, list) else None})
         return {"subjects": data}
     except httpx.TimeoutException:
         msg = "Timeout while fetching DBIS subjects."
-        print(f"[MCP] dbis_list_subjects: {msg}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {"tool": "dbis_list_subjects", "request_id": _extract_request_id(context)}).warning("timeout")
         return {"error": msg}
     except Exception as e:
-        print(f"[MCP] dbis_list_subjects: error: {e}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {"tool": "dbis_list_subjects", "request_id": _extract_request_id(context)}).error(f"error: {e}", exc_info=True)
         return {"error": str(e)}
 
 
@@ -612,9 +803,16 @@ async def list_subjects(context: Context) -> dict[str, Any]:
 async def list_resource_ids_by_subject(
     context: Context, subject_id: str, organization_id: Optional[str] = None
 ) -> dict[str, Any]:
-    print("[MCP] dbis_list_resource_ids_by_subject: start", file=sys.stderr, flush=True)
+    org_id = None
     try:
         org_id = _resolve_org_id(organization_id, context)
+        log = ContextualAdapter(_base_logger, {
+            "tool": "dbis_list_resource_ids_by_subject",
+            "org_id": org_id,
+            "subject": subject_id,
+            "request_id": _extract_request_id(context),
+        })
+        log.info("start")
         url = f"{DBIS_BASE_URL}/resourceIdsBySubject/{subject_id}/organization/{org_id}"
         data = await _fetch_json(url)
         result = {
@@ -622,14 +820,18 @@ async def list_resource_ids_by_subject(
             "organization_id": org_id,
             "resource_ids": data,
         }
-        print("[MCP] dbis_list_resource_ids_by_subject: ok", file=sys.stderr, flush=True)
+        log.info("ok", extra={"count": len(data) if isinstance(data, list) else None})
         return result
     except httpx.TimeoutException:
         msg = "Timeout while fetching DBIS resource IDs by subject."
-        print(f"[MCP] dbis_list_resource_ids_by_subject: {msg}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {
+            "tool": "dbis_list_resource_ids_by_subject", "org_id": org_id, "subject": subject_id, "request_id": _extract_request_id(context)
+        }).warning("timeout")
         return {"error": msg, "subject_id": subject_id}
     except Exception as e:
-        print(f"[MCP] dbis_list_resource_ids_by_subject: error: {e}", file=sys.stderr, flush=True)
+        ContextualAdapter(_base_logger, {
+            "tool": "dbis_list_resource_ids_by_subject", "org_id": org_id, "subject": subject_id, "request_id": _extract_request_id(context)
+        }).error(f"error: {e}", exc_info=True)
         return {"error": str(e), "subject_id": subject_id}
 
 
