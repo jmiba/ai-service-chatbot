@@ -100,20 +100,18 @@ The container exposes port `8501` and reads the same `secrets.toml`. If your Pos
 The chatbot can consult DBIS (Database Information System) through a lightweight MCP server included in this repo (`mcp_servers/dbis/server.py`).
 
 1. **Install dependencies** (already in `requirements.txt`): `pip install fastmcp httpx`.
-2. **Provide the organization ID**
-   - Add `DBIS_ORGANIZATION_ID = "6515"` (replace with your ID) to `.streamlit/secrets.toml`.
-3. **Expose the MCP server command**
+2. **Expose the MCP server command**
    - For local runs: `export OPENAI_MCP_SERVER_DBIS="python mcp_servers/dbis/server.py"` before launching Streamlit.
    - For Streamlit Cloud, place the same line in `secrets.toml` (as shown above).
 
-When those variables are present the app automatically registers the MCP tool set (`dbis_list_subjects`, `dbis_list_resource_ids`, `dbis_get_resource`, `dbis_list_resource_ids_by_subject`). During a chat turn the UI displays “Consulted DBIS: …” whenever the model actually called one of the DBIS tools.
+During a chat turn the UI displays “Tool use…” whenever the model actually called one of the DBIS tools.
 
 ## 🔧 Configuration Notes
 
 ### Admin Login (SAML SSO)
 - By default the admin pages accept a single password stored in `ADMIN_PASSWORD`.
 - To enable multi-user SSO, add a `[saml]` block to `.streamlit/secrets.toml` and provide your IdP metadata:
-  ```toml
+  ```tom
   [saml]
   sp_entity_id = "https://your-app.example.com/metadata"
   sp_acs = "https://your-app.example.com/saml/acs"
@@ -139,7 +137,7 @@ When those variables are present the app automatically registers the MCP tool se
     ```
   - Verify with `python3 -c "import xmlsec; print(xmlsec.get_libxml_version())"` – both `xmlsec` and `lxml` should report the same `(major, minor, micro)` tuple.
 
-### Web Search (Admin → Filters)
+### Web Search & Tools (Admin → Settings)
 - Allowed Domains (optional)
   - Provide one or more domains (e.g., `arXiv.org`) to restrict search
   - If the list is empty, the app sends no filters and web search runs unrestricted (when enabled)
@@ -149,6 +147,9 @@ When those variables are present the app automatically registers the MCP tool se
   - city: free text (e.g., `Frankfurt (Oder)`, `New York`)
   - region: free text
   - timezone: IANA name (e.g., `Europe/Berlin`, `America/New_York`)
+- MCP
+  - DBIS Organization ID
+  - Needed for lookup of resources and subjects associated with your institution
 
 Example tool payload the app generates (simplified):
 ```json
