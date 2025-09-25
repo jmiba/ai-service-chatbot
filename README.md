@@ -7,6 +7,7 @@ An AI-powered Streamlit app using OpenAI Responses API. It answers university- a
 ## 🌐 Live Demo
 
 Try it: https://viadrina.streamlit.app
+(This demo is slowed by free-tier hosting and may take a while to respond.)
 
 ## ✨ Highlights
 
