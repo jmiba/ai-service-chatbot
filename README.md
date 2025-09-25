@@ -59,8 +59,7 @@ MODEL = "gpt-4o-mini"
 # Optional: shown as default in Admin UI and for auditing
 ADMIN_EMAIL = "you@your.org"
 # Optional: DBIS integration (MCP)
-DBIS_ORGANIZATION_ID = "6515"
-OPENAI_MCP_SERVER_DBIS = "python mcp_servers/dbis/server.py"
+DBIS_MCP_SERVER_URL = "https://example.app/mcp"
 
 [postgres]
 host = "your-host"   # optional (when omitted, app runs in reduced mode)
