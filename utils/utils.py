@@ -332,36 +332,35 @@ def get_latest_prompt():
         return "", ""
 
 def _query_params_to_dict() -> dict:
-    try:
-        qp = st.query_params  # type: ignore[attr-defined]
+    qp = getattr(st, "query_params", None)
+    if qp is not None:
         if hasattr(qp, "to_dict"):
             return qp.to_dict()  # type: ignore[no-any-return]
         return dict(qp)
-    except Exception:
+
+    get_qp = getattr(st, "experimental_get_query_params", None)
+    if callable(get_qp):
         try:
-            return st.experimental_get_query_params()
+            return get_qp()
         except Exception:
-            return {}
+            pass
+    return {}
+
 
 
 def _remove_query_params(keys: list[str]) -> None:
-    try:
-        qp = st.query_params  # type: ignore[attr-defined]
+    qp = getattr(st, "query_params", None)
+    if qp is not None:            # modern API; no experimental warning
         for key in keys:
-            try:
-                del qp[key]
-            except Exception:
-                pass
+            qp.pop(key, None)     # pop avoids KeyError for missing keys
         return
-    except Exception:
-        pass
 
-    try:
-        current = st.experimental_get_query_params()
-        filtered = {k: v for k, v in current.items() if k not in keys}
-        st.experimental_set_query_params(**filtered)
-    except Exception:
-        pass
+    # Only run if the new attribute is genuinely unavailable
+    get_qp = getattr(st, "experimental_get_query_params", None)
+    set_qp = getattr(st, "experimental_set_query_params", None)
+    if callable(get_qp) and callable(set_qp):
+        filtered = {k: v for k, v in get_qp().items() if k not in keys}
+        set_qp(**filtered)
 
 
 def _saml_user_allowed(payload: dict) -> bool:

@@ -1233,6 +1233,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         
         # Content placeholder below the status row
         content_placeholder = st.empty()
+        content_placeholder.empty()
         buf = ""
         final = None
         tool_event_shown = False
@@ -2060,4 +2061,7 @@ if user_input:
     # If no filters defined, pass None so tool has no restrictions
     retrieval_filters = web_filters if web_filters else None
 
-    handle_stream_and_render(user_input, CUSTOM_INSTRUCTIONS, client, retrieval_filters, debug_one=debug_one, web_tool_extras=tool_extras)
+    assistant_stream = st.empty()
+    assistant_stream.empty()
+    with assistant_stream.container():
+        handle_stream_and_render(user_input, CUSTOM_INSTRUCTIONS, client, retrieval_filters, debug_one=debug_one, web_tool_extras=tool_extras)
