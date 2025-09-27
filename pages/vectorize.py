@@ -7,6 +7,7 @@ import streamlit as st
 import time
 from pathlib import Path
 import base64
+import threading
 
 try:
     from streamlit.runtime import exists as streamlit_runtime_exists  # type: ignore
@@ -18,6 +19,11 @@ try:
 except (ImportError, ModuleNotFoundError):
     def get_script_run_ctx():  # type: ignore
         return None
+
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_ctx as _st_add_ctx  # type: ignore
+except (ImportError, ModuleNotFoundError):
+    _st_add_ctx = None  # type: ignore
 
 _script_ctx = get_script_run_ctx()
 if streamlit_runtime_exists:
@@ -58,6 +64,18 @@ def _get_openai_client() -> OpenAI:
     if client is None:
         raise RuntimeError(VECTORIZE_CONFIG_ERROR or "OpenAI client is not configured.")
     return client
+
+
+def _start_thread(target, *, name: str, args: tuple = ()):  # noqa: N802
+    """Start a daemon thread and attach Streamlit context when available."""
+    t = threading.Thread(target=target, args=args, daemon=True, name=name)
+    try:
+        if _st_add_ctx:
+            _st_add_ctx(t)
+    except Exception:
+        pass
+    t.start()
+    return t
 
 # Cache for vector store files (expires after 5 minutes)
 _vs_files_cache = {"data": None, "timestamp": 0, "ttl": 300}
@@ -327,7 +345,25 @@ def delete_missing_files_from_vector_store(vector_store_id: str, missing_file_id
             print(f"⚠️ Failed to delete file resource {file_id}: {e}")
 
     print("✅ Finished deleting non-mirrored files.")
-    
+
+
+def _fetch_missing_file_ids_task(vector_store_id: str):
+    """Background task to compute missing file IDs without blocking the UI."""
+    try:
+        missing_ids = find_missing_file_ids(vector_store_id)
+        st.session_state["missing_file_ids"] = sorted(missing_ids)
+        st.session_state["missing_file_error"] = None
+    except Exception as exc:  # pragma: no cover - network dependent
+        st.session_state["missing_file_ids"] = []
+        st.session_state["missing_file_error"] = str(exc)
+    finally:
+        st.session_state["missing_file_fetching"] = False
+        st.session_state["missing_file_completed_at"] = datetime.datetime.now()
+        try:
+            st.rerun()
+        except Exception:
+            pass
+
 
 def upload_md_to_vector_store(safe_title: str, content: str, vector_store_id: str) -> str | None:
     file_stream = BytesIO(content.encode("utf-8"))
@@ -837,16 +873,59 @@ if HAS_STREAMLIT_CONTEXT:
                 except Exception as e:
                     st.error(f"Failed to load preview: {e}")
 
-        missing_file_ids = find_missing_file_ids(VECTOR_STORE_ID)
-        if missing_file_ids:
-            print(f"Missing file IDs: {missing_file_ids}")
-        else:
-            print("✅ No missing file IDs found.")
-
-    
         st.markdown("---")
         st.header("Vector Store File Management")
-        
+
+        if "missing_file_fetching" not in st.session_state:
+            st.session_state["missing_file_fetching"] = False
+            st.session_state["missing_file_ids"] = None
+            st.session_state["missing_file_error"] = None
+            st.session_state["missing_file_completed_at"] = None
+
+        controls_col, status_col = st.columns([1, 3])
+        with controls_col:
+            disabled = st.session_state["missing_file_fetching"]
+            if st.button(
+                "Check Missing Files",
+                key="check_missing_files_button",
+                type="secondary",
+                icon=":material/search:",
+                disabled=disabled,
+                help="Scan the vector store for file IDs that are no longer referenced in the database.",
+            ):
+                st.session_state["missing_file_fetching"] = True
+                st.session_state["missing_file_ids"] = None
+                st.session_state["missing_file_error"] = None
+                _start_thread(
+                    _fetch_missing_file_ids_task,
+                    name="fetch_missing_vector_files",
+                    args=(VECTOR_STORE_ID,),
+                )
+
+        with status_col:
+            if st.session_state["missing_file_fetching"]:
+                st.info("Scanning vector store for missing files...", icon=":material/progress_activity:")
+            else:
+                error_msg = st.session_state.get("missing_file_error")
+                result = st.session_state.get("missing_file_ids")
+                completed_at = st.session_state.get("missing_file_completed_at")
+                if error_msg:
+                    st.error(f"Failed to check missing files: {error_msg}", icon=":material/error:")
+                elif result is not None:
+                    if result:
+                        st.warning(
+                            f"Found {len(result)} vector store files that are missing in the database.",
+                            icon=":material/warning:",
+                        )
+                        st.code("\n".join(result))
+                    else:
+                        st.success("No missing vector store files detected.", icon=":material/task_alt:")
+                    if completed_at:
+                        st.caption(
+                            f"Last checked: {completed_at.isoformat(sep=' ', timespec='seconds')}"
+                        )
+
+
         # Action: Sync now
         st.markdown("#### Sync Knowlede Base Now")
         st.caption("Uploads new or changed knowledge base entries to vector store and deletes files marked as excluded from vector store.")
