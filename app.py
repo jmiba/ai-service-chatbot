@@ -1784,6 +1784,10 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         try:
             # Debug: Check session ID before logging
             print(f"🔎 About to log interaction (bg) with session_id: {session_id}")
+            if eval_model and eval_model != main_model:
+                logged_model = f"{main_model} | eval={eval_model}"
+            else:
+                logged_model = main_model
             log_interaction_async(
                 user_input=user_input,
                 assistant_response=cleaned,
@@ -1794,7 +1798,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 error_code=error_code,
                 request_classification=request_classification,
                 evaluation_notes=evaluation_notes,
-                model=main_model,
+                model=logged_model,
                 usage_input_tokens=int(input_tok),
                 usage_output_tokens=int(output_tok),
                 usage_total_tokens=int(total_tok),
