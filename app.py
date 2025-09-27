@@ -1272,7 +1272,18 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     # In normal mode we only show the friendly label; debug_one toggles verbose info.
                     try:
                         label = human_event_label(event)
-                        if label:
+                        tool_labels = {
+                            "Tool use": True,
+                        }
+                        allowed_labels = {
+                            "Searching the web…",
+                            "Web search completed…",
+                            "Searching my knowledge base…",
+                            "Knowledge base search completed…",
+                            "Generating answer…",
+                            "Answer generation finished",
+                        }
+                        if label and (debug_one or label in allowed_labels or any(label.startswith(prefix) for prefix in tool_labels)):
                             try:
                                 status_placeholder.markdown(f"_{label}_")
                             except Exception:
