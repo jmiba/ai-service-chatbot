@@ -914,7 +914,7 @@ def save_filter_settings(settings, updated_by="admin"):
         pass
 
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=120, show_spinner=False)
 def get_filter_settings():
     """Get current web search filter settings from database"""
     conn = get_connection()
