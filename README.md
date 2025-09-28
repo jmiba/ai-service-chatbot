@@ -20,6 +20,7 @@ Try it: https://viadrina.streamlit.app
 - **Content ingestion pipeline** with scraping, manual metadata editing, SHA hashing, and optional vector store sync.
 - **Observability out of the box**: detailed interaction logging, usage/cost tracking, request analytics, and job locking.
 - **Live DBIS lookup** via Model Context Protocol (MCP) tools so the assistant can fetch authoritative database information directly from the DBIS API with clear in-chat indicators.
+- **Downloadable transcripts**: export any chat as Markdown with automatic footnote-style references for cited sources.
 
 ## 🆕 What’s New (recent changes)
 
@@ -33,6 +34,7 @@ Try it: https://viadrina.streamlit.app
 - Internal document citations now open in a dedicated `/document_viewer` tab so users can view internal knowledge base sources
 - Added manual entries to the knowledge base as internal documents, made them editable
 - DBIS database records are now reachable through MCP tools; configure once and the chatbot can query subjects or resources in real time (see *DBIS MCP Integration* below)
+- Sidebar **Save chat** button exports the current conversation (including citations) as Markdown for easy sharing or archiving
 - Async logging and cached LLM settings keep the UI responsive even when the DB is busy
 
 
@@ -43,9 +45,11 @@ Try it: https://viadrina.streamlit.app
 - OpenAI API key
 - PostgreSQL (for logging/admin features)
 
-### Install
+### Install (recommended virtual environment)
 
 ```bash
+python3 -m venv .venv  # use `python` if it maps to Python 3
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -62,6 +66,8 @@ MODEL = "gpt-4o-mini"
 ADMIN_EMAIL = "you@your.org"
 # Optional: DBIS integration (MCP)
 DBIS_MCP_SERVER_URL = "https://example.app/mcp"
+DBIS_MCP_AUTHORIZATION = "Bearer <token>"           # optional, if your MCP server needs auth
+DBIS_MCP_HEADERS = '{"X-Org": "123"}'              # optional extra headers as JSON
 
 [postgres]
 host = "your-host"   # optional (when omitted, app runs in reduced mode)
