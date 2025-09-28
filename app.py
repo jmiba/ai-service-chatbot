@@ -241,7 +241,7 @@ def _parse_headers_setting(header_value):
 # Check if user is authenticated (admin)
 is_authenticated = st.session_state.get("authenticated", False)
 
-debug_one = render_sidebar(authenticated=is_authenticated, show_debug=True)
+debug_one = render_sidebar(authenticated=is_authenticated, show_debug=True, show_new_chat=True)
 
 BASE_DIR = Path(__file__).parent
 PROMPT_CONFIG_PATH = BASE_DIR / ".streamlit" / "prompts.json"
@@ -1796,7 +1796,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             # Debug: Check session ID before logging
             print(f"🔎 About to log interaction (bg) with session_id: {session_id}")
             if eval_model and eval_model != main_model:
-                logged_model = f"{main_model} | eval={eval_model}"
+                logged_model = f"{main_model} ({eval_model} for eval)"
             else:
                 logged_model = main_model
             log_interaction_async(
@@ -2017,6 +2017,7 @@ else:
     # Use default prompt when database is not available
     CUSTOM_INSTRUCTIONS = _format_prompt(DEFAULT_PROMPT, datetime=formatted_time)
 
+# Main frame
 col1, col2 = st.columns([3, 3])
 with col1:
     st.image(BASE_DIR / "assets/viadrina-ub-logo.png", width=300)

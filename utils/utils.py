@@ -452,38 +452,40 @@ def admin_authentication(return_to: str | None = None):
 
 
 # Function to render the sidebar with common elements
-def render_sidebar(authenticated=False, show_debug=False):
+def render_sidebar(authenticated=False, show_debug=False, show_new_chat=False):
     """
     Renders common sidebar elements.
     Args:
         authenticated: Whether user is authenticated
         show_debug: Whether to show debug controls (only for main chat page)
-        Returns:
+        show_new_chat: Whether to render the sidebar "New chat" button
+    Returns:
         debug_one: Debug state if show_debug=True, otherwise False
     """
     load_css()
     st.sidebar.page_link("app.py", label="Chat Assistant", icon=":material/chat_bubble:")
+
+    if show_new_chat:
+        if st.sidebar.button(
+            "New chat",
+            type="secondary",
+            help="Start a fresh session",
+            icon=":material/add_comment:",
+            key="sidebar_new_chat_button",
+        ):
+            st.session_state.messages = []
+            st.session_state.session_id = str(uuid.uuid4())
+            try:
+                st.switch_page("app.py")
+            except Exception:
+                st.rerun()
 
     def _perform_logout():
         st.session_state.authenticated = False
         for key in ("saml_state", "saml_attributes", "admin_name", "admin_email"):
             st.session_state.pop(key, None)
     
-    # New chat
-    if st.sidebar.button(
-        "New chat",
-        type="secondary",
-        help="Start a fresh session",
-        icon=":material/add_comment:",
-        key="sidebar_new_chat_button",
-    ):
-        st.session_state.messages = []
-        st.session_state.session_id = str(uuid.uuid4())
-        try:
-            st.switch_page("app.py")
-        except Exception:
-            st.rerun()
-    
+
     # Debug checkbox right beneath chat assistant (only on main page when authenticated)
     debug_one = False
     if authenticated and show_debug:
