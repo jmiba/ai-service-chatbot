@@ -5,7 +5,178 @@ from pathlib import Path
 import json
 from functools import lru_cache
 import uuid
+from datetime import datetime
 import base64
+import re
+import html
+
+
+_SUP_REF_PATTERN = re.compile(r"<sup[^>]*>\s*\[(\d+)\]\s*</sup>")
+_ANCHOR_PATTERN = re.compile(r"<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+
+
+def _sanitize_html(content: str) -> str:
+    if not content:
+        return ""
+
+    def _anchor_repl(match: re.Match) -> str:
+        href = match.group(1).strip()
+        text = re.sub(r"\s+", " ", match.group(2)).strip()
+        text = html.unescape(text)
+        return f"[{text}]({href})"
+
+    text = html.unescape(content)
+    text = _ANCHOR_PATTERN.sub(_anchor_repl, text)
+    text = re.sub(r"<span[^>]*>.*?</span>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<svg[^>]*>.*?</svg>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?p[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = text.replace("\r\n", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.strip()
+
+
+def _parse_sources(raw_sources: str) -> list[tuple[str, str]]:
+    if not raw_sources:
+        return []
+
+    cleaned = _sanitize_html(raw_sources)
+    entries: list[tuple[str, str]] = []
+    current_key: str | None = None
+    buffer: list[str] = []
+
+    def _flush_buffer() -> None:
+        nonlocal current_key, buffer
+        if current_key and buffer:
+            text = " ".join(part.strip() for part in buffer if part.strip())
+            if text:
+                entries.append((current_key, text))
+        current_key = None
+        buffer = []
+
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.match(r"^[\*\-]\s*\[(\d+)\]\s*(.*)$", stripped)
+        if match:
+            _flush_buffer()
+            current_key = match.group(1)
+            remaining = match.group(2).strip()
+            buffer = [remaining] if remaining else []
+        else:
+            if current_key:
+                buffer.append(stripped)
+    _flush_buffer()
+    return entries
+
+
+def build_chat_markdown(messages: list[dict]) -> str:
+    """Create a markdown transcript from chat history with footnotes."""
+    if not messages:
+        return ""
+
+    session_id = st.session_state.get("session_id", "session")
+    header = [
+        "# Viadrina Library Assistant Chat",
+        f"*Exported:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"*Session:* {session_id}",
+        "",
+    ]
+
+    body: list[str] = []
+    footnote_lookup: dict[str, int] = {}
+    footnotes: list[tuple[int, str]] = []
+    next_footnote = 1
+
+    for idx, msg in enumerate(messages, start=1):
+        role = msg.get("role", "assistant")
+        speaker = "Assistant" if role == "assistant" else "User"
+        raw_content = msg.get("content") or msg.get("rendered") or ""
+        raw_sources = msg.get("sources") or ""
+
+        source_entries = _parse_sources(raw_sources)
+        source_map: dict[str, int] = {}
+        for original_id, source_text in source_entries:
+            normalized = source_text.strip()
+            if not normalized:
+                continue
+            footnote_id = footnote_lookup.get(normalized)
+            if footnote_id is None:
+                footnote_id = next_footnote
+                footnote_lookup[normalized] = footnote_id
+                footnotes.append((footnote_id, normalized))
+                next_footnote += 1
+            source_map[original_id] = footnote_id
+
+        def _sup_repl(match: re.Match) -> str:
+            original = match.group(1)
+            footnote_id = source_map.get(original)
+            if footnote_id is None:
+                return match.group(0)
+            return f"[^{footnote_id}]"
+
+        processed_content = html.unescape(raw_content)
+        processed_content = _SUP_REF_PATTERN.sub(_sup_repl, processed_content)
+        processed_content = _ANCHOR_PATTERN.sub(lambda m: f"[{re.sub(r'\\s+', ' ', html.unescape(m.group(2))).strip()}]({m.group(1).strip()})", processed_content)
+        processed_content = re.sub(r"<span[^>]*>.*?</span>", "", processed_content, flags=re.DOTALL | re.IGNORECASE)
+        processed_content = re.sub(r"<svg[^>]*>.*?</svg>", "", processed_content, flags=re.DOTALL | re.IGNORECASE)
+        processed_content = re.sub(r"<br\s*/?>", "\n", processed_content, flags=re.IGNORECASE)
+        processed_content = re.sub(r"</?p[^>]*>", "\n", processed_content, flags=re.IGNORECASE)
+        processed_content = re.sub(r"<sup[^>]*>.*?</sup>", "", processed_content, flags=re.DOTALL | re.IGNORECASE)
+        processed_content = re.sub(r"<[^>]+>", "", processed_content)
+
+        if source_map:
+            processed_content = re.sub(
+                r"\[(\d+)\]",
+                lambda m: f"[^{source_map.get(m.group(1), m.group(1))}]",
+                processed_content,
+            )
+
+        processed_content = html.unescape(processed_content)
+        processed_content = processed_content.replace("\r\n", "\n").strip()
+        processed_content = re.sub(r"\n{3,}", "\n\n", processed_content)
+        if not processed_content:
+            processed_content = "_(empty message)_"
+
+        body.extend([f"## {idx}. {speaker}", "", processed_content, ""])
+
+    if footnotes:
+        body.append("---")
+        body.append("")
+        for footnote_id, text in footnotes:
+            body.append(f"[^{footnote_id}]: {text}")
+
+    return "\n".join(header + body).strip()
+
+
+def render_save_chat_button(slot, messages: list[dict] | None = None) -> None:
+    """Render or refresh the sidebar save button inside the provided slot."""
+    if slot is None:
+        return
+
+    slot.empty()
+    messages = messages or []
+    transcript_md = build_chat_markdown(messages)
+    filename = "chat-transcript.md"
+    session_id = st.session_state.get("session_id")
+    if session_id:
+        filename = f"chat-{str(session_id)[:8]}.md"
+
+    slot.download_button(
+        "Save chat",
+        data=transcript_md,
+        file_name=filename,
+        mime="text/markdown",
+        key="sidebar_save_chat_button",
+        disabled=not bool(messages),
+        help="Download the current conversation as Markdown.",
+        icon=":material/save_alt:",
+    )
 
 from .db_migrations import run_migrations
 from .saml import (
@@ -452,18 +623,28 @@ def admin_authentication(return_to: str | None = None):
 
 
 # Function to render the sidebar with common elements
-def render_sidebar(authenticated=False, show_debug=False, show_new_chat=False):
+def render_sidebar(
+    authenticated=False,
+    show_debug=False,
+    show_new_chat=False,
+    show_save_chat=False,
+):
     """
     Renders common sidebar elements.
     Args:
         authenticated: Whether user is authenticated
         show_debug: Whether to show debug controls (only for main chat page)
         show_new_chat: Whether to render the sidebar "New chat" button
+        show_save_chat: Whether to reserve space for the sidebar "Save chat" download button
     Returns:
-        debug_one: Debug state if show_debug=True, otherwise False
+        Tuple containing debug state and optional save-chat slot
     """
     load_css()
     st.sidebar.page_link("app.py", label="Chat Assistant", icon=":material/chat_bubble:")
+
+    save_chat_slot = None
+    if show_save_chat:
+        save_chat_slot = st.sidebar.empty()
 
     if show_new_chat:
         if st.sidebar.button(
@@ -520,7 +701,7 @@ def render_sidebar(authenticated=False, show_debug=False, show_new_chat=False):
             st.caption("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
         
     
-    return debug_one
+    return debug_one, save_chat_slot
 
 # Functions to save a document to the knowledge base
 def compute_sha256(text):

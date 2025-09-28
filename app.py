@@ -104,6 +104,7 @@ def _mcp_preflight(url: str, headers: dict | None, authorization: str | None, ti
 from utils import (
     get_connection,
     initialize_default_prompt_if_empty, get_latest_prompt, render_sidebar,
+    render_save_chat_button,
     create_database_if_not_exists, create_llm_settings_table, get_llm_settings,
     supports_reasoning_effort, get_kb_entries, estimate_cost_usd,
     create_request_classifications_table, get_request_classifications,
@@ -241,7 +242,12 @@ def _parse_headers_setting(header_value):
 # Check if user is authenticated (admin)
 is_authenticated = st.session_state.get("authenticated", False)
 
-debug_one = render_sidebar(authenticated=is_authenticated, show_debug=True, show_new_chat=True)
+debug_one, save_chat_slot = render_sidebar(
+    authenticated=is_authenticated,
+    show_debug=True,
+    show_new_chat=True,
+    show_save_chat=True,
+)
 
 BASE_DIR = Path(__file__).parent
 PROMPT_CONFIG_PATH = BASE_DIR / ".streamlit" / "prompts.json"
@@ -2081,3 +2087,6 @@ if user_input:
     assistant_stream.empty()
     with assistant_stream.container():
         handle_stream_and_render(user_input, CUSTOM_INSTRUCTIONS, client, retrieval_filters, debug_one=debug_one, web_tool_extras=tool_extras)
+
+messages_for_export = st.session_state.get("messages", [])
+render_save_chat_button(save_chat_slot, messages_for_export)

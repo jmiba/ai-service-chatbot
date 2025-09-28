@@ -13,6 +13,8 @@ from .utils import (
     get_latest_prompt,
     admin_authentication,
     render_sidebar,
+    render_save_chat_button,
+    build_chat_markdown,
     load_css,
     compute_sha256,
     get_kb_entries,
