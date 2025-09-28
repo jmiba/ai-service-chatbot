@@ -273,26 +273,69 @@ def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
             }
             for entry in stale_entries
         ]
-        st.dataframe(display_rows, hide_index=True, width="stretch")
+        stale_df = pd.DataFrame(display_rows)
 
-        option_map = {
-            f"{entry.get('recordset') or '(none)'} • {entry.get('title') or entry.get('url')}": entry
-            for entry in stale_entries
-        }
-        selected_labels = st.multiselect(
-            "Select pages to delete",
-            options=list(option_map.keys()),
-            key="stale_select",
-            disabled=dry_run,
-        )
+        selection_enabled = True
+        try:
+            table_event = st.dataframe(
+                stale_df,
+                hide_index=True,
+                width="stretch",
+                selection_mode="multi-row",
+                on_select="rerun",
+                key="scrape_stale_table",
+            )
+        except TypeError:
+            selection_enabled = False
+            table_event = st.dataframe(
+                stale_df,
+                hide_index=True,
+                width="stretch",
+                key="scrape_stale_table",
+            )
+
+        selected_entries: list[dict] = []
+        selected_indices = st.session_state.get("scrape_stale_selected_indices", [])
+
+        if selection_enabled:
+            event_selection = getattr(table_event, "selection", None)
+            if isinstance(event_selection, dict):
+                selected_indices = event_selection.get("rows", []) or []
+                st.session_state["scrape_stale_selected_indices"] = selected_indices
+            selected_entries = [
+                stale_entries[idx]
+                for idx in selected_indices
+                if 0 <= idx < len(stale_entries)
+            ]
+        else:
+            option_map: dict[str, tuple[int, dict]] = {
+                f"{entry.get('recordset') or '(none)'} • {entry.get('title') or entry.get('url')}": (idx, entry)
+                for idx, entry in enumerate(stale_entries)
+            }
+            default_labels = [
+                label
+                for label, (idx, _) in option_map.items()
+                if idx in selected_indices
+            ]
+            selected_labels = st.multiselect(
+                "Select pages to delete",
+                options=list(option_map.keys()),
+                default=default_labels,
+                key="stale_select",
+                disabled=dry_run,
+            )
+            selected_entries = [option_map[label][1] for label in selected_labels]
+            st.session_state["scrape_stale_selected_indices"] = [
+                option_map[label][0] for label in selected_labels
+            ]
 
         if st.button(
             "Delete selected pages",
             type="secondary",
-            disabled=dry_run or not selected_labels,
+            disabled=dry_run or not selected_entries,
             key="delete_stale",
         ):
-            ids_to_delete = [option_map[label]["id"] for label in selected_labels]
+            ids_to_delete = [entry["id"] for entry in selected_entries]
             try:
                 conn = get_connection()
                 with conn:
@@ -304,6 +347,7 @@ def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
                 if "scrape_results" in st.session_state:
                     st.session_state.scrape_results["stale_candidates"] = remaining
                     st.session_state.scrape_results = dict(st.session_state.scrape_results)
+                st.session_state["scrape_stale_selected_indices"] = []
                 st.rerun()
             except Exception as delete_exc:
                 st.error(f"Failed to delete selected pages: {delete_exc}")
