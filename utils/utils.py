@@ -642,9 +642,22 @@ def render_sidebar(
     load_css()
     st.sidebar.page_link("app.py", label="Chat Assistant", icon=":material/chat_bubble:")
 
-    save_chat_slot = None
-    if show_save_chat:
-        save_chat_slot = st.sidebar.empty()
+    save_chat_slot = st.sidebar.empty()
+    if show_save_chat and save_chat_slot is not None:
+        with save_chat_slot.container():
+            st.download_button(
+                "Save chat",
+                data="",
+                file_name="chat-transcript.md",
+                mime="text/markdown",
+                key="sidebar_save_chat_placeholder",
+                disabled=True,
+                icon=":material/save_alt:",
+            )
+    else:
+        if save_chat_slot is not None:
+            save_chat_slot.empty()
+            save_chat_slot = None
 
     if show_new_chat:
         if st.sidebar.button(
@@ -656,10 +669,7 @@ def render_sidebar(
         ):
             st.session_state.messages = []
             st.session_state.session_id = str(uuid.uuid4())
-            try:
-                st.switch_page("app.py")
-            except Exception:
-                st.rerun()
+            st.rerun()
 
     def _perform_logout():
         st.session_state.authenticated = False
