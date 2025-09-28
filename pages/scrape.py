@@ -112,8 +112,20 @@ def rerun_app():
 
 def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
     """Update `documents.is_stale` by confirming which pages disappeared during this crawl."""
+    connection_owned = False
     if conn is None:
-        return []
+        if dry_run:
+            try:
+                conn = get_connection()
+                connection_owned = True
+                if log_callback:
+                    log_callback("🔍 [DRY RUN] Opened temporary DB connection for stale check")
+            except Exception as exc:
+                if log_callback:
+                    log_callback(f"⚠️ Could not open DB connection for stale detection: {exc}")
+                return []
+        else:
+            return []
 
     def _log(msg: str):
         if log_callback:
@@ -199,6 +211,12 @@ def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
                 conn.rollback()
             except Exception:
                 pass
+
+    if connection_owned and conn:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     _log(f"📦 Stale detection complete: {len(confirmed_stale)} confirmed missing / {len(stale_checks)} checked")
     return confirmed_stale
