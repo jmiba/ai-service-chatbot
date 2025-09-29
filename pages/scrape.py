@@ -10,7 +10,7 @@ from markdownify import markdownify as md
 import streamlit as st
 import json
 from openai import OpenAI
-from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs, get_document_status_counts
+from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs
 from pathlib import Path
 import pandas as pd
 
