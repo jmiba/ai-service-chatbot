@@ -1,13 +1,15 @@
 import os
-from utils import get_connection, admin_authentication, render_sidebar, get_document_status_counts
 import datetime
-from openai import OpenAI
-from io import BytesIO
-import streamlit as st
-import time
+import asyncio
 from pathlib import Path
+import time
+from io import BytesIO
 import base64
 import threading
+
+from openai import OpenAI, AsyncOpenAI
+import streamlit as st
+from utils import get_connection, admin_authentication, render_sidebar, get_document_status_counts
 
 try:
     from streamlit.runtime import exists as streamlit_runtime_exists  # type: ignore
@@ -64,6 +66,35 @@ def _get_openai_client() -> OpenAI:
     if client is None:
         raise RuntimeError(VECTORIZE_CONFIG_ERROR or "OpenAI client is not configured.")
     return client
+
+
+def _create_async_openai_client() -> AsyncOpenAI:
+    if VECTORIZE_CONFIG_ERROR:
+        raise RuntimeError(VECTORIZE_CONFIG_ERROR)
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OpenAI async client is not configured.")
+    return AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+
+def _run_async_task(coro):
+    """Run an async coroutine, even if called from a running event loop."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():  # Streamlit may already own an event loop
+        new_loop = asyncio.new_event_loop()
+        try:
+            return new_loop.run_until_complete(coro)
+        finally:
+            new_loop.close()
+
+    runner = asyncio.Runner()
+    try:
+        return runner.run(coro)
+    finally:
+        runner.close()
 
 
 def _start_thread(target, *, name: str, args: tuple = ()):  # noqa: N802
@@ -213,32 +244,44 @@ def delete_file_ids(vector_store_id: str, file_ids: set[str], label: str):
     if not file_ids:
         print(f"✅ No {label} to delete.")
         return
-    
     print(f"🗑️ Deleting {len(file_ids)} {label} files...")
-    
-    openai_client = _get_openai_client()
 
-    for i, fid in enumerate(file_ids):
-        if not fid:
-            continue
+    async def _delete_many():
+        async_openai = _create_async_openai_client()
+        semaphore = asyncio.Semaphore(10)
+        total = len(file_ids)
+        completed = 0
+
+        async def _delete_single(fid: str):
+            nonlocal completed
+            if not fid:
+                return
+
+            async with semaphore:
+                try:
+                    await async_openai.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=fid)
+                    print(f"🗑️ Detached {label} {fid}")
+                except Exception as exc:
+                    print(f"⚠️ Detach failed for {fid}: {exc}")
+
+                try:
+                    await async_openai.files.delete(fid)
+                    print(f"🗑️ Deleted file resource {fid}")
+                except Exception as exc:
+                    print(f"⚠️ Delete failed for {fid}: {exc}")
+
+            completed += 1
+            if completed % 20 == 0:
+                print(f"📍 Deleted {completed}/{total} {label} files...")
+
         try:
-            openai_client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=fid)
-            print(f"🗑️ Detached {label} {fid}")
-        except Exception as e:
-            print(f"⚠️ Detach failed for {fid}: {e}")
-            # continue anyway; maybe already detached
-        try:
-            openai_client.files.delete(fid)
-            print(f"🗑️ Deleted file resource {fid}")
-        except Exception as e:
-            print(f"⚠️ Delete failed for {fid}: {e}")
-        
-        # Progress indicator for large batches
-        if (i + 1) % 20 == 0:
-            print(f"📍 Deleted {i + 1}/{len(file_ids)} {label} files...")
-    
-    print(f"✅ Finished deleting {len(file_ids)} {label} files")
-    
+            await asyncio.gather(*(_delete_single(fid) for fid in file_ids))
+            print(f"✅ Finished deleting {total} {label} files")
+        finally:
+            await async_openai.close()
+
+    _run_async_task(_delete_many())
+
     # Clear cache after deletions to ensure fresh data
     _vs_files_cache["data"] = None
 
@@ -266,7 +309,6 @@ def delete_all_files_in_vector_store(vector_store_id: str):
     """
     Delete all files in the vector store, handling pagination and deletion.
     """
-    openai_client = _get_openai_client()
     try:
         # List all files in the vector store
         vs_files = list_all_files_in_vector_store(vector_store_id)
@@ -275,20 +317,7 @@ def delete_all_files_in_vector_store(vector_store_id: str):
             print("✅ No files to delete in the vector store.")
             return
 
-        for vs_file in vs_files:
-            try:
-                openai_client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=vs_file.id)
-                print(f"🗑️ Detached file {vs_file.id} from vector store.")
-            except Exception as e:
-                print(f"⚠️ Failed to detach file {vs_file.id}: {e}")
-                continue
-
-            try:
-                openai_client.files.delete(vs_file.id)
-                print(f"🗑️ Deleted file resource {vs_file.id}.")
-            except Exception as e:
-                print(f"⚠️ Failed to delete file resource {vs_file.id}: {e}")
-
+        delete_file_ids(vector_store_id, {vs_file.id for vs_file in vs_files}, label="vector store")
         print("✅ All files deleted from the vector store.")
     except Exception as e:
         print(f"❌ Failed to list or delete files in vector store: {e}")
@@ -328,22 +357,7 @@ def delete_missing_files_from_vector_store(vector_store_id: str, missing_file_id
         print("✅ No missing files to delete.")
         return
 
-    openai_client = _get_openai_client()
-
-    for file_id in missing_file_ids:
-        try:
-            openai_client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=file_id)
-            print(f"🗑️ Detached file {file_id} from vector store.")
-        except Exception as e:
-            print(f"⚠️ Failed to detach file {file_id}: {e}")
-            continue
-
-        try:
-            openai_client.files.delete(file_id)
-            print(f"🗑️ Deleted file resource {file_id}.")
-        except Exception as e:
-            print(f"⚠️ Failed to delete file resource {file_id}: {e}")
-
+    delete_file_ids(vector_store_id, set(missing_file_ids), label="missing")
     print("✅ Finished deleting non-mirrored files.")
 
 
@@ -379,13 +393,13 @@ def upload_md_to_vector_store(safe_title: str, content: str, vector_store_id: st
         print(f"✅ Upload for doc {safe_title} complete. Status: {batch.status}")
         print("📄 File counts:", batch.file_counts)
 
-        # Look through *all* files to find the new one by filename
+        # Look through *all* files to find the new one by filename (async metadata fetch)
         vs_files = list_all_files_in_vector_store(vector_store_id)
-        for vs_file in vs_files:
-            file_meta = openai_client.files.retrieve(vs_file.id)
-            if file_meta.filename == file_name:
-                print(f"📂 Upload successful, found vector file ID: {vs_file.id} for {file_name}")
-                return vs_file.id
+        filename_map = build_filename_to_id_map_efficiently(vs_files)
+        file_id = filename_map.get(file_name)
+        if file_id:
+            print(f"📂 Upload successful, found vector file ID: {file_id} for {file_name}")
+            return file_id
 
         print(f"⚠️ No matching vector file found for {file_name}")
         return None
@@ -404,31 +418,46 @@ def build_filename_to_id_map_efficiently(vs_files):
     """
     Build filename to ID mapping more efficiently by batching API calls.
     """
-    filename_to_id = {}
-    failed_retrievals = 0
-    
     print(f"🔍 Mapping {len(vs_files)} vector store files to filenames...")
-    
-    openai_client = _get_openai_client()
 
-    for i, vs_file in enumerate(vs_files):
+    async def _build_map():
+        async_openai = _create_async_openai_client()
+        semaphore = asyncio.Semaphore(15)
+        filename_to_id: dict[str, str] = {}
+        failed_retrievals = 0
+        processed = 0
+        total = len(vs_files)
+        status_lock = asyncio.Lock()
+
+        async def _fetch_metadata(vs_file):
+            nonlocal failed_retrievals, processed
+            try:
+                async with semaphore:
+                    file_obj = await async_openai.files.retrieve(vs_file.id)
+            except Exception as exc:
+                async with status_lock:
+                    failed_retrievals += 1
+                print(f"⚠️ Failed to retrieve file object for {vs_file.id}: {exc}")
+                return
+
+            async with status_lock:
+                filename_to_id[file_obj.filename] = vs_file.id
+                processed += 1
+                if processed % 50 == 0:
+                    print(f"📍 Processed {processed}/{total} files...")
+
         try:
-            file_obj = openai_client.files.retrieve(vs_file.id)
-            filename_to_id[file_obj.filename] = vs_file.id
-            
-            # Progress indicator for large batches
-            if (i + 1) % 50 == 0:
-                print(f"📍 Processed {i + 1}/{len(vs_files)} files...")
-                
-        except Exception as e:
-            failed_retrievals += 1
-            print(f"⚠️ Failed to retrieve file object for {vs_file.id}: {e}")
-    
-    if failed_retrievals > 0:
-        print(f"⚠️ {failed_retrievals} file retrievals failed")
-    
-    print(f"✅ Successfully mapped {len(filename_to_id)} filenames")
-    return filename_to_id
+            await asyncio.gather(*(_fetch_metadata(vs_file) for vs_file in vs_files))
+        finally:
+            await async_openai.close()
+
+        if failed_retrievals > 0:
+            print(f"⚠️ {failed_retrievals} file retrievals failed")
+
+        print(f"✅ Successfully mapped {len(filename_to_id)} filenames")
+        return filename_to_id
+
+    return _run_async_task(_build_map())
 
 def sync_vector_store():
     conn = get_connection()
@@ -529,19 +558,7 @@ safe_title: "{safe_title or ''}"
     # Batch delete old files for better performance
     old_file_ids = [fid for fid in id_to_old_file.values() if fid]
     if old_file_ids:
-        print(f"🗑️ Deleting {len(old_file_ids)} old files...")
-        for old_file_id in old_file_ids:
-            try:
-                openai_client.vector_stores.files.delete(vector_store_id=VECTOR_STORE_ID, file_id=old_file_id)
-                print(f"🗑️ Detached file {old_file_id} from vector store.")
-            except Exception as e:
-                print(f"⚠️ Detach failed for {old_file_id}: {e} (may already be detached/deleted)")
-
-            try:
-                openai_client.files.delete(old_file_id)
-                print(f"🗑️ Deleted file resource {old_file_id}.")
-            except Exception as e:
-                print(f"⚠️ Delete failed for {old_file_id}: {e} (may already be gone)")
+        delete_file_ids(VECTOR_STORE_ID, set(old_file_ids), label="old")
 
     # Prepare files for upload
     upload_files = [
@@ -881,6 +898,35 @@ if HAS_STREAMLIT_CONTEXT:
             st.session_state["missing_file_ids"] = None
             st.session_state["missing_file_error"] = None
             st.session_state["missing_file_completed_at"] = None
+            st.session_state["missing_file_last_start"] = None
+
+        if "missing_file_last_start" not in st.session_state:
+            st.session_state["missing_file_last_start"] = None
+
+        # Auto-trigger a background check at most every 30 minutes
+        now = datetime.datetime.now()
+        auto_interval = datetime.timedelta(minutes=30)
+        last_start = st.session_state.get("missing_file_last_start")
+        completed_at = st.session_state.get("missing_file_completed_at")
+        reference_time = completed_at or last_start
+
+        should_auto_run = False
+        if not st.session_state["missing_file_fetching"]:
+            if reference_time is None:
+                should_auto_run = True
+            elif now - reference_time >= auto_interval:
+                should_auto_run = True
+
+        if should_auto_run:
+            st.session_state["missing_file_fetching"] = True
+            st.session_state["missing_file_ids"] = None
+            st.session_state["missing_file_error"] = None
+            st.session_state["missing_file_last_start"] = now
+            _start_thread(
+                _fetch_missing_file_ids_task,
+                name="fetch_missing_vector_files",
+                args=(VECTOR_STORE_ID,),
+            )
 
         controls_col, status_col = st.columns([1, 3])
         with controls_col:
@@ -893,9 +939,11 @@ if HAS_STREAMLIT_CONTEXT:
                 disabled=disabled,
                 help="Scan the vector store for file IDs that are no longer referenced in the database.",
             ):
+                now = datetime.datetime.now()
                 st.session_state["missing_file_fetching"] = True
                 st.session_state["missing_file_ids"] = None
                 st.session_state["missing_file_error"] = None
+                st.session_state["missing_file_last_start"] = now
                 _start_thread(
                     _fetch_missing_file_ids_task,
                     name="fetch_missing_vector_files",
