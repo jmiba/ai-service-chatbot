@@ -1118,6 +1118,28 @@ def is_empty_markdown(markdown, min_length=50):
         return True
     return False
 
+
+def normalize_path_prefix(value: str) -> str:
+    """Normalize user-provided include/exclude prefixes to '/path' form without trailing slash."""
+    if value is None:
+        return ""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    prefixed = "/" + cleaned.lstrip("/")
+    if prefixed != "/" and prefixed.endswith("/"):
+        prefixed = prefixed[:-1]
+    return prefixed
+
+
+def path_matches_prefix(path: str, prefix: str) -> bool:
+    """Return True when `path` matches `prefix` exactly or as a directory descendant."""
+    if not prefix:
+        return False
+    if prefix == "/":
+        return True
+    return path == prefix or path.startswith(f"{prefix}/")
+
 # -----------------------------
 # Core scraper (with normalization + dry run)
 # -----------------------------
@@ -1191,6 +1213,9 @@ def scrape(url,
     visited_raw.add(url)
     visited_norm.add(norm_url)
     frontier_seen.append(norm_url)
+
+    normalized_exclude_paths = [prefix for prefix in (normalize_path_prefix(p) for p in (exclude_paths or [])) if prefix]
+    normalized_include_prefixes = [prefix for prefix in (normalize_path_prefix(p) for p in (include_lang_prefixes or [])) if prefix]
 
     # HEAD pre-check (advisory)
     try:
@@ -1452,11 +1477,14 @@ def scrape(url,
             # Include/exclude path filters
             parsed_link = urlparse(next_url)
             normalized_path = '/' + parsed_link.path.lstrip('/')
-            if exclude_paths and any(excl in parsed_link.path for excl in exclude_paths):
+            if normalized_path != '/' and normalized_path.endswith('/'):
+                normalized_path = normalized_path.rstrip('/')
+
+            if normalized_exclude_paths and any(path_matches_prefix(normalized_path, excl) for excl in normalized_exclude_paths):
                 if log_callback and depth <= 1:
                     log_callback(f"{'  ' * (depth+1)}❌ Excluded by path filter: {next_url}")
                 continue
-            if include_lang_prefixes and not any(normalized_path.startswith(prefix) for prefix in include_lang_prefixes):
+            if normalized_include_prefixes and not any(path_matches_prefix(normalized_path, prefix) for prefix in normalized_include_prefixes):
                 if log_callback and depth <= 1:
                     log_callback(f"{'  ' * (depth+1)}🚫 Not in allowed language prefix: {next_url}")
                 continue
@@ -1837,8 +1865,8 @@ def main():
                         value=", ".join(config.get("exclude_paths", [])), 
                         key=f"exclude_paths_{i}",
                         height=100,
-                        help="Paths to exclude from scraping (e.g., /en/, /admin/, /old/)",
-                        placeholder="/en/, /pl/, /_ablage-alte-www/"
+                        help="Paths to exclude from scraping (e.g., /en, /admin, /old)",
+                        placeholder="/en, /pl, /_ablage-alte-www"
                     )
                     st.session_state.url_configs[i]["exclude_paths"] = [path.strip() for path in exclude_paths_str.split(",") if path.strip()]
 
@@ -1848,8 +1876,8 @@ def main():
                         value=", ".join(config.get("include_lang_prefixes", [])), 
                         key=f"include_lang_prefixes_{i}",
                         height=100,
-                        help="Only include paths starting with these prefixes (e.g., /de/, /fr/)",
-                        placeholder="/de/, /fr/"
+                        help="Only include paths starting with these prefixes (e.g., /de, /fr)",
+                        placeholder="/de, /fr"
                     )
                     st.session_state.url_configs[i]["include_lang_prefixes"] = [prefix.strip() for prefix in include_prefixes_str.split(",") if prefix.strip()]
 
