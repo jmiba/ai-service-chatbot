@@ -1,4 +1,5 @@
 import base64
+import fnmatch
 import math
 import re
 from datetime import datetime, timezone
@@ -1120,7 +1121,7 @@ def is_empty_markdown(markdown, min_length=50):
 
 
 def normalize_path_prefix(value: str) -> str:
-    """Normalize user-provided include/exclude prefixes to '/path' form without trailing slash."""
+    """Normalize include/exclude patterns to '/path' form, preserving wildcard markers."""
     if value is None:
         return ""
     cleaned = value.strip()
@@ -1132,13 +1133,16 @@ def normalize_path_prefix(value: str) -> str:
     return prefixed
 
 
-def path_matches_prefix(path: str, prefix: str) -> bool:
-    """Return True when `path` matches `prefix` exactly or as a directory descendant."""
-    if not prefix:
+def path_matches_prefix(path: str, pattern: str) -> bool:
+    """Return True when `path` matches `pattern` (supports '*' wildcards)."""
+    if not pattern:
         return False
-    if prefix == "/":
+    if pattern == "/":
         return True
-    return path == prefix or path.startswith(f"{prefix}/")
+    if "*" in pattern or "?" in pattern:
+        # Also test with a trailing slash for directory-style globs like '/foo/*'
+        return fnmatch.fnmatch(path, pattern) or fnmatch.fnmatch(f"{path}/", pattern)
+    return path == pattern or path.startswith(pattern)
 
 # -----------------------------
 # Core scraper (with normalization + dry run)
@@ -1865,8 +1869,8 @@ def main():
                         value=", ".join(config.get("exclude_paths", [])), 
                         key=f"exclude_paths_{i}",
                         height=100,
-                        help="Paths to exclude from scraping (e.g., /en, /admin, /old)",
-                        placeholder="/en, /pl, /_ablage-alte-www"
+                        help="Paths to exclude from scraping (supports '*' wildcards, e.g., /en, /site-*, /admin)",
+                        placeholder="/en, /pl, /site-*, /_ablage-alte-www"
                     )
                     st.session_state.url_configs[i]["exclude_paths"] = [path.strip() for path in exclude_paths_str.split(",") if path.strip()]
 
@@ -1876,8 +1880,8 @@ def main():
                         value=", ".join(config.get("include_lang_prefixes", [])), 
                         key=f"include_lang_prefixes_{i}",
                         height=100,
-                        help="Only include paths starting with these prefixes (e.g., /de, /fr)",
-                        placeholder="/de, /fr"
+                        help="Only include paths starting with these prefixes (supports '*' wildcards, e.g., /de, /fr, /research-*)",
+                        placeholder="/de, /fr, /research-*"
                     )
                     st.session_state.url_configs[i]["include_lang_prefixes"] = [prefix.strip() for prefix in include_prefixes_str.split(",") if prefix.strip()]
 
