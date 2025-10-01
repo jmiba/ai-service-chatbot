@@ -844,7 +844,7 @@ def _attempt_summarize_and_tag(markdown_content, log_callback=None, depth=0):
     # Try to get OpenAI credentials from secrets
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
-        model = st.secrets.get("MODEL", "gpt-4o-mini")
+        model = st.secrets.get("EVAL_MODEL", "gpt-4o-mini")
         use_openai = True
     except KeyError:
         # Fall back to local model
