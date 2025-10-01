@@ -1213,7 +1213,7 @@ def scrape(url,
     if log_callback:
         log_callback(f"{'  ' * depth}✅ URL passed all checks, proceeding with scraping")
 
-    # Track visited
+    # Track visited (raw for diagnostics; normalized updated later if redirects change path)
     visited_raw.add(url)
     visited_norm.add(norm_url)
     frontier_seen.append(norm_url)
@@ -1271,6 +1271,22 @@ def scrape(url,
         if log_callback:
             log_callback(f"{'  ' * depth}🚫 Skipping non-HTML: {norm_url} ({ctype})")
         return
+
+    effective_url = response.url
+    effective_norm = normalize_url(effective_url, "", keep_query=keep_query_keys)
+    if effective_norm != norm_url:
+        if effective_norm in visited_norm:
+            if log_callback:
+                log_callback(f"{'  ' * depth}↩️ Redirect target already visited: {effective_norm}")
+            visited_norm.discard(norm_url)
+            if frontier_seen:
+                frontier_seen[-1] = effective_norm
+            return
+        visited_norm.discard(norm_url)
+        norm_url = effective_norm
+        visited_norm.add(norm_url)
+        if frontier_seen:
+            frontier_seen[-1] = norm_url
 
     # Encoding handling
     declared_encoding = None
@@ -1457,6 +1473,7 @@ def scrape(url,
         links_found = []
         links_processed = 0
         
+        link_base_url = effective_url
         for a in soup.find_all('a', href=True):
             href = a['href'].strip()
             links_found.append(href)
@@ -1466,7 +1483,7 @@ def scrape(url,
                 continue
 
             # Normalize (drops fragments, unwanted queries)
-            next_url = normalize_url(norm_url, href, keep_query=keep_query_keys)
+            next_url = normalize_url(link_base_url, href, keep_query=keep_query_keys)
             if not next_url:
                 continue
                 
