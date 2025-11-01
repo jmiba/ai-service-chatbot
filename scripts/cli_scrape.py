@@ -78,7 +78,12 @@ except Exception as e:
     print(f"[WARN] Could not monkey-patch utils UI helpers: {e}")
 
 # Now import DB helpers and scraper
-from utils import get_connection, create_knowledge_base_table, load_url_configs
+from utils import (
+    get_connection,
+    create_knowledge_base_table,
+    load_url_configs,
+    write_vector_status,
+)
 
 scraper_mod = None
 try:
@@ -115,11 +120,23 @@ def main():
     parser.add_argument("--sleep", type=float, default=0.0, help="Sleep seconds between configs (rate limiting)")
     # Vector store sync control (enabled by default)
     parser.add_argument("--no-vectorize", dest="vectorize", action="store_false", help="Skip uploading to vector store after scraping")
+    parser.add_argument(
+        "--mode",
+        choices=["scrape", "vectorize", "both"],
+        default="both",
+        help=(
+            "Which parts of the pipeline to run: 'scrape' for crawling only, "
+            "'vectorize' for vector-store sync only, 'both' for the traditional full run."
+        ),
+    )
     parser.set_defaults(vectorize=True)
     args = parser.parse_args()
 
     start_ts = datetime.utcnow().isoformat()
-    print(f"[INFO] cli_scrape start {start_ts}Z budget={args.budget} dry_run={args.dry_run} vectorize={args.vectorize}")
+    print(
+        f"[INFO] cli_scrape start {start_ts}Z budget={args.budget} "
+        f"dry_run={args.dry_run} mode={args.mode} vectorize={args.vectorize}"
+    )
 
     # Ensure tables exist
     try:
@@ -128,28 +145,35 @@ def main():
         print(f"[ERROR] DB init failed: {e}")
         return 1
 
-    # Load configs
-    try:
-        configs = load_url_configs()
-    except Exception as e:
-        print(f"[ERROR] Failed to load URL configs: {e}")
-        return 1
+    run_scrape = args.mode in {"scrape", "both"}
+    run_vectorize = args.mode in {"vectorize", "both"} and args.vectorize
 
-    if not configs:
-        print("[WARN] No URL configurations found. Exiting.")
-        return 0
+    # Load configs only when scraping
+    run_configs = []
+    total_configs = 0
+    if run_scrape:
+        try:
+            configs = load_url_configs()
+        except Exception as e:
+            print(f"[ERROR] Failed to load URL configs: {e}")
+            return 1
 
-    # Filter configs
-    def match(c):
-        rs = (c.get("recordset") or "")
-        if args.only and args.only not in rs:
-            return False
-        if args.exclude and args.exclude in rs:
-            return False
-        return True
+        if not configs:
+            print("[WARN] No URL configurations found. Exiting.")
+            return 0
 
-    run_configs = [c for c in configs if c.get("url") and match(c)]
-    print(f"[INFO] {len(run_configs)}/{len(configs)} configs selected")
+        # Filter configs
+        def match(c):
+            rs = (c.get("recordset") or "")
+            if args.only and args.only not in rs:
+                return False
+            if args.exclude and args.exclude in rs:
+                return False
+            return True
+
+        run_configs = [c for c in configs if c.get("url") and match(c)]
+        total_configs = len(configs)
+        print(f"[INFO] {len(run_configs)}/{total_configs} configs selected")
 
     keep_query_keys = set(s.strip() for s in args.keep_query.split(',') if s.strip()) if args.keep_query else None
 
@@ -183,84 +207,102 @@ def main():
             # no-op; could add rate-based prints
             pass
 
-        total = len(run_configs)
-        for idx, cfg in enumerate(run_configs, 1):
-            url = cfg["url"].strip()
-            depth = int(cfg.get("depth", 2))
-            recordset = (cfg.get("recordset") or f"recordset_{idx}").strip()
-            exclude_paths = cfg.get("exclude_paths") or []
-            include_lang_prefixes = cfg.get("include_lang_prefixes") or []
+        if run_scrape:
+            total = len(run_configs)
+            for idx, cfg in enumerate(run_configs, 1):
+                url = cfg["url"].strip()
+                depth = int(cfg.get("depth", 2))
+                recordset = (cfg.get("recordset") or f"recordset_{idx}").strip()
+                exclude_paths = cfg.get("exclude_paths") or []
+                include_lang_prefixes = cfg.get("include_lang_prefixes") or []
 
-            print(f"[INFO] Config {idx}/{total}: url={url} recordset={recordset} depth={depth}")
+                print(f"[INFO] Config {idx}/{total}: url={url} recordset={recordset} depth={depth}")
 
-            try:
-                scrape(
-                    url,
-                    depth=0,
-                    max_depth=depth,
-                    recordset=recordset,
-                    conn=conn,
-                    exclude_paths=exclude_paths,
-                    include_lang_prefixes=include_lang_prefixes,
-                    keep_query_keys=keep_query_keys,
-                    max_urls_per_run=args.budget,
-                    dry_run=args.dry_run,
-                    progress_callback=prog_cb,
-                    log_callback=log_cb,
-                )
-            except Exception as e:
-                print(f"[ERROR] Error scraping {url}: {e}")
+                try:
+                    scrape(
+                        url,
+                        depth=0,
+                        max_depth=depth,
+                        recordset=recordset,
+                        conn=conn,
+                        exclude_paths=exclude_paths,
+                        include_lang_prefixes=include_lang_prefixes,
+                        keep_query_keys=keep_query_keys,
+                        max_urls_per_run=args.budget,
+                        dry_run=args.dry_run,
+                        progress_callback=prog_cb,
+                        log_callback=log_cb,
+                    )
+                except Exception as e:
+                    print(f"[ERROR] Error scraping {url}: {e}")
 
-            if args.sleep:
-                time.sleep(args.sleep)
+                if args.sleep:
+                    time.sleep(args.sleep)
+
+            if conn:
+                stale_candidates = []
+                try:
+                    stale_candidates = scraper_mod.update_stale_documents(
+                        conn,
+                        dry_run=args.dry_run,
+                        log_callback=log_cb,
+                    )
+                except Exception as e:
+                    print(f"[WARN] Failed to compute stale documents: {e}")
+                else:
+                    count = len(stale_candidates)
+                    if count:
+                        print(f"[INFO] Marked {count} document(s) as stale.")
+                        preview = stale_candidates[:5]
+                        for entry in preview:
+                            rec = entry.get("recordset") or "(none)"
+                            print(f"[INFO] Stale candidate: recordset={rec} url={entry.get('url')}")
+                        if count > len(preview):
+                            print(f"[INFO] ...and {count - len(preview)} more.")
+                    else:
+                        print("[INFO] No stale documents detected.")
+        else:
+            print("[INFO] Skipping scraping stage (--mode=vectorize).")
 
         if conn:
-            stale_candidates = []
-            try:
-                stale_candidates = scraper_mod.update_stale_documents(
-                    conn,
-                    dry_run=args.dry_run,
-                    log_callback=log_cb,
-                )
-            except Exception as e:
-                print(f"[WARN] Failed to compute stale documents: {e}")
-            else:
-                count = len(stale_candidates)
-                if count:
-                    print(f"[INFO] Marked {count} document(s) as stale.")
-                    preview = stale_candidates[:5]
-                    for entry in preview:
-                        rec = entry.get("recordset") or "(none)"
-                        print(f"[INFO] Stale candidate: recordset={rec} url={entry.get('url')}")
-                    if count > len(preview):
-                        print(f"[INFO] ...and {count - len(preview)} more.")
-                else:
-                    print("[INFO] No stale documents detected.")
             try:
                 conn.close()
             except Exception:
                 pass
+            conn = None
 
         # After scraping, optionally sync to vector store (skip in dry-run)
-        if not args.dry_run and args.vectorize:
-            print("[INFO] Starting vector store sync...")
-            try:
-                # Import lazily to avoid heavy Streamlit UI code; utils UI was monkey-patched above
-                from pages.vectorize import sync_vector_store
-            except Exception as e:
-                print(f"[ERROR] Could not import vectorization module: {e}")
+        if run_vectorize:
+            if args.dry_run:
+                print("[INFO] Dry-run mode: skipping vector store sync.")
             else:
+                print("[INFO] Starting vector store sync...")
                 try:
-                    result = sync_vector_store()
-                    if result and isinstance(result, dict):
-                        uploaded = result.get('uploaded_count', 0)
-                        print(f"[INFO] Vector store sync finished. Uploaded: {uploaded}")
-                    else:
-                        print("[INFO] Vector store sync finished.")
+                    from pages.vectorize import (
+                        sync_vector_store,
+                        compute_vector_store_status,
+                        VECTOR_STORE_ID,
+                    )
                 except Exception as e:
-                    print(f"[ERROR] Vector store sync failed: {e}")
-        elif args.dry_run:
-            print("[INFO] Dry-run mode: skipping vector store sync.")
+                    print(f"[ERROR] Could not import vectorization module: {e}")
+                else:
+                    try:
+                        result = sync_vector_store()
+                        if result and isinstance(result, dict):
+                            uploaded = result.get('uploaded_count', 0)
+                            print(f"[INFO] Vector store sync finished. Uploaded: {uploaded}")
+                        else:
+                            print("[INFO] Vector store sync finished.")
+                        try:
+                            status = compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
+                            write_vector_status(status)
+                            print("[INFO] Vector store status snapshot updated.")
+                        except Exception as status_exc:
+                            print(f"[WARN] Could not update vector store status snapshot: {status_exc}")
+                    except Exception as e:
+                        print(f"[ERROR] Vector store sync failed: {e}")
+        elif args.mode == "scrape":
+            print("[INFO] Vector store sync disabled via --mode=scrape.")
         else:
             print("[INFO] Vector store sync disabled via --no-vectorize.")
 

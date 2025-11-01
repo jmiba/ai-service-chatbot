@@ -6,10 +6,21 @@ import time
 from io import BytesIO
 import base64
 import threading
+from typing import Any
 
 from openai import OpenAI, AsyncOpenAI
 import streamlit as st
-from utils import get_connection, admin_authentication, render_sidebar, get_document_status_counts
+from utils import (
+    get_connection,
+    admin_authentication,
+    render_sidebar,
+    get_document_status_counts,
+    launch_cli_job,
+    CLIJob,
+    CLIJobError,
+    read_vector_status,
+    write_vector_status,
+)
 
 try:
     from streamlit.runtime import exists as streamlit_runtime_exists  # type: ignore
@@ -107,6 +118,17 @@ def _start_thread(target, *, name: str, args: tuple = ()):  # noqa: N802
         pass
     t.start()
     return t
+
+
+def _safe_rerun() -> None:
+    """Trigger a Streamlit rerun when supported."""
+    try:
+        st.rerun()
+    except AttributeError:
+        try:
+            st.experimental_rerun()  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
 
 # Cache for vector store files (expires after 5 minutes)
 _vs_files_cache = {"data": None, "timestamp": 0, "ttl": 300}
@@ -379,6 +401,23 @@ def _fetch_missing_file_ids_task(vector_store_id: str):
             pass
 
 
+def _fetch_vector_status_task(vector_store_id: str, force_refresh: bool):
+    """Background task to compute vector status asynchronously."""
+    try:
+        status = compute_vector_store_status(vector_store_id, force_refresh=force_refresh)
+        write_vector_status(status)
+        st.session_state["vector_status"] = status
+        st.session_state["vector_status_error"] = None
+    except Exception as exc:  # pragma: no cover - network dependent
+        st.session_state["vector_status_error"] = str(exc)
+    finally:
+        st.session_state["vector_status_loading"] = False
+        try:
+            _safe_rerun()
+        except Exception:
+            pass
+
+
 def upload_md_to_vector_store(safe_title: str, content: str, vector_store_id: str) -> str | None:
     file_stream = BytesIO(content.encode("utf-8"))
     file_name = f"{safe_title}.md"
@@ -458,6 +497,44 @@ def build_filename_to_id_map_efficiently(vs_files):
         return filename_to_id
 
     return _run_async_task(_build_map())
+
+
+def compute_vector_store_status(vector_store_id: str, *, force_refresh: bool = False) -> dict[str, Any]:
+    """Collect lightweight vector store status metrics."""
+
+    vs_files = get_cached_vector_store_files(vector_store_id, force_refresh=force_refresh)
+    vs_ids = {f.id for f in vs_files}
+
+    current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(
+        vector_store_id,
+        use_cache=not force_refresh,
+    )
+
+    excluded_live_ids: set[str]
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT vector_file_id FROM documents WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL"
+        )
+        excluded_live_ids = {row[0] for row in cur.fetchall()}
+        cur.close()
+        conn.close()
+    except Exception:
+        excluded_live_ids = set()
+
+    live_ids_display = current_ids - excluded_live_ids
+    combined_pending_cleanup_ids = (pending_replacement_ids | excluded_live_ids) & vs_ids
+
+    return {
+        "vector_store_id": vector_store_id,
+        "generated_at": datetime.datetime.utcnow().isoformat(),
+        "vs_file_count": len(vs_ids),
+        "live_file_count": len(live_ids_display),
+        "pending_cleanup_count": len(combined_pending_cleanup_ids),
+        "orphan_count": len(true_orphan_ids),
+        "excluded_live_count": len(excluded_live_ids & vs_ids),
+    }
 
 def sync_vector_store():
     conn = get_connection()
@@ -627,30 +704,6 @@ if HAS_STREAMLIT_CONTEXT:
     authenticated = admin_authentication(return_to="/pages/vectorize")
     render_sidebar(authenticated)
 
-    # -----------------------------
-    # Terminal-style logging for vectorize operations
-    # -----------------------------
-    import io
-    import sys
-    from contextlib import redirect_stdout
-
-    def capture_sync_output():
-        """Context manager to capture print output during sync"""
-        output_buffer = io.StringIO()
-        return output_buffer
-
-    def display_sync_log(log_container, output_buffer):
-        """Display captured output while reusing the same widget to avoid DOM churn."""
-        output_text = output_buffer.getvalue()
-        if output_text:
-            log_container.text_area(
-                "📋 Sync Progress Log",
-                value=output_text,
-                height=400,
-                disabled=True,
-                key="sync_log_area",
-            )
-
     def read_last_export_timestamp():
         try:
             with open("last_export.txt", "r") as f:
@@ -774,75 +827,117 @@ if HAS_STREAMLIT_CONTEXT:
                     st.success("**All documents are synchronized!**", icon=":material/check_circle:")
         
             st.markdown("---")
-        
-            # Expensive vector store operations - only load when needed
-            vector_mgmt_col1, vector_mgmt_col2 = st.columns([3, 1])
-        
-            with vector_mgmt_col1:
-                show_vector_mgmt = st.checkbox("Show vector store status", help="Load detailed vector store statistics (uses caching for better performance)")
-        
-            with vector_mgmt_col2:
-                if st.button("Refresh Cache", help="Force refresh vector store data cache", icon=":material/refresh:"):
-                    _vs_files_cache["data"] = None  # Clear cache
-                    st.success("Cache cleared!")
-                    st.rerun()
-        
-            if show_vector_mgmt:
-                with st.spinner("Loading vector store details (using cache when possible)..."):
+
+            # Vector store status summary (cached + async live refresh)
+            if "vector_status" not in st.session_state:
+                st.session_state["vector_status"] = read_vector_status()
+            if "vector_status_loading" not in st.session_state:
+                st.session_state["vector_status_loading"] = False
+            if "vector_status_error" not in st.session_state:
+                st.session_state["vector_status_error"] = None
+
+            snapshot_from_disk = read_vector_status()
+            if snapshot_from_disk and snapshot_from_disk != st.session_state.get("vector_status"):
+                st.session_state["vector_status"] = snapshot_from_disk
+
+            status_snapshot = st.session_state["vector_status"]
+            status_error = st.session_state.get("vector_status_error")
+            status_loading = st.session_state.get("vector_status_loading", False)
+
+            if not status_loading:
+                should_refresh_status = False
+                if status_snapshot is None:
+                    should_refresh_status = True
+                else:
+                    generated_raw = status_snapshot.get("generated_at")
                     try:
-                        # Vector store stats (now uses caching for better performance!)
-                        vs_files = get_cached_vector_store_files(VECTOR_STORE_ID)
-                        vs_file_count = len(vs_files)
-                        current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(VECTOR_STORE_ID, use_cache=True)
-                    
-                        # Show cache status
-                        cache_age = time.time() - _vs_files_cache["timestamp"]
-                        st.caption(f"Using cached data (age: {cache_age:.0f}s)")
-                    
-                        # Compute excluded live files present in VS and include them in pending cleanup metric
-                        vs_ids = {f.id for f in vs_files}
-                        try:
-                            conn = get_connection(); cur = conn.cursor()
-                            cur.execute("SELECT vector_file_id FROM documents WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL")
-                            excluded_live_ids = {row[0] for row in cur.fetchall()}
-                            cur.close(); conn.close()
-                        except Exception:
-                            excluded_live_ids = set()
-                        combined_pending_cleanup_ids = (pending_replacement_ids | excluded_live_ids) & vs_ids
-                    
-                        # Live files should exclude excluded docs
-                        live_ids_display = current_ids - excluded_live_ids
-                    
-                        st.header("Vector Store Status")
-                        col6, col7, col8, col9 = st.columns(4)
-                        with col6:
-                            st.metric("VS Files", vs_file_count, border=True)
-                        with col7:
-                            st.metric("Live Files", len(live_ids_display), border=True)
-                        with col8:
-                            st.metric("Pending Cleanup", len(combined_pending_cleanup_ids), border=True)
-                        with col9:
-                            st.metric("Orphans", len(true_orphan_ids), border=True)
-                    
-                        # Vector store status messages
-                        if len(true_orphan_ids) > 0:
-                            st.warning(f"🧹 **{len(true_orphan_ids)} orphaned files** in vector store are no longer in the database.")
-                        
-                        if len(combined_pending_cleanup_ids) > 0:
-                            st.info(f"**{len(combined_pending_cleanup_ids)} files** pending cleanup (old versions or excluded docs).", icon=":material/cached:")
-                        
-                    except Exception as e:
-                        st.error(f"Failed to load vector store details: {e}", icon=":material/error:")
-                        vs_file_count = 0
-                        current_ids = set()
-                        pending_replacement_ids = set()
-                        true_orphan_ids = set()
+                        generated_at = datetime.datetime.fromisoformat(generated_raw)
+                    except Exception:
+                        should_refresh_status = True
+                    else:
+                        if datetime.datetime.utcnow() - generated_at >= datetime.timedelta(minutes=30):
+                            should_refresh_status = True
+                if should_refresh_status:
+                    st.session_state["vector_status_loading"] = True
+                    _start_thread(
+                        _fetch_vector_status_task,
+                        name="fetch_vector_status",
+                        args=(VECTOR_STORE_ID, True),
+                    )
+
+            st.header("Vector Store Status")
+
+            if status_snapshot:
+                generated_raw = status_snapshot.get("generated_at")
+                try:
+                    generated_at = datetime.datetime.fromisoformat(generated_raw)
+                    age = datetime.datetime.utcnow() - generated_at
+                    age_display = f"{int(age.total_seconds() // 60)} min" if age.total_seconds() >= 60 else f"{int(age.total_seconds())} sec"
+                except Exception:
+                    generated_at = None
+                    age_display = "unknown"
+
+                col_status = st.columns(4)
+                col_status[0].metric("VS Files", status_snapshot.get("vs_file_count", 0), border=True)
+                col_status[1].metric("Live Files", status_snapshot.get("live_file_count", 0), border=True)
+                col_status[2].metric("Pending Cleanup", status_snapshot.get("pending_cleanup_count", 0), border=True)
+                col_status[3].metric("Orphans", status_snapshot.get("orphan_count", 0), border=True)
+
+                excluded_live = status_snapshot.get("excluded_live_count", 0)
+                if status_snapshot.get("orphan_count", 0):
+                    st.warning(
+                        f"🧹 **{status_snapshot['orphan_count']} orphaned files** in vector store are no longer in the database.",
+                        icon=":material/warning:",
+                    )
+                if status_snapshot.get("pending_cleanup_count", 0):
+                    st.info(
+                        f"**{status_snapshot['pending_cleanup_count']} files** pending cleanup (old versions or excluded docs).",
+                        icon=":material/cached:",
+                    )
+                if excluded_live:
+                    st.info(
+                        f"**{excluded_live} excluded documents** still have vector files attached.",
+                        icon=":material/info:",
+                    )
+
+                if generated_at:
+                    st.caption(
+                        f"Snapshot generated at {generated_at.isoformat(timespec='seconds')} (age: {age_display})."
+                    )
             else:
-                # Set defaults when not loading vector store details
-                vs_file_count = 0
-                current_ids = set()
-                pending_replacement_ids = set()
-                true_orphan_ids = set()
+                st.info(
+                    "No cached vector store status available yet. It will appear after the next CLI vector sync.",
+                    icon=":material/info:",
+                )
+
+            status_controls = st.columns(2)
+            with status_controls[0]:
+                if st.button(
+                    "Refresh live status",
+                    icon=":material/refresh:",
+                    disabled=status_loading,
+                    help="Fetch the latest metrics directly from the vector store without blocking the UI.",
+                ):
+                    st.session_state["vector_status_loading"] = True
+                    st.session_state["vector_status_error"] = None
+                    _start_thread(
+                        _fetch_vector_status_task,
+                        name="refresh_vector_status_manual",
+                        args=(VECTOR_STORE_ID, True),
+                    )
+            with status_controls[1]:
+                if st.button(
+                    "Clear cache",
+                    icon=":material/delete_forever:",
+                    help="Clear the in-memory vector store cache used for detailed operations.",
+                ):
+                    _vs_files_cache["data"] = None
+                    st.success("Vector store cache cleared.", icon=":material/check_circle:")
+
+            if status_loading:
+                st.info("Refreshing vector store status...", icon=":material/progress_activity:")
+            if status_error := st.session_state.get("vector_status_error"):
+                st.error(f"Failed to update vector store status: {status_error}", icon=":material/error:")
 
         except Exception as e:
             st.error(f"Failed to compute sync status: {e}", icon=":material/error:")
@@ -928,50 +1023,27 @@ if HAS_STREAMLIT_CONTEXT:
                 args=(VECTOR_STORE_ID,),
             )
 
-        controls_col, status_col = st.columns([1, 3])
-        with controls_col:
-            disabled = st.session_state["missing_file_fetching"]
-            if st.button(
-                "Check Missing Files",
-                key="check_missing_files_button",
-                type="secondary",
-                icon=":material/search:",
-                disabled=disabled,
-                help="Scan the vector store for file IDs that are no longer referenced in the database.",
-            ):
-                now = datetime.datetime.now()
-                st.session_state["missing_file_fetching"] = True
-                st.session_state["missing_file_ids"] = None
-                st.session_state["missing_file_error"] = None
-                st.session_state["missing_file_last_start"] = now
-                _start_thread(
-                    _fetch_missing_file_ids_task,
-                    name="fetch_missing_vector_files",
-                    args=(VECTOR_STORE_ID,),
-                )
-
-        with status_col:
-            if st.session_state["missing_file_fetching"]:
-                st.info("Scanning vector store for missing files...", icon=":material/progress_activity:")
-            else:
-                error_msg = st.session_state.get("missing_file_error")
-                result = st.session_state.get("missing_file_ids")
-                completed_at = st.session_state.get("missing_file_completed_at")
-                if error_msg:
-                    st.error(f"Failed to check missing files: {error_msg}", icon=":material/error:")
-                elif result is not None:
-                    if result:
-                        st.warning(
-                            f"Found {len(result)} vector store files that are missing in the database.",
-                            icon=":material/warning:",
-                        )
-                        st.code("\n".join(result))
-                    else:
-                        st.success("No missing vector store files detected.", icon=":material/task_alt:")
-                    if completed_at:
-                        st.caption(
-                            f"Last checked: {completed_at.isoformat(sep=' ', timespec='seconds')}"
-                        )
+        if st.session_state["missing_file_fetching"]:
+            st.info("Scanning vector store for missing files...", icon=":material/progress_activity:")
+        else:
+            error_msg = st.session_state.get("missing_file_error")
+            result = st.session_state.get("missing_file_ids")
+            completed_at = st.session_state.get("missing_file_completed_at")
+            if error_msg:
+                st.error(f"Failed to check missing files: {error_msg}", icon=":material/error:")
+            elif result is not None:
+                if result:
+                    st.warning(
+                        f"Found {len(result)} vector store files that are missing in the database.",
+                        icon=":material/warning:",
+                    )
+                    st.code("\n".join(result))
+                else:
+                    st.success("No missing vector store files detected.", icon=":material/task_alt:")
+                if completed_at:
+                    st.caption(
+                        f"Last checked: {completed_at.isoformat(sep=' ', timespec='seconds')}"
+                    )
 
 
         # Action: Sync now
@@ -983,101 +1055,75 @@ if HAS_STREAMLIT_CONTEXT:
         if new_unsynced_count > 0 or pending_resync_count > 0:
             sync_button_text += f" ({new_unsynced_count + pending_resync_count} pending)"
     
-        if st.button(sync_button_text, type="primary", icon=":material/sync:"):
-            # Create containers for status and terminal output
-            status_container = st.container()
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            log_container = st.empty()
-        
-            with status_container:
-                status_text.info("🚀 **Starting synchronization process...**")
-                progress_bar.progress(10)
-            
-                # Create output buffer to capture print statements
-                output_buffer = io.StringIO()
-            
-                try:
-                    status_text.info("**Uploading documents to vector store...**")
-                    progress_bar.progress(30)
-                
-                    # Capture all print output during sync
-                    with redirect_stdout(output_buffer):
-                        result = sync_vector_store()
-                
-                    # Display the captured output in terminal style
-                    display_sync_log(log_container, output_buffer)
-                
-                    status_text.info("**Finalizing synchronization...**", icon=":material/clock_loader_90:")
-                    progress_bar.progress(80)
-                
-                    # Get updated counts after sync
-                    counts = get_document_status_counts()
-                    updated_new_count = counts["new_unsynced_count"]
-                    updated_resync_count = counts["pending_resync_count"]
-                    updated_vectorized = counts["vectorized_docs"]
-                
-                    progress_bar.progress(100)
-                
-                    # Success message with detailed results
-                    st.success("**Synchronization completed successfully!**", icon=":material/check_circle:")
-                
-                    # Show sync summary in an info box
-                    with st.container():
-                        st.markdown("### 📊 Sync Results")
-                    
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("📤 Uploaded", 
-                                     result['uploaded_count'] if result else 0,
-                                     help="Documents successfully uploaded to vector store")
-                        with col2:
-                            st.metric("📝 New Remaining", 
-                                     updated_new_count,
-                                     help="New documents still waiting for sync")
-                        with col3:
-                            st.metric("🔄 Re-sync Remaining", 
-                                     updated_resync_count,
-                                     help="Documents still needing re-synchronization")
-                        with col4:
-                            st.metric("✅ Total Vectorized", 
-                                     updated_vectorized,
-                                     help="Total documents now in vector store")
-                    
-                        if result and result["uploaded_count"] > 0:
-                            st.info(f"**{result['uploaded_count']} documents** were successfully uploaded to the vector store and are now available for AI search!", icon=":material/award_star:")
-                        
-                            if result["synced_files"]:
-                                with st.expander("View uploaded files", expanded=False, icon=":material/visibility:"):
-                                    for fname in result["synced_files"]:
-                                        # Strip the numeric prefix for cleaner display
-                                        pretty_name = fname.split("_", 1)[1] if "_" in fname else fname
-                                        st.write(f"✅ {pretty_name}")
-                    
-                        # Show next steps or all-clear message
-                        if updated_new_count == 0 and updated_resync_count == 0:
-                            st.success("**All documents are now synchronized!** Your knowledge base is fully up to date.", icon=":material/check_circle:")
-                        else:
-                            remaining_total = updated_new_count + updated_resync_count
-                            st.warning(f"**{remaining_total} documents** still need synchronization. Run sync again if needed.", icon=":material/sync_problem:" )
-                
-                    # Clear the progress indicators
-                    progress_bar.empty()
-                    status_text.empty()
-                
-                    # Force cache refresh and page refresh to show updated status
-                    _vs_files_cache["data"] = None  # Clear cache to ensure fresh data
-                    st.balloons()  # Celebrate successful sync!
-                    time.sleep(1)  # Brief pause to show balloons
-                    st.rerun()  # Refresh the page to show updated metrics
+        if "vector_cli_job" not in st.session_state:
+            st.session_state["vector_cli_job"] = None
+        if "vector_cli_message" not in st.session_state:
+            st.session_state["vector_cli_message"] = None
+        if "vector_cli_last_return" not in st.session_state:
+            st.session_state["vector_cli_last_return"] = None
 
-                except Exception as e:
-                    # Still show captured output even if there was an error
-                    display_sync_log(log_container, output_buffer)
-                    progress_bar.empty()
-                    status_text.empty()
-                    st.error(f"**Synchronization failed:** {e}", icon=":material/error:")
-                    st.info("Try running the sync again or check the logs above for more details.", icon=":material/info:")
+        vector_job: CLIJob | None = st.session_state.get("vector_cli_job")
+        job_running = vector_job is not None and vector_job.is_running()
+
+        if st.button(sync_button_text, type="primary", icon=":material/sync:", disabled=job_running):
+            if job_running:
+                st.warning("A vector sync job is already running.", icon=":material/warning:")
+            else:
+                try:
+                    job = launch_cli_job(mode="vectorize")
+                except CLIJobError as exc:
+                    st.error(f"Failed to start vector sync job: {exc}", icon=":material/error:")
+                else:
+                    st.session_state["vector_cli_job"] = job
+                    st.session_state["vector_cli_message"] = "Vector sync running via cli_scrape.py."
+                    st.session_state["vector_cli_last_return"] = None
+                    _safe_rerun()
+
+        if st.session_state["vector_cli_message"]:
+            st.info(st.session_state["vector_cli_message"], icon=":material/center_focus_weak:")
+
+        if vector_job:
+            st.markdown("### 📟 CLI Sync Log")
+            log_lines = "\n".join(list(vector_job.logs))
+            st.text_area(
+                "Vector sync log",
+                value=log_lines or "Waiting for output...",
+                height=320,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+
+            if vector_job.is_running():
+                st.info(
+                    f"Vector sync in progress (PID {vector_job.process.pid}). Use the controls below to refresh or cancel.",
+                    icon=":material/progress_activity:",
+                )
+                refresh_col, cancel_col = st.columns(2)
+                with refresh_col:
+                    st.button("Refresh status", key="refresh_vector_job")
+                with cancel_col:
+                    if st.button("Cancel job", key="cancel_vector_job"):
+                        vector_job.terminate()
+                        st.session_state["vector_cli_message"] = "Cancellation requested. Check the log for confirmation."
+                        _safe_rerun()
+            else:
+                if st.session_state["vector_cli_last_return"] is None:
+                    st.session_state["vector_cli_last_return"] = vector_job.returncode()
+                exit_code = st.session_state["vector_cli_last_return"] or 0
+                if exit_code == 0:
+                    st.session_state["vector_cli_message"] = None
+                    _vs_files_cache["data"] = None
+                    st.success("Vector sync completed successfully.", icon=":material/check_circle:")
+                else:
+                    st.session_state["vector_cli_message"] = None
+                    st.error(f"Vector sync finished with exit code {exit_code}.", icon=":material/error:")
+
+                st.button("Refresh status", key="refresh_vector_job_done")
+                if st.button("Clear log", key="clear_vector_job"):
+                    st.session_state["vector_cli_job"] = None
+                    st.session_state["vector_cli_message"] = None
+                    st.session_state["vector_cli_last_return"] = None
+                    _safe_rerun()
 
 
         # Always compute vector store data for file management (this section needs accurate data)
@@ -1144,24 +1190,8 @@ if HAS_STREAMLIT_CONTEXT:
         else:
             st.caption("No excluded vector files to clean.")
 
-        # Show file management options only if there are files to manage
+        # Show cleanup options only if there are files to manage
         if vs_file_count > 0:
-            # Recompute combined pending cleanup count for the info summary
-            try:
-                vs_ids = {f.id for f in vs_files}
-                conn = get_connection(); cur = conn.cursor()
-                cur.execute("SELECT vector_file_id FROM documents WHERE no_upload IS TRUE AND vector_file_id IS NOT NULL")
-                excluded_live_ids = {row[0] for row in cur.fetchall()}
-                cur.close(); conn.close()
-                combined_pending_cleanup_count = len(((pending_replacement_ids | excluded_live_ids) & vs_ids))
-                live_display_count = len(current_ids - excluded_live_ids)
-            except Exception:
-                combined_pending_cleanup_count = len(pending_replacement_ids)
-                live_display_count = len(current_ids)
-        
-            st.info(f"**Vector Store contains {vs_file_count} files** ({live_display_count} live, {combined_pending_cleanup_count} pending cleanup, {len(true_orphan_ids)} orphans)", icon=":material/storage:")
-        
-            # Cleanup options - organized by priority and safety
             st.markdown("#### Vector Store Cleanup")
             st.caption("Clean up unnecessary files to save storage space and keep the vector store organized.")
         

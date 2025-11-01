@@ -11,7 +11,21 @@ from markdownify import markdownify as md
 import streamlit as st
 import json
 from openai import OpenAI
-from utils import get_connection, get_kb_entries, create_knowledge_base_table, admin_authentication, render_sidebar, compute_sha256, create_url_configs_table, save_url_configs, load_url_configs, initialize_default_url_configs
+from utils import (
+    get_connection,
+    get_kb_entries,
+    create_knowledge_base_table,
+    admin_authentication,
+    render_sidebar,
+    compute_sha256,
+    create_url_configs_table,
+    save_url_configs,
+    load_url_configs,
+    initialize_default_url_configs,
+    launch_cli_job,
+    CLIJob,
+    CLIJobError,
+)
 from pathlib import Path
 import pandas as pd
 
@@ -2031,7 +2045,6 @@ def main():
         with colC:
             dry_run = st.checkbox("Dry run (no DB writes, no LLM calls)", value=True,
                                 help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.")
-        keep_query_keys = set([x.strip() for x in keep_query_str.split(",") if x.strip()]) if keep_query_str else None
 
         st.markdown("---")
         st.markdown("## 🚀 Start Indexing")
@@ -2042,243 +2055,100 @@ def main():
             st.stop()
         
         # Show what will be processed
-        total_configs = len(st.session_state.url_configs)
-        configured_urls = [config.get('url', 'No URL') for config in st.session_state.url_configs if config.get('url')] 
 
         st.markdown("**Indexing will:** Discover  and crawl pages, process content with LLM, save to knowledge base, show real-time progress")
         
-        if 'scrape_log' not in st.session_state:
-            st.session_state.scrape_log = []
-        if 'scrape_results' not in st.session_state:
-            st.session_state.scrape_results = None
-        if 'scrape_running' not in st.session_state:
-            st.session_state.scrape_running = False
+        if "scrape_cli_job" not in st.session_state:
+            st.session_state["scrape_cli_job"] = None
+        if "scrape_cli_message" not in st.session_state:
+            st.session_state["scrape_cli_message"] = None
+        if "scrape_cli_last_return" not in st.session_state:
+            st.session_state["scrape_cli_last_return"] = None
 
-        # Main action button - more prominent
-        if st.button("🚀 **START INDEXING ALL URLS**", type="primary", width="stretch"):
+        job_mode = st.radio(
+            "Job mode",
+            options=["Scrape only", "Scrape + vector sync"],
+            index=1 if not dry_run else 0,
+            help="Choose whether to run vector store synchronization after scraping. Dry run forces 'Scrape only'.",
+        )
+        if dry_run and job_mode != "Scrape only":
+            st.info("Dry run enabled — skipping vector store synchronization.", icon=":material/info:")
+            job_mode = "Scrape only"
+
+        cli_job: CLIJob | None = st.session_state.get("scrape_cli_job")
+        job_running = cli_job is not None and cli_job.is_running()
+
+        if st.button("🚀 **START INDEXING ALL URLS**", type="primary", width="stretch", disabled=job_running):
             if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
                 st.error("❌ No valid URLs found in configurations. Please add at least one URL.")
-                st.stop()
-
-            st.session_state.scrape_running = True
-            st.session_state.scrape_results = None
-            
-            # Initialize log system
-            if 'scrape_log' not in st.session_state:
-                st.session_state.scrape_log = []
-            
-            def add_log(message, level="INFO"):
-                """Add a message to the scrape log with timestamp"""
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                log_entry = f"[{timestamp}] [{level}] {message}"
-                st.session_state.scrape_log.append(log_entry)
-                # Keep only last 100 log entries to prevent memory issues
-                if len(st.session_state.scrape_log) > 100:
-                    st.session_state.scrape_log = st.session_state.scrape_log[-100:]
-            
-            # Create terminal-like log display
-            st.markdown("##### 📟 Processing Log")
-            log_container = st.container()
-            with log_container:
-                # Create a fixed-height terminal-style log display
-                log_display = st.empty()
-                
-                def update_log_display():
-                    """Update the terminal display with current log"""
-                    if st.session_state.scrape_log:
-                        log_text = "\n".join(st.session_state.scrape_log[-20:])  # Show last 20 entries
-                    else:
-                        log_text = "Waiting for processing to start..."
-                    
-                    # Use text_area with fixed height for consistent layout
-                    # Clear the container and recreate to avoid key conflicts
-                    log_display.empty()
-                    with log_display.container():
-                        st.text_area(
-                            label="Processing log",
-                            value=log_text,
-                            height=300,  # Fixed height prevents layout jumping
-                            disabled=True,  # Read-only
-                            label_visibility="collapsed"  # Hide the label
-                        )
-            
-            # Clear log and start fresh
-            st.session_state.scrape_log = []
-            add_log("🚀 Starting indexing process...")
-            update_log_display()
-            
-            # reset per-run state
-            add_log("🧹 Clearing visited sets before scraping")
-            add_log(f"📊 Before clear - visited_norm has {len(visited_norm)} URLs")
-            visited_raw.clear()
-            visited_norm.clear()
-            frontier_seen.clear()
-            global base_path, processed_pages_count, dry_run_llm_eligible_count, llm_analysis_results
-            base_path = None  # Reset base path for new session
-            processed_pages_count = 0  # Reset processed pages counter
-            dry_run_llm_eligible_count = 0  # Reset dry run LLM counter
-            llm_analysis_results = []  # Reset LLM analysis results
-            recordset_latest_urls.clear()  # Reset per-recordset tracking
-            add_log("✅ Visited sets, base path, and all counters cleared")
-            update_log_display()
-
-            try:
-                conn = None if dry_run else get_connection()
-                add_log(f"🔌 Database connection: {'DRY RUN (no writes)' if dry_run else 'CONNECTED'}")
-                update_log_display()
-                
-                # Create progress indicators for real-time updates
-                progress_container = st.container()
-                with progress_container:
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    # Create fixed metric placeholders to prevent duplication
-                    metrics_cols = st.columns(3)
-                    with metrics_cols[0]:
-                        metric_urls = st.empty()
-                    with metrics_cols[1]:
-                        metric_llm = st.empty()
-                    with metrics_cols[2]:
-                        metric_config = st.empty()
-                
-                def update_metrics():
-                    """Update metrics without creating new containers"""
-                    metric_urls.metric("URLs Visited", len(visited_norm))
+            else:
+                try:
+                    save_url_configs(st.session_state.url_configs)
+                except Exception as exc:
+                    st.error(f"Failed to save configurations before starting job: {exc}")
+                else:
+                    cli_args = ["--budget", str(max_urls_per_run)]
+                    if keep_query_str:
+                        cli_args.extend(["--keep-query", keep_query_str])
                     if dry_run:
-                        metric_llm.metric("New/Changed Pages", dry_run_llm_eligible_count)
+                        cli_args.append("--dry-run")
+
+                    cli_mode = "both" if job_mode == "Scrape + vector sync" and not dry_run else "scrape"
+
+                    try:
+                        job = launch_cli_job(mode=cli_mode, args=cli_args)
+                    except CLIJobError as exc:
+                        st.error(f"Failed to start scraping job: {exc}", icon=":material/error:")
                     else:
-                        metric_llm.metric("LLM Processed", processed_pages_count)
-                    metric_config.metric("Current Config", f"{current_config}/{total_configs}")
-                
-                # Count total configurations to estimate progress
-                total_configs = len([c for c in st.session_state.url_configs if c["url"].strip()])
-                current_config = 0
-                add_log(f"📋 Found {total_configs} URL configuration(s) to process")
-                update_log_display()
-                
-                for config in st.session_state.url_configs:
-                    url = config["url"].strip()
-                    recordset = (config["recordset"] or "").strip()
-                    depth = config["depth"]
-                    exclude_paths = config["exclude_paths"]
-                    include_lang_prefixes = config["include_lang_prefixes"]
-                    if url:
-                        current_config += 1
-                        recordset_latest_urls.setdefault(recordset, set())
-                        
-                        add_log(f"🔍 Starting config {current_config}/{total_configs}: {url}")
-                        add_log(f"   📂 Recordset: {recordset}")
-                        add_log(f"   🔢 Max depth: {depth}")
-                        add_log(f"   🚫 Exclude paths: {exclude_paths}")
-                        add_log(f"   ✅ Include prefixes: {include_lang_prefixes}")
-                        update_log_display()
-                        
-                        # Update status
-                        status_text.write(f"🔄 **Processing URL {current_config}/{total_configs}:** {url}")
-                        
-                        # Update progress bar
-                        progress_bar.progress((current_config - 1) / total_configs)
-                        
-                        # Initialize metrics display
-                        update_metrics()
-                        
-                        # Create a progress callback closure with logging
-                        def update_progress():
-                            try:
-                                # Update status text immediately  
-                                if dry_run:
-                                    status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | New/Changed: {dry_run_llm_eligible_count}")
-                                else:
-                                    status_text.write(f"🔄 **Processing Config {current_config}/{total_configs}:** {url} | Visited: {len(visited_norm)} | LLM Processed: {processed_pages_count}")
-                                
-                                # Add log entry for significant progress
-                                if len(visited_norm) % 10 == 0:  # Log every 10 URLs
-                                    if dry_run:
-                                        add_log(f"📈 Progress: {len(visited_norm)} URLs visited, {dry_run_llm_eligible_count} new/changed pages")
-                                    else:
-                                        add_log(f"📈 Progress: {len(visited_norm)} URLs visited, {processed_pages_count} LLM processed")
-                                    update_log_display()
-                                
-                                # Update metrics using the dedicated function
-                                update_metrics()
-                            except Exception as e:
-                                print(f"[UI UPDATE ERROR] {e}")  # Debug UI errors
-                        
-                        scrape(
-                            url, depth=0, max_depth=depth, recordset=recordset,
-                            conn=conn, exclude_paths=exclude_paths, include_lang_prefixes=include_lang_prefixes,
-                            keep_query_keys=keep_query_keys, max_urls_per_run=max_urls_per_run, dry_run=dry_run,
-                            progress_callback=update_progress,
-                            log_callback=add_log
-                        )
-                        
-                        add_log(f"✅ Completed config {current_config}/{total_configs}: {url}")
-                        if dry_run:
-                            add_log(f"   📊 URLs visited: {len(visited_norm)}, new/changed pages: {dry_run_llm_eligible_count}")
-                        else:
-                            add_log(f"   📊 URLs visited: {len(visited_norm)}, LLM processed: {processed_pages_count}")
-                        update_log_display()
-                
-                # Final progress update
-                progress_bar.progress(1.0)
-                status_text.write("✅ **Completed all URL configurations**")
-                add_log("🎉 All URL configurations completed!")
-                if dry_run:
-                    add_log(f"📈 Final stats: {len(visited_norm)} URLs visited, {dry_run_llm_eligible_count} new/changed pages would be LLM processed")
+                        st.session_state["scrape_cli_job"] = job
+                        st.session_state["scrape_cli_message"] = "Scrape job running via cli_scrape.py."
+                        st.session_state["scrape_cli_last_return"] = None
+                        rerun_app()
+
+        if st.session_state["scrape_cli_message"]:
+            st.info(st.session_state["scrape_cli_message"], icon=":material/center_focus_weak:")
+
+        if cli_job:
+            st.markdown("### 📟 CLI Scrape Log")
+            log_lines = "\n".join(list(cli_job.logs))
+            st.text_area(
+                "Scrape job log",
+                value=log_lines or "Waiting for output...",
+                height=320,
+                disabled=True,
+                label_visibility="collapsed",
+            )
+
+            if cli_job.is_running():
+                st.info(
+                    f"Scrape job in progress (PID {cli_job.process.pid}). Use the controls below to refresh or cancel.",
+                    icon=":material/progress_activity:",
+                )
+                refresh_col, cancel_col = st.columns(2)
+                with refresh_col:
+                    st.button("Refresh status", key="refresh_scrape_job")
+                with cancel_col:
+                    if st.button("Cancel job", key="cancel_scrape_job"):
+                        cli_job.terminate()
+                        st.session_state["scrape_cli_message"] = "Cancellation requested. Check the log for confirmation."
+                        rerun_app()
+            else:
+                if st.session_state["scrape_cli_last_return"] is None:
+                    st.session_state["scrape_cli_last_return"] = cli_job.returncode()
+                exit_code = st.session_state["scrape_cli_last_return"] or 0
+                if exit_code == 0:
+                    st.session_state["scrape_cli_message"] = None
+                    st.success("Scrape job completed successfully.", icon=":material/check_circle:")
                 else:
-                    add_log(f"📈 Final stats: {len(visited_norm)} URLs visited, {processed_pages_count} pages processed by LLM")
-                update_log_display()
-                
-                if not dry_run:
-                    add_log("💾 Indexing completed - data saved to database")
-                else:
-                    add_log("🧪 Dry run completed - no database writes performed")
-                update_log_display()
+                    st.session_state["scrape_cli_message"] = None
+                    st.error(f"Scrape job finished with exit code {exit_code}.", icon=":material/error:")
 
-                stale_candidates = update_stale_documents(conn, dry_run=dry_run, log_callback=add_log)
-
-                summary_payload = {
-                    "dry_run": dry_run,
-                    "visited": len(visited_norm),
-                    "processed": processed_pages_count,
-                    "dry_run_llm": dry_run_llm_eligible_count,
-                    "max_urls_per_run": max_urls_per_run,
-                    "frontier": list(frontier_seen),
-                    "llm_analysis": list(llm_analysis_results),
-                    "log": list(st.session_state.scrape_log),
-                    "stale_candidates": stale_candidates,
-                }
-
-                render_crawl_summary(summary_payload, show_log=False)
-                st.session_state.scrape_results = summary_payload
-            except Exception as e:
-                st.error(f"Error during crawl: {e}")
-                add_log(f"❌ ERROR during crawl: {e}", "ERROR")
-                update_log_display()
-                print(f"[CRAWL ERROR] {e}")
-                st.session_state.scrape_results = {
-                    "dry_run": dry_run,
-                    "error": str(e),
-                    "log": list(st.session_state.scrape_log),
-                    "visited": len(visited_norm),
-                    "processed": processed_pages_count,
-                    "dry_run_llm": dry_run_llm_eligible_count,
-                    "max_urls_per_run": max_urls_per_run,
-                    "frontier": list(frontier_seen),
-                    "llm_analysis": list(llm_analysis_results),
-                    "stale_candidates": [],
-                }
-            finally:
-                if not dry_run and conn:
-                    conn.close()
-                    add_log("🔌 Database connection closed")
-                    update_log_display()
-                st.session_state.scrape_running = False
-
-        elif st.session_state.get('scrape_results'):
-            render_crawl_summary(st.session_state.scrape_results)
+                st.button("Refresh status", key="refresh_scrape_job_done")
+                if st.button("Clear log", key="clear_scrape_job"):
+                    st.session_state["scrape_cli_job"] = None
+                    st.session_state["scrape_cli_message"] = None
+                    st.session_state["scrape_cli_last_return"] = None
+                    rerun_app()
 
         # --- Show current knowledge base entries ---
         # Fetch entries for filters and display

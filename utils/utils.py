@@ -179,14 +179,16 @@ def render_save_chat_button(slot, messages: list[dict] | None = None) -> None:
     )
 
 from .db_migrations import run_migrations
-from .saml import (
+from .oidc import (
     allow_password_fallback,
-    build_saml_login_url,
-    ensure_saml_routes_registered,
+    build_oidc_login_url,
+    exchange_code_for_tokens,
+    fetch_userinfo,
+    generate_pkce_pair,
     get_default_next_path,
-    get_saml_allowlist,
-    is_saml_configured,
-    pop_saml_token,
+    get_oidc_allowlist,
+    get_redirect_uri,
+    is_oidc_configured,
 )
 
 BASE_DIR = Path(__file__).parent.parent
@@ -534,17 +536,27 @@ def _remove_query_params(keys: list[str]) -> None:
         set_qp(**filtered)
 
 
-def _saml_user_allowed(payload: dict) -> bool:
-    allowlist = get_saml_allowlist()
+def _safe_rerun() -> None:
+    try:
+        st.rerun()
+    except AttributeError:
+        try:
+            st.experimental_rerun()  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+
+
+def _oidc_user_allowed(email: str) -> bool:
+    allowlist = get_oidc_allowlist()
     if not allowlist:
         return True
-    candidate = (payload.get("email") or "").strip().lower()
+    candidate = email.strip().lower()
     return bool(candidate and candidate in allowlist)
 
 
 def admin_authentication(return_to: str | None = None):
     """
-    Authenticate admin users via SAML SSO (when available) or fallback password.
+    Authenticate admin users via OpenID Connect (when configured) or fallback password.
     """
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
@@ -566,41 +578,76 @@ def admin_authentication(return_to: str | None = None):
     else:
         st.header("Admin Login")
 
-    saml_ready = is_saml_configured()
-    if saml_ready:
-        try:
-            ensure_saml_routes_registered()
-        except Exception as exc:
-            st.error(f"SAML configuration error: {exc}")
-            saml_ready = False
+    oidc_ready = is_oidc_configured()
+    qp = _query_params_to_dict()
 
-    if saml_ready:
-        qp = _query_params_to_dict()
-        raw_token = qp.get("saml_token")
-        token = raw_token[0] if isinstance(raw_token, list) else raw_token
-        if isinstance(token, str) and token:
-            payload = pop_saml_token(token)
-            _remove_query_params(["saml_token"])
-            if payload is None:
-                st.error("Your SSO login expired. Please try again.")
-            elif not _saml_user_allowed(payload):
-                st.error("Your account is not authorized for admin access.")
+    if oidc_ready and not st.session_state.authenticated:
+        error = qp.get("error")
+        if error:
+            description = qp.get("error_description") or "Authentication failed."
+            st.error(f"OIDC error: {error} — {description}")
+            _remove_query_params(["error", "error_description", "state", "code"])
+
+        code = qp.get("code")
+        state_param = qp.get("state")
+        expected_state = st.session_state.get("oidc_state")
+        code_verifier = st.session_state.get("oidc_code_verifier")
+
+        if code and state_param and expected_state and code_verifier:
+            if state_param != expected_state:
+                st.error("Login session mismatch. Please try again.")
             else:
-                st.session_state.authenticated = True
-                st.session_state["admin_email"] = payload.get("email") or st.secrets.get("ADMIN_EMAIL")
-                if payload.get("name"):
-                    st.session_state["admin_name"] = payload.get("name")
-                st.session_state["saml_attributes"] = payload.get("attributes", {})
-                return True
+                try:
+                    token_payload = exchange_code_for_tokens(
+                        code,
+                        code_verifier,
+                        redirect_uri=get_redirect_uri(),
+                    )
+                    access_token = token_payload.get("access_token")
+                    if not access_token:
+                        raise RuntimeError("OIDC token response did not include an access token.")
+                    userinfo = fetch_userinfo(access_token)
+                except Exception as exc:
+                    st.error(f"Authentication failed: {exc}")
+                else:
+                    email = (userinfo.get("email") or userinfo.get("preferred_username") or "").strip()
+                    if not email:
+                        st.error("OIDC provider did not return an email address.")
+                    elif not _oidc_user_allowed(email):
+                        st.error("Your account is not authorized for admin access.")
+                    else:
+                        st.session_state.authenticated = True
+                        st.session_state["admin_email"] = email or st.secrets.get("ADMIN_EMAIL")
+                        if userinfo.get("name"):
+                            st.session_state["admin_name"] = userinfo.get("name")
+                        st.session_state["oidc_claims"] = userinfo
+                        _remove_query_params(["code", "state", "session_state"])
+                        st.session_state.pop("oidc_state", None)
+                        st.session_state.pop("oidc_code_verifier", None)
+                        st.session_state.pop("oidc_code_challenge", None)
+                        _safe_rerun()
+                        return True
+
+            _remove_query_params(["code", "state"])
+            st.session_state.pop("oidc_state", None)
+            st.session_state.pop("oidc_code_verifier", None)
+            st.session_state.pop("oidc_code_challenge", None)
 
         if not st.session_state.authenticated:
-            if "saml_state" not in st.session_state:
-                st.session_state.saml_state = uuid.uuid4().hex
+            if "oidc_state" not in st.session_state:
+                st.session_state["oidc_state"] = uuid.uuid4().hex
+                verifier, challenge = generate_pkce_pair()
+                st.session_state["oidc_code_verifier"] = verifier
+                st.session_state["oidc_code_challenge"] = challenge
+            elif "oidc_code_challenge" not in st.session_state or "oidc_code_verifier" not in st.session_state:
+                verifier, challenge = generate_pkce_pair()
+                st.session_state["oidc_code_verifier"] = verifier
+                st.session_state["oidc_code_challenge"] = challenge
 
-            next_target = return_to or qp.get("next") or get_default_next_path() or "/"
-            if isinstance(next_target, list):
-                next_target = next_target[0]
-            login_url = build_saml_login_url(st.session_state.saml_state, next_path=next_target)
+            login_url = build_oidc_login_url(
+                st.session_state["oidc_state"],
+                st.session_state["oidc_code_challenge"],
+            )
             try:
                 st.link_button("Continue with SSO", login_url, type="primary")
             except AttributeError:
@@ -616,7 +663,7 @@ def admin_authentication(return_to: str | None = None):
     password = st.text_input("Admin Password", type="password")
     if password == st.secrets.get("ADMIN_PASSWORD") and password:
         st.session_state.authenticated = True
-        st.rerun()
+        _safe_rerun()
     elif password:
         st.error("Incorrect password.")
     return False
@@ -673,7 +720,14 @@ def render_sidebar(
 
     def _perform_logout():
         st.session_state.authenticated = False
-        for key in ("saml_state", "saml_attributes", "admin_name", "admin_email"):
+        for key in (
+            "oidc_state",
+            "oidc_code_verifier",
+            "oidc_code_challenge",
+            "oidc_claims",
+            "admin_name",
+            "admin_email",
+        ):
             st.session_state.pop(key, None)
     
 
