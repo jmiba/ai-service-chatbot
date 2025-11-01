@@ -194,6 +194,35 @@ from .oidc import (
 BASE_DIR = Path(__file__).parent.parent
 ICON_PATH = (BASE_DIR / "assets" / "Key.png")
 
+BLOCK_UI_HTML = """
+<style>
+#global-block-ui-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(2px);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #1f2937;
+    pointer-events: all;
+}
+[data-testid="stSidebar"],
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarNav"],
+[data-testid="stHeader"] button,
+[data-testid="stToolbar"] button {
+    pointer-events: none !important;
+    filter: grayscale(55%);
+    opacity: 0.45;
+}
+</style>
+<div id="global-block-ui-overlay">Working… please hold on.</div>
+"""
+
 def load_css(file_path: str = "css/styles.css") -> None:
     """Inject a CSS file into the current Streamlit app."""
     css_path = BASE_DIR / file_path
@@ -539,9 +568,17 @@ def _remove_query_params(keys: list[str]) -> None:
 def _safe_rerun() -> None:
     try:
         st.rerun()
+    except RuntimeError as exc:
+        if "Event loop is closed" in str(exc):
+            return
+        raise
     except AttributeError:
         try:
             st.experimental_rerun()  # type: ignore[attr-defined]
+        except RuntimeError as exc:
+            if "Event loop is closed" in str(exc):
+                return
+            raise
         except AttributeError:
             pass
 
@@ -770,6 +807,19 @@ def render_sidebar(
 # Functions to save a document to the knowledge base
 def compute_sha256(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def show_blocking_overlay():
+    placeholder = st.empty()
+    placeholder.markdown(BLOCK_UI_HTML, unsafe_allow_html=True)
+    return placeholder
+
+
+def hide_blocking_overlay(placeholder) -> None:
+    try:
+        placeholder.empty()
+    except Exception:
+        pass
 
 # URL Configuration Management Functions
 def save_url_configs(url_configs):

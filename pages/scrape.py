@@ -25,6 +25,8 @@ from utils import (
     launch_cli_job,
     CLIJob,
     CLIJobError,
+    show_blocking_overlay,
+    hide_blocking_overlay,
 )
 from pathlib import Path
 import pandas as pd
@@ -2082,18 +2084,22 @@ def main():
             if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
                 st.error("❌ No valid URLs found in configurations. Please add at least one URL.")
             else:
-                try:
-                    save_url_configs(st.session_state.url_configs)
-                except Exception as exc:
-                    st.error(f"Failed to save configurations before starting job: {exc}")
-                else:
-                    cli_args = ["--budget", str(max_urls_per_run)]
-                    if keep_query_str:
-                        cli_args.extend(["--keep-query", keep_query_str])
-                    if dry_run:
-                        cli_args.append("--dry-run")
+                cli_args = ["--budget", str(max_urls_per_run)]
+                if keep_query_str:
+                    cli_args.extend(["--keep-query", keep_query_str])
+                if dry_run:
+                    cli_args.append("--dry-run")
 
-                    cli_mode = "both" if job_mode == "Scrape + vector sync" and not dry_run else "scrape"
+                cli_mode = "both" if job_mode == "Scrape + vector sync" and not dry_run else "scrape"
+
+                overlay = show_blocking_overlay()
+                rerun_needed = False
+                try:
+                    try:
+                        save_url_configs(st.session_state.url_configs)
+                    except Exception as exc:
+                        st.error(f"Failed to save configurations before starting job: {exc}")
+                        return
 
                     try:
                         job = launch_cli_job(mode=cli_mode, args=cli_args)
@@ -2103,7 +2109,11 @@ def main():
                         st.session_state["scrape_cli_job"] = job
                         st.session_state["scrape_cli_message"] = "Scrape job running via cli_scrape.py."
                         st.session_state["scrape_cli_last_return"] = None
-                        rerun_app()
+                        rerun_needed = True
+                finally:
+                    hide_blocking_overlay(overlay)
+                if rerun_needed:
+                    rerun_app()
 
         if st.session_state["scrape_cli_message"]:
             st.info(st.session_state["scrape_cli_message"], icon=":material/center_focus_weak:")
