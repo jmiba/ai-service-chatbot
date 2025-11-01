@@ -24,7 +24,9 @@ Try it: https://viadrina.streamlit.app
 
 ## 🆕 What’s New (recent changes)
 
-
+- Switched the admin login flow to OpenID Connect (authorization code + PKCE) with email allowlists instead of the old SAML integration
+- Streamlit now launches scraping/vectorization runs via the CLI helper so heavy OpenAI work happens out-of-process while the UI stays responsive
+- Web search filters, MCP tools, and request classifications remain editable from the admin pages
 - Web search settings moved to Admin → Filters:
   - Allowed Domains (optional): restrict web search to these domains when set; if empty, web search is unrestricted
   - User Location: type (approximate/precise), country, city, region (optional), timezone (optional)
@@ -35,7 +37,6 @@ Try it: https://viadrina.streamlit.app
 - Added manual entries to the knowledge base as internal documents, made them editable
 - DBIS database records are now reachable through MCP tools; configure once and the chatbot can query subjects or resources in real time (see *DBIS MCP Integration* below)
 - Sidebar **Save chat** button exports the current conversation (including citations) as Markdown for easy sharing or archiving
-- Async logging and cached LLM settings keep the UI responsive even when the DB is busy
 
 
 ## 🚀 Quick Start
@@ -116,34 +117,28 @@ During a chat turn the UI displays “Tool use…” whenever the model actually
 
 ## 🔧 Configuration Notes
 
-### Admin Login (SAML SSO)
+### Admin Login (OpenID Connect)
 - By default the admin pages accept a single password stored in `ADMIN_PASSWORD`.
-- To enable multi-user SSO, add a `[saml]` block to `.streamlit/secrets.toml` and provide your IdP metadata:
-  ```tom
-  [saml]
-  sp_entity_id = "https://your-app.example.com/metadata"
-  sp_acs = "https://your-app.example.com/saml/acs"
-  idp_entity_id = "https://idp.example.com/metadata"
-  idp_sso_url = "https://idp.example.com/sso"
-  idp_x509_cert = """-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"""
+- To enable multi-user SSO, add an `[oidc]` block to `.streamlit/secrets.toml` with your provider details:
+  ```toml
+  [oidc]
+  client_id = "your-client-id"
+  client_secret = "your-client-secret"           # optional for public clients
+  redirect_uri = "https://your-app.example.com/" # must match the value registered with the IdP
+  authorization_endpoint = "https://idp.example.com/oauth2/v1/authorize"
+  token_endpoint = "https://idp.example.com/oauth2/v1/token"
+  userinfo_endpoint = "https://idp.example.com/oauth2/v1/userinfo"
+  scopes = ["openid", "profile", "email"]       # optional; defaults to these three
   allowed_admin_emails = ["librarian@example.com", "it@example.com"]
-  allow_password_fallback = false  # set true only if you want the old password as backup
-  email_attribute = "mail"         # optional; defaults to "mail"
-  name_attribute = "displayName"   # optional; defaults to "displayName"
+  allow_password_fallback = false                 # set true only if you want the old password as backup
+  # Optional extras:
+  # issuer = "https://idp.example.com/"
+  # discovery_url = "https://idp.example.com/.well-known/openid-configuration"
+  # authorize_params = { prompt = "login" }
+  # token_auth_method = "client_secret_basic"     # defaults to client_secret_post
   ```
-- Install the new dependency (`pip install python3-saml xmlsec`) and expose the generated service-provider metadata at `/saml/metadata` to your IdP. Successful SSO logins are persisted in `st.session_state`, and only users in `allowed_admin_emails` gain admin access.
-- Streamlit ≥1.49 no longer exposes `get_router`; the app now registers the SAML endpoints directly with the underlying Tornado server, so you can keep current Streamlit releases without extra configuration.
-- macOS + Python 3.13 tip: the prebuilt `xmlsec` wheel may ship with a different `libxml2` than the `lxml` wheel, causing `xmlsec.InternalError: lxml & xmlsec libxml2 library version mismatch`.
-  - Install the system libraries once with Homebrew: `brew install libxml2 libxslt libxmlsec1 pkg-config`.
-  - Rebuild both dependencies so they link against the same `libxml2` version:
-    ```bash
-    export XML2_CONFIG=/opt/homebrew/opt/libxml2/bin/xml2-config
-    export XSLT_CONFIG=/opt/homebrew/opt/libxslt/bin/xslt-config
-    export PKG_CONFIG_PATH=/opt/homebrew/opt/libxml2/lib/pkgconfig:/opt/homebrew/opt/libxslt/lib/pkgconfig:/opt/homebrew/opt/libxmlsec1/lib/pkgconfig
-    python3 -m pip install --no-binary lxml 'lxml==5.4.0'
-    python3 -m pip install --no-binary xmlsec xmlsec
-    ```
-  - Verify with `python3 -c "import xmlsec; print(xmlsec.get_libxml_version())"` – both `xmlsec` and `lxml` should report the same `(major, minor, micro)` tuple.
+- The app performs the OAuth2 authorization-code flow with PKCE entirely inside Streamlit, storing the resulting user claims in `st.session_state`. Only users whose email appears in `allowed_admin_emails` gain admin access; omit the list to allow any authenticated user.
+- No additional dependencies beyond `httpx` are required. Make sure the redirect URI you configure in your IdP matches the Streamlit URL (including HTTPS) that hosts the admin pages.
 
 ### Web Search & Tools (Admin → Settings)
 - Allowed Domains (optional)
