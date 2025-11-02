@@ -61,6 +61,54 @@ def _ensure_streamlit_secrets():
 
 _ensure_streamlit_secrets()
 
+
+def _patch_streamlit_caching():
+    """Disable Streamlit's runtime-dependent caches when running headless."""
+    try:
+        from streamlit.runtime.runtime import Runtime
+        runtime_exists = Runtime.exists()
+    except Exception:
+        runtime_exists = False
+
+    if runtime_exists:
+        return
+
+    import functools
+
+    class _NoOpCacheDecorator:
+        def __call__(self, *dec_args, **dec_kwargs):
+            if dec_args and callable(dec_args[0]) and len(dec_args) == 1 and not dec_kwargs:
+                func = dec_args[0]
+
+                @functools.wraps(func)
+                def wrapped(*args, **kwargs):
+                    return func(*args, **kwargs)
+
+                return wrapped
+
+            def decorator(func):
+                @functools.wraps(func)
+                def wrapped(*args, **kwargs):
+                    return func(*args, **kwargs)
+
+                return wrapped
+
+            return decorator
+
+        def clear(self):
+            # Mirrors the cache clear API without doing anything.
+            return None
+
+    noop_cache = _NoOpCacheDecorator()
+
+    if hasattr(st, "cache_data"):
+        st.cache_data = noop_cache
+    if hasattr(st, "cache_resource"):
+        st.cache_resource = noop_cache
+
+
+_patch_streamlit_caching()
+
 # Patch Streamlit UI functions to be safe in headless runs
 for _fn_name in ("error", "warning", "info", "success"):
     try:
