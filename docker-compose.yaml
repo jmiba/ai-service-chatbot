@@ -2,6 +2,7 @@ services:
   app:
     volumes:
       - /home/chatbot/app/.streamlit:/app/.streamlit
+      - /home/chatbot/app/state:/app/state
     build: .
     restart: unless-stopped
     ports:
