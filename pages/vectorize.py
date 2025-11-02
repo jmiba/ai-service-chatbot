@@ -427,7 +427,7 @@ def compute_vector_store_status(vector_store_id: str, *, force_refresh: bool = F
 
     return {
         "vector_store_id": vector_store_id,
-        "generated_at": datetime.datetime.utcnow().isoformat(),
+        "generated_at": datetime.datetime.now(datetime.UTC).isoformat(),
         "vs_file_count": len(vs_ids),
         "live_file_count": len(live_ids_display),
         "pending_cleanup_count": len(combined_pending_cleanup_ids),
@@ -463,7 +463,7 @@ def _load_vector_details(vector_store_id: str, *, force: bool = False) -> dict[s
         excluded_live_ids = set()
 
     details = {
-        "loaded_at": datetime.datetime.utcnow(),
+        "loaded_at": datetime.datetime.now(datetime.UTC),
         "vs_file_count": len(vs_files),
         "vs_ids": vs_ids,
         "current_ids": current_ids,
@@ -785,7 +785,9 @@ if HAS_STREAMLIT_CONTEXT:
                 generated_raw = status_snapshot.get("generated_at")
                 try:
                     generated_at = datetime.datetime.fromisoformat(generated_raw)
-                    age = datetime.datetime.utcnow() - generated_at
+                    if generated_at.tzinfo is None:
+                        generated_at = generated_at.replace(tzinfo=datetime.UTC)
+                    age = datetime.datetime.now(datetime.UTC) - generated_at
                     age_display = f"{int(age.total_seconds() // 60)} min" if age.total_seconds() >= 60 else f"{int(age.total_seconds())} sec"
                 except Exception:
                     generated_at = None
@@ -818,7 +820,7 @@ if HAS_STREAMLIT_CONTEXT:
                     st.caption(
                         f"Snapshot vom {generated_at.isoformat(timespec='seconds')} (Alter: {age_display})."
                     )
-                    if (datetime.datetime.utcnow() - generated_at) >= datetime.timedelta(minutes=30):
+                    if (datetime.datetime.now(datetime.UTC) - generated_at) >= datetime.timedelta(minutes=30):
                         st.info(
                             "Der Schnappschuss ist älter als 30 Minuten. Aktualisieren Sie ihn bei Bedarf unten.",
                             icon=":material/info:",
@@ -1035,7 +1037,9 @@ if HAS_STREAMLIT_CONTEXT:
         if vector_details:
             loaded_at = vector_details.get("loaded_at")
             if loaded_at:
-                age_minutes = int((datetime.datetime.utcnow() - loaded_at).total_seconds() // 60)
+                if loaded_at.tzinfo is None:
+                    loaded_at = loaded_at.replace(tzinfo=datetime.UTC)
+                age_minutes = int((datetime.datetime.now(datetime.UTC) - loaded_at).total_seconds() // 60)
                 st.caption(f"Details geladen am {loaded_at.isoformat(timespec='seconds')} (Alter: {age_minutes} min).")
 
             vs_file_count = vector_details["vs_file_count"]
