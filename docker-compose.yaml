@@ -1,5 +1,7 @@
 services:
   app:
+    volumes:
+      - /home/chatbot/app/.streamlit:/app/.streamlit
     build: .
     restart: unless-stopped
     ports:
