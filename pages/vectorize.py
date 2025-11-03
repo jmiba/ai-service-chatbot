@@ -1164,7 +1164,7 @@ if HAS_STREAMLIT_CONTEXT:
                                 hide_blocking_overlay(overlay)
                     else:
                         st.markdown("**Clean Up Old Versions**")
-                        st.write("✅ No old versions to clean up")
+                        st.success("No old versions to clean up", icon=":material/check_circle:")
                         st.caption("All file replacements have been properly finalized")
 
                 st.markdown("#### Nuclear Option")
