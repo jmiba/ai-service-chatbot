@@ -1134,6 +1134,7 @@ if HAS_STREAMLIT_CONTEXT:
                                         _vs_files_cache["data"] = None
                                         st.session_state.pop("vector_details", None)
                                         st.success("Deleted all orphaned files from the vector store.", icon=":material/check_circle:")
+                                        rerun_app()
                                     except Exception as e:
                                         st.error(f"Failed to delete orphans: {e}", icon=":material/error:")
                             finally:
@@ -1158,6 +1159,7 @@ if HAS_STREAMLIT_CONTEXT:
                                         _vs_files_cache["data"] = None
                                         st.session_state.pop("vector_details", None)
                                         st.success("Cleaned up old file versions and updated database references.", icon=":material/check_circle:")
+                                        rerun_app()
                                     except Exception as e:
                                         st.error(f"Failed to clean up old versions: {e}", icon=":material/error:")
                             finally:
@@ -1187,6 +1189,7 @@ if HAS_STREAMLIT_CONTEXT:
                                     _vs_files_cache["data"] = None
                                     st.session_state.pop("vector_details", None)
                                     st.success("All files deleted from the vector store.", icon=":material/check_circle:")
+                                    rerun_app()
                                 except Exception as e:
                                     st.error(f"Failed to delete files: {e}", icon=":material/error:")
                         finally:
