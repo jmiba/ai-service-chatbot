@@ -10,6 +10,7 @@ import requests
 from markdownify import markdownify as md
 import streamlit as st
 import json
+import html as html_lib
 from openai import OpenAI
 from utils import (
     get_connection,
@@ -28,6 +29,7 @@ from utils import (
     show_blocking_overlay,
     hide_blocking_overlay,
     get_document_metrics,
+    release_job_lock,
 )
 from pathlib import Path
 import pandas as pd
@@ -2097,6 +2099,10 @@ def main():
                         return
 
                     try:
+                        try:
+                            release_job_lock("scrape_job")
+                        except Exception:
+                            pass
                         job = launch_cli_job(mode=cli_mode, args=cli_args, auto_rerun=True)
                     except CLIJobError as exc:
                         st.error(f"Failed to start scraping job: {exc}", icon=":material/error:")
@@ -2116,40 +2122,80 @@ def main():
         if cli_job:
             st.markdown("### CLI Scrape Log")
             log_lines = "\n".join(list(cli_job.logs))
-            st.text_area(
-                "Scrape job log",
-                value=log_lines or "Waiting for output...",
-                height=320,
-                disabled=True,
-                label_visibility="collapsed",
-            )
 
-            if cli_job.is_running():
+            auto_scroll_script = """
+<script>
+const logContainer = document.getElementById("scrape-log");
+if (logContainer) {
+  logContainer.scrollTop = logContainer.scrollHeight;
+}
+</script>
+"""
+            log_html = f"""
+<div id="scrape-log-wrapper">
+  <div id="scrape-log" style="
+      height: 320px;
+      overflow-y: auto;
+      padding: 0.5rem;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: 'Fira Code', monospace;
+      font-size: 0.85rem;
+      border-radius: 0;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      white-space: pre-wrap;
+      line-height: 1.35;
+  ">
+  {html_lib.escape(log_lines) if log_lines else "Waiting for output..."}
+  </div>
+</div>
+{auto_scroll_script}
+"""
+            st.components.v1.html(log_html, height=360)
+
+            job_running = cli_job.is_running()
+            if job_running:
                 st.info(
                     f"Scrape job in progress (PID {cli_job.process.pid}). Use the controls below to refresh or cancel.",
-                    icon=":material/progress_activity:",
+                    icon=":material/hourglass:",
                 )
                 refresh_col, cancel_col = st.columns(2)
                 with refresh_col:
-                    st.button("Refresh status", key="refresh_scrape_job")
+                    st.button("Refresh status", key="refresh_scrape_job", icon=":material/refresh:")
                 with cancel_col:
-                    if st.button("Cancel job", key="cancel_scrape_job"):
+                    if st.button("  Cancel job  ", key="cancel_scrape_job", icon=":material/cancel:"):
                         cli_job.terminate()
+                        try:
+                            release_job_lock("scrape_job")
+                        except Exception:
+                            pass
                         st.session_state["scrape_cli_message"] = "Cancellation requested. Check the log for confirmation."
                         rerun_app()
             else:
+                if st.session_state["scrape_cli_last_return"] is None:
+                    st.session_state["scrape_cli_last_return"] = cli_job.returncode()
+
+            if not job_running:
                 if st.session_state["scrape_cli_last_return"] is None:
                     st.session_state["scrape_cli_last_return"] = cli_job.returncode()
                 exit_code = st.session_state["scrape_cli_last_return"] or 0
                 if exit_code == 0:
                     st.session_state["scrape_cli_message"] = None
                     st.success("Scrape job completed successfully.", icon=":material/check_circle:")
+                    try:
+                        release_job_lock("scrape_job")
+                    except Exception:
+                        pass
                 else:
                     st.session_state["scrape_cli_message"] = None
                     st.error(f"Scrape job finished with exit code {exit_code}.", icon=":material/error:")
+                    try:
+                        release_job_lock("scrape_job")
+                    except Exception:
+                        pass
 
-                st.button("Refresh status", key="refresh_scrape_job_done")
-                if st.button("Clear log", key="clear_scrape_job"):
+                st.button("Refresh status", key="refresh_scrape_job_done", icon=":material/refresh:")
+                if st.button("Clear log", key="clear_scrape_job", icon=":material/delete:"):
                     st.session_state["scrape_cli_job"] = None
                     st.session_state["scrape_cli_message"] = None
                     st.session_state["scrape_cli_last_return"] = None
@@ -2225,6 +2271,12 @@ def main():
             index=0,
             help="Filter entries based on whether they were missing in the latest crawl"
         )
+        search_query = st.text_input(
+            "Search text",
+            value="",
+            placeholder="Filter by URL, title, or content…",
+            help="Case-insensitive search across URL, title, and markdown content",
+        )
 
         filtered = entries
         if selected_recordset != "All":
@@ -2246,6 +2298,15 @@ def main():
                 filtered = [entry for entry in filtered if len(entry) > 13 and bool(entry[13])]
             else:
                 filtered = [entry for entry in filtered if len(entry) > 13 and not bool(entry[13])]
+        if search_query:
+            needle = search_query.lower()
+            def _matches(entry: tuple) -> bool:
+                url = (entry[1] or "").lower()
+                title = (entry[2] or "").lower()
+                content = (entry[8] or "").lower()
+                return needle in url or needle in title or needle in content
+
+            filtered = [entry for entry in filtered if _matches(entry)]
 
         filter_signature = (
             selected_recordset,
@@ -2253,6 +2314,7 @@ def main():
             selected_vector_status,
             selected_exclusion_status,
             selected_stale_status,
+            search_query,
         )
         if st.session_state.get("kb_filter_signature") != filter_signature:
             st.session_state["kb_filter_signature"] = filter_signature

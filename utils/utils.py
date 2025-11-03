@@ -406,6 +406,28 @@ def get_document_metrics() -> dict[str, int]:
         conn.close()
 
 
+def release_job_lock(name: str) -> None:
+    """Best-effort removal of a named job lock."""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM job_locks WHERE name=%s", (name,))
+        conn.commit()
+    except Exception:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def get_document_by_identifier(*, doc_id: int | None = None, file_id: str | None = None):
     """Fetch a single document row by numeric id or vector/legacy file id."""
     if doc_id is None and not file_id:

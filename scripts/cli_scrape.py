@@ -25,7 +25,7 @@ import sys
 import argparse
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure project root on sys.path when run from cron
@@ -180,7 +180,7 @@ def main():
     parser.set_defaults(vectorize=True)
     args = parser.parse_args()
 
-    start_ts = datetime.utcnow().isoformat()
+    start_ts = datetime.now(timezone.utc).isoformat()
     print(
         f"[INFO] cli_scrape start {start_ts}Z budget={args.budget} "
         f"dry_run={args.dry_run} mode={args.mode} vectorize={args.vectorize}"
@@ -248,7 +248,7 @@ def main():
 
         # Logging callbacks
         def log_cb(msg, level="INFO"):
-            ts = datetime.utcnow().strftime("%H:%M:%S")
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
             print(f"[{ts}] [{level}] {msg}")
 
         def prog_cb():

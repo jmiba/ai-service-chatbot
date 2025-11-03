@@ -120,7 +120,13 @@ def launch_cli_job(
 
     logs: Deque[str] = deque(maxlen=max_log_lines)
 
-    rerun_enabled = bool(auto_rerun and RerunData and get_script_run_ctx)
+    rerun_ctx = None
+    if auto_rerun and RerunData and get_script_run_ctx:
+        try:
+            rerun_ctx = get_script_run_ctx()  # type: ignore[call-arg]
+        except Exception:
+            rerun_ctx = None
+    rerun_enabled = rerun_ctx is not None
 
     def _reader() -> None:
         last_rerun_ts = 0.0
@@ -136,26 +142,21 @@ def launch_cli_job(
                         log_callback(line)
                     except Exception:
                         pass
-                if rerun_enabled:
-                    try:
-                        ctx = get_script_run_ctx()  # type: ignore[call-arg]
-                    except Exception:
-                        ctx = None
-                    if ctx and getattr(ctx, "script_requests", None):
-                        now = time.monotonic()
-                        if now - last_rerun_ts > rerun_interval:
-                            try:
-                                ctx.script_requests.request_rerun(  # type: ignore[attr-defined]
-                                    RerunData(is_auto_rerun=True)  # type: ignore[call-arg]
-                                )
-                                last_rerun_ts = now
-                            except Exception:
-                                pass
+                if rerun_enabled and getattr(rerun_ctx, "script_requests", None):
+                    now = time.monotonic()
+                    if now - last_rerun_ts > rerun_interval:
+                        try:
+                            rerun_ctx.script_requests.request_rerun(  # type: ignore[attr-defined]
+                                RerunData(is_auto_rerun=True)  # type: ignore[call-arg]
+                            )
+                            last_rerun_ts = now
+                        except Exception:
+                            pass
 
     thread = threading.Thread(target=_reader, name=f"cli-scrape-{mode}", daemon=True)
     if rerun_enabled and add_script_run_ctx:
         try:
-            add_script_run_ctx(thread)  # type: ignore[arg-type]
+            add_script_run_ctx(thread, rerun_ctx)  # type: ignore[arg-type]
         except Exception:
             pass
     thread.start()
