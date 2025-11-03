@@ -2039,8 +2039,11 @@ def main():
             max_urls_per_run = st.number_input("Max URLs per run (crawl budget)",
                                             min_value=100, max_value=100000, value=5000, step=100)
         with colB:
-            keep_query_str = st.text_input("Whitelist query keys (comma-separated)",
-                                        value="", help="Leave empty to drop ALL query params. Example: page,lang")
+            keep_query_str = st.text_input(
+                "Whitelist query keys (comma-separated)",
+                value="",
+                help="By default the crawler normalizes links by stripping all query strings (so /page?id=123 and /page?id=456 collapse to the same URL and you don’t crawl endless variants). If you enter a list here—e.g. page,lang—those keys are preserved while all others are dropped. Use it when certain query params are meaningful (pagination, language, etc.) and you need the crawler to treat ?page=2 or ?lang=en as distinct pages, while still ignoring the rest (like tracking tags).",
+            )
         with colC:
             dry_run = st.checkbox("Dry run (no DB writes, no LLM calls)", value=True,
                                 help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.")
