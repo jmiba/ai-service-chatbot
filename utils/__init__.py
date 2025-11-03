@@ -42,6 +42,7 @@ from .utils import (
     release_job_lock,
     show_blocking_overlay,
     hide_blocking_overlay,
+    render_log_output,
 )
 
 from .cli_runner import CLIJob, CLIJobError, launch_cli_job

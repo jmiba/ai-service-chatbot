@@ -9,6 +9,7 @@ from typing import Any
 
 from openai import OpenAI, AsyncOpenAI
 import streamlit as st
+
 from utils import (
     get_connection,
     admin_authentication,
@@ -21,6 +22,7 @@ from utils import (
     write_vector_status,
     show_blocking_overlay,
     hide_blocking_overlay,
+    render_log_output,
 )
 
 try:
@@ -34,11 +36,29 @@ except (ImportError, ModuleNotFoundError):
     def get_script_run_ctx():  # type: ignore
         return None
 
-_script_ctx = get_script_run_ctx()
 if streamlit_runtime_exists:
-    HAS_STREAMLIT_CONTEXT = streamlit_runtime_exists() and _script_ctx is not None
+    try:
+        if streamlit_runtime_exists():
+            _script_ctx = get_script_run_ctx()
+        else:
+            _script_ctx = None
+    except Exception:
+        _script_ctx = None
 else:
-    HAS_STREAMLIT_CONTEXT = _script_ctx is not None
+    _script_ctx = None
+
+HAS_STREAMLIT_CONTEXT = _script_ctx is not None
+
+
+def rerun_app() -> None:
+    """Trigger a Streamlit rerun compatible with recent and legacy versions."""
+    try:
+        st.rerun()
+    except AttributeError:
+        try:
+            st.experimental_rerun()
+        except AttributeError:
+            pass
 
 
 def _get_required_secret(key: str) -> str:
@@ -934,6 +954,7 @@ if HAS_STREAMLIT_CONTEXT:
                 st.warning("A vector sync job is already running.", icon=":material/warning:")
             else:
                 overlay = show_blocking_overlay()
+                rerun_needed = False
                 try:
                     job = launch_cli_job(mode="vectorize")
                 except CLIJobError as exc:
@@ -942,22 +963,20 @@ if HAS_STREAMLIT_CONTEXT:
                     st.session_state["vector_cli_job"] = job
                     st.session_state["vector_cli_message"] = "Vector sync running via cli_scrape.py."
                     st.session_state["vector_cli_last_return"] = None
+                    rerun_needed = True
                 finally:
                     hide_blocking_overlay(overlay)
+                if rerun_needed:
+                    rerun_app()
 
         if st.session_state["vector_cli_message"]:
             st.info(st.session_state["vector_cli_message"], icon=":material/center_focus_weak:")
 
         if vector_job:
-            st.markdown("### 📟 CLI Sync Log")
+            st.markdown("### CLI Sync Log")
             log_lines = "\n".join(list(vector_job.logs))
-            st.text_area(
-                "Vector sync log",
-                value=log_lines or "Waiting for output...",
-                height=320,
-                disabled=True,
-                label_visibility="collapsed",
-            )
+
+            render_log_output(log_lines, element_id="vector-sync-log")
 
             if vector_job.is_running():
                 st.info(
@@ -971,6 +990,7 @@ if HAS_STREAMLIT_CONTEXT:
                     if st.button("Cancel job", key="cancel_vector_job"):
                         vector_job.terminate()
                         st.session_state["vector_cli_message"] = "Cancellation requested. Check the log for confirmation."
+                        rerun_app()
             else:
                 if st.session_state["vector_cli_last_return"] is None:
                     st.session_state["vector_cli_last_return"] = vector_job.returncode()
@@ -990,10 +1010,27 @@ if HAS_STREAMLIT_CONTEXT:
                     st.session_state["vector_cli_message"] = None
                     st.session_state["vector_cli_last_return"] = None
 
-
-        details_controls = st.columns(2)
+        st.markdown("---")
         vector_details = st.session_state.get("vector_details")
-        with details_controls[0]:
+
+        st.markdown("#### Vector Store Details")
+        if vector_details:
+            loaded_at = vector_details.get("loaded_at")
+            if loaded_at:
+                if loaded_at.tzinfo is None:
+                    loaded_at = loaded_at.replace(tzinfo=datetime.UTC)
+                age_minutes = int((datetime.datetime.now(datetime.UTC) - loaded_at).total_seconds() // 60)
+                st.caption(f"Details loaded at {loaded_at.isoformat(timespec='seconds')} (Age: {age_minutes} min).")
+
+            details_col1, details_col2, details_col3 = st.columns(3)
+            details_col1.metric("Vector store files", vector_details["vs_file_count"])
+            details_col2.metric("Live KB entries", len(vector_details["current_ids"]))
+            details_col3.metric("Pending replacements", len(vector_details["pending_replacement_ids"]))
+        else:
+            st.info("Vector store details not loaded yet.", icon=":material/info:")
+
+        button_col1, button_col2 = st.columns(2)
+        with button_col1:
             if st.button(
                 "Load vector store details",
                 icon=":material/database:",
@@ -1012,7 +1049,7 @@ if HAS_STREAMLIT_CONTEXT:
                             vector_details = None
                 finally:
                     hide_blocking_overlay(overlay)
-        with details_controls[1]:
+        with button_col2:
             if st.button(
                 "Reload details",
                 icon=":material/cached:",
@@ -1034,14 +1071,9 @@ if HAS_STREAMLIT_CONTEXT:
 
         vector_details = st.session_state.get("vector_details")
 
-        if vector_details:
-            loaded_at = vector_details.get("loaded_at")
-            if loaded_at:
-                if loaded_at.tzinfo is None:
-                    loaded_at = loaded_at.replace(tzinfo=datetime.UTC)
-                age_minutes = int((datetime.datetime.now(datetime.UTC) - loaded_at).total_seconds() // 60)
-                st.caption(f"Details loaded at {loaded_at.isoformat(timespec='seconds')} (Age: {age_minutes} min).")
-
+        if not vector_details:
+            st.info("Load vector store data to execute cleanup operations.", icon=":material/info:")
+        else:
             vs_file_count = vector_details["vs_file_count"]
             current_ids = vector_details["current_ids"]
             pending_replacement_ids = vector_details["pending_replacement_ids"]
@@ -1049,6 +1081,8 @@ if HAS_STREAMLIT_CONTEXT:
             excluded_live_ids = vector_details["excluded_live_ids"] & vector_details["vs_ids"]
             combined_pending_cleanup_ids = vector_details["combined_pending_cleanup_ids"]
             live_ids_display = vector_details["live_ids_display"]
+
+            st.markdown("#### Vector Store Cleanup Actions")
 
             st.markdown("#### Clean Excluded Now")
             st.caption("Only deletes vector store files for documents marked as excluded and clears DB references.")
@@ -1181,8 +1215,6 @@ if HAS_STREAMLIT_CONTEXT:
                             hide_blocking_overlay(overlay)
             else:
                 st.info("Vector store is empty - no files to manage.", icon=":material/info:")
-        else:
-            st.info("Load vector store data to execute cleanup operations.", icon=":material/info:")
 
     
     else:

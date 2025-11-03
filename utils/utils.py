@@ -10,6 +10,13 @@ import base64
 import re
 import html
 
+try:  # check if running inside Streamlit runtime
+    from streamlit.runtime.runtime import Runtime
+
+    STREAMLIT_RUNTIME_EXISTS = Runtime.exists()
+except Exception:  # pragma: no cover - runtime absent in certain contexts
+    STREAMLIT_RUNTIME_EXISTS = False
+
 
 _SUP_REF_PATTERN = re.compile(r"<sup[^>]*>\s*\[(\d+)\]\s*</sup>")
 _ANCHOR_PATTERN = re.compile(r"<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
@@ -857,6 +864,59 @@ def render_sidebar(
 # Functions to save a document to the knowledge base
 def compute_sha256(text):
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def render_log_output(
+    log_lines: str,
+    *,
+    element_id: str,
+    height: int = 320,
+    waiting_message: str = "Waiting for output...",
+    label: str | None = None,
+    background: str = "#0f172a",
+    text_color: str = "#e2e8f0",
+) -> None:
+    """Render a scrollable log output area with safe HTML fallback."""
+
+    content = log_lines or waiting_message
+    if STREAMLIT_RUNTIME_EXISTS:
+        auto_scroll_script = f"""
+<script>
+const logContainer = document.getElementById("{element_id}");
+if (logContainer) {{
+  logContainer.scrollTop = logContainer.scrollHeight;
+}}
+</script>
+"""
+        log_html = f"""
+<div id="{element_id}-wrapper">
+  <div id="{element_id}" style="
+      height: {height}px;
+      overflow-y: auto;
+      padding: 0.5rem;
+      background: {background};
+      color: {text_color};
+      font-family: 'Fira Code', monospace;
+      font-size: 0.85rem;
+      border-radius: 0;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      white-space: pre-wrap;
+      line-height: 1.35;
+  ">
+  {html.escape(content)}
+  </div>
+</div>
+{auto_scroll_script}
+"""
+        st.components.v1.html(log_html, height=height + 40)
+    else:
+        st.text_area(
+            label or "Log output",
+            value=content,
+            height=height,
+            disabled=True,
+            label_visibility="collapsed",
+        )
 
 
 def show_blocking_overlay():

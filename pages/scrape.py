@@ -10,7 +10,6 @@ import requests
 from markdownify import markdownify as md
 import streamlit as st
 import json
-import html as html_lib
 from openai import OpenAI
 from utils import (
     get_connection,
@@ -30,6 +29,7 @@ from utils import (
     hide_blocking_overlay,
     get_document_metrics,
     release_job_lock,
+    render_log_output,
 )
 from pathlib import Path
 import pandas as pd
@@ -1669,8 +1669,9 @@ def main():
                 key="manual_no_upload"
             )
             submitted_manual = st.form_submit_button(
-                "Save entry",
+                "Save Entry",
                 disabled=st.session_state["manual_form_submitting"],
+                icon=":material/save:"
             )
 
         if submitted_manual:
@@ -2080,7 +2081,7 @@ def main():
         cli_job: CLIJob | None = st.session_state.get("scrape_cli_job")
         job_running = cli_job is not None and cli_job.is_running()
 
-        if st.button("**START INDEXING ALL URLS**", type="primary", width="stretch", disabled=job_running, icon=":material/rocket_launch:"):
+        if st.button("**Start Indexing All URLs**", type="primary", width="stretch", disabled=job_running, icon=":material/rocket_launch:"):
             if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
                 st.error("No valid URLs found in configurations. Please add at least one URL.", icon=":material/error:")
             else:
@@ -2126,35 +2127,7 @@ def main():
             st.markdown("### CLI Scrape Log")
             log_lines = "\n".join(list(cli_job.logs))
 
-            auto_scroll_script = """
-<script>
-const logContainer = document.getElementById("scrape-log");
-if (logContainer) {
-  logContainer.scrollTop = logContainer.scrollHeight;
-}
-</script>
-"""
-            log_html = f"""
-<div id="scrape-log-wrapper">
-  <div id="scrape-log" style="
-      height: 320px;
-      overflow-y: auto;
-      padding: 0.5rem;
-      background: #0f172a;
-      color: #e2e8f0;
-      font-family: 'Fira Code', monospace;
-      font-size: 0.85rem;
-      border-radius: 0;
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      white-space: pre-wrap;
-      line-height: 1.35;
-  ">
-  {html_lib.escape(log_lines) if log_lines else "Waiting for output..."}
-  </div>
-</div>
-{auto_scroll_script}
-"""
-            st.components.v1.html(log_html, height=360)
+            render_log_output(log_lines, element_id="scrape-log")
 
             job_running = cli_job.is_running()
             if job_running:
