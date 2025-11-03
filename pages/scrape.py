@@ -27,6 +27,7 @@ from utils import (
     CLIJobError,
     show_blocking_overlay,
     hide_blocking_overlay,
+    get_document_metrics,
 )
 from pathlib import Path
 import pandas as pd
@@ -1764,7 +1765,7 @@ def main():
     
         st.info("**Path-Based Scraping**: The scraper will only follow links that are within the same path as the starting URL. "
                 "For example, if you start with `/suche/index.html`, it will only scrape pages under `/suche/` "
-                "and its subdirectories.")
+                "and its subdirectories.", icon=":material/info:")
 
         # Initialize database table for URL configs
         try:
@@ -1786,56 +1787,50 @@ def main():
 
         # Status Dashboard - Give users immediate overview of system state
         st.markdown("---")
-        st.markdown("#### 📊 System Status")
-        show_sys = st.checkbox("Show system status (vector sync, configs, counts)", value=False, key="show_sys_status")
-        if show_sys:
-            try:
-                # Get current statistics
-                all_entries = get_kb_entries()
-                total_pages = len(all_entries)
-                
-                # Count pending vector sync
-                conn = get_connection()
-                with conn.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) FROM documents WHERE vector_file_id IS NULL")
-                    pending_sync = cur.fetchone()[0]
-                conn.close()
-                
-                # Count configurations
-                total_configs = len(st.session_state.url_configs)
-                
-                # Display metrics
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("📄 Total Pages", total_pages, border=True)
-                with col2:
-                    sync_color = "🟢" if pending_sync == 0 else "🟡"
-                    st.metric(f"{sync_color} Pending Sync", pending_sync, border=True)
-                with col3:
-                    config_color = "🟢" if total_configs > 0 else "🔴"
-                    st.metric(f"{config_color} Configurations", total_configs, border=True)
-                with col4:
-                    # Vector synchronization is handled in the separate 'Vectorize' page
-                    if pending_sync > 0:
-                        st.info(f"⏳ There are {pending_sync} documents waiting for vector store synchronization.\n"
-                                "Run the 'Vectorize' page to perform batch vector synchronization (keeps scraping responsive).")
-                    else:
-                        st.success("All synced", icon=":material/check_circle:")
-                        
-                # Show status summary
-                if total_pages == 0:
-                    st.info("🚀 **Welcome!** Add your first URL configuration below to start indexing content.")
+        st.markdown("#### System Status")
+        try:
+            metrics = get_document_metrics()
+        except Exception as exc:
+            st.error(f"Could not load system status: {exc}")
+        else:
+            total_pages = metrics["total_pages"]
+            pending_sync = metrics["pending_sync"]
+            stale_pages = metrics["stale_pages"]
+            total_configs = len(st.session_state.url_configs)
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("📄 Total Pages", total_pages, border=True)
+            with col2:
+                sync_color = "🟢" if pending_sync == 0 else "🟡"
+                st.metric(f"{sync_color} Pending Sync", pending_sync, border=True)
+            with col3:
+                config_color = "🟢" if total_configs > 0 else "🔴"
+                st.metric(f"{config_color} URL Configurations", total_configs, border=True)
+            with col4:
+                if stale_pages:
+                    st.metric("🕰️ Stale Pages", stale_pages, border=True)
                 elif pending_sync > 0:
-                    st.warning(f"⏳ **{pending_sync} pages** are waiting for vector store synchronization.")
+                    st.info(
+                        f"⏳ {pending_sync} awaiting vector sync.\n"
+                        "Run the Vectorize page to process them.",
+                        icon=":material/refresh:",
+                    )
                 else:
-                    st.success(f"**System healthy** - All {total_pages} pages are indexed and synchronized.", icon=":material/check_circle:")
-                    
-            except Exception as e:
-                st.error(f"Could not load system status: {e}")
+                    st.success("All synced", icon=":material/check_circle:")
+
+            if total_pages == 0:
+                st.info("**Welcome!** Add your first URL configuration below to start indexing content.", icon=":material/rocket_launch:")
+            elif pending_sync > 0:
+                st.warning(f"**{pending_sync} pages** are waiting for vector store synchronization.", icon=":material/sync_problem:")
+            elif stale_pages > 0:
+                st.warning(f"**{stale_pages} pages** look stale based on the latest crawl.", icon=":material/auto_delete:")
+            else:
+                st.success(f"**System healthy** - All {total_pages} pages are indexed and synchronized.", icon=":material/check_circle:")
 
         # Crawl settings (global for a run)
         st.markdown("---")
-        st.subheader("⚙️  URL Configurations")
+        st.subheader("URL Configurations")
 
         # Create a placeholder for status messages
         message_placeholder = st.empty()
@@ -1844,7 +1839,7 @@ def main():
         # Render each URL config with improved layout
         for i, config in enumerate(st.session_state.url_configs):
             # Create a container for each configuration with better visual separation
-            with st.expander(f"🔗 URL Configuration {i+1}" + (f" - {config.get('url', 'No URL set')[:50]}..." if config.get('url') else ""), expanded=False):
+            with st.expander(f"URL Configuration {i+1}" + (f" - {config.get('url', 'No URL set')[:50]}..." if config.get('url') else ""), expanded=False, icon=":material/web_asset:"):
                 # Use columns for better layout
                 col1, col2 = st.columns([2, 1])
                 
@@ -1898,7 +1893,7 @@ def main():
                 
                 with col1:
                     exclude_paths_str = st.text_area(
-                        f"🚫 Exclude Paths (comma-separated)", 
+                        f"Exclude Paths (comma-separated)", 
                         value=", ".join(config.get("exclude_paths", [])), 
                         key=f"exclude_paths_{i}",
                         height=100,
@@ -1909,7 +1904,7 @@ def main():
 
                 with col2:
                     include_prefixes_str = st.text_area(
-                        f"✅ Include Language Prefixes (comma-separated)", 
+                        f"Include Language Prefixes (comma-separated)", 
                         value=", ".join(config.get("include_lang_prefixes", [])), 
                         key=f"include_lang_prefixes_{i}",
                         height=100,
@@ -1942,7 +1937,7 @@ def main():
                             st.error(f"Failed to save after deletion: {e}")
         # Show number of configurations
         # Quick Add Single URL - Simple interface for basic use cases
-        with st.expander("**⚙️ Add URL Configuration**", expanded=True):
+        with st.expander("**Add URL Configuration**", expanded=True, icon=":material/add_circle:"):
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
                 quick_url = st.text_input(
@@ -1959,7 +1954,7 @@ def main():
                 )
             with col3:
                 st.markdown("<br>", unsafe_allow_html=True)  # Align button with input
-                if st.button("⚡ Add URL", disabled=not quick_url, type="primary"):
+                if st.button("Add URL", disabled=not quick_url, type="primary", icon=":material/add_circle:"):
                     # Create configuration based on template
                     template_configs = {
                         "Default": {
@@ -1995,48 +1990,48 @@ def main():
                     
                     try:
                         save_url_configs(st.session_state.url_configs)
-                        st.success(f"✅ Quick configuration added! Using {quick_template} template.")
-                        st.info("💡 **Next step**: Scroll down to the 'Start Indexing' section to begin scraping!")
+                        st.success(f"Quick configuration added! Using {quick_template} template.", icon=":material/check_circle:")
+                        st.info("**Next step**: Scroll down to the 'Start Indexing' section to begin scraping!", icon=":material/info:")
                         st.rerun()
                     except Exception as e:
                         st.error(f"Failed to save quick configuration: {e}")
         
         # Global configuration management
         st.markdown("---")
-        st.markdown("### 💾 Configuration Management")
-        st.info("💡 **Tip**: Individual configurations auto-save when you use their save buttons. Use the buttons below for bulk operations.")
+        st.markdown("### Configuration Management")
+        st.info("**Tip**: Individual configurations auto-save when you use their save buttons. Use the buttons below for bulk operations.", icon=":material/info:")
         
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown("**💾 Save All Changes**")
+            st.markdown("**Save All Changes**")
             st.caption("Save all configuration changes to the database")
-            if st.button("💾 Save All Configurations", type="primary"):
+            if st.button("Save All Configurations", type="primary", icon=":material/save:"):
                 try:
                     save_url_configs(st.session_state.url_configs)
-                    message_placeholder.success("✅ All configurations saved to database!")
+                    message_placeholder.success("All configurations saved to database!", icon=":material/check_circle:")
                 except Exception as e:
                     message_placeholder.error(f"Failed to save configurations: {e}")
         
         with col2:
-            st.markdown("**🔄 Reset to Database**")
+            st.markdown("**Reset to Database**")
             st.caption("Discard unsaved changes and reload from database")
-            if st.button("🔄 Reset to Saved", type="secondary"):
+            if st.button("Reset to Saved", type="secondary", icon=":material/restore:"):
                 try:
                     st.session_state.url_configs = load_url_configs()
-                    message_placeholder.success(f"✅ Reset to saved state: {len(st.session_state.url_configs)} configurations loaded!")
+                    message_placeholder.success(f"Reset to saved state: {len(st.session_state.url_configs)} configurations loaded!", icon=":material/check_circle:")
                     st.rerun()
                 except Exception as e:
                     message_placeholder.error(f"Failed to reload configurations: {e}")
                     
         if st.session_state.url_configs:
-            st.success(f"📊 **{len(st.session_state.url_configs)} configuration(s)** ready for indexing")
+            st.success(f"**{len(st.session_state.url_configs)} configuration(s)** ready for indexing", icon=":material/check_circle:")
         else:
-            st.info("➕ **No configurations yet** - Add your first URL configuration above")
+            st.info("**No configurations yet** - Add your first URL configuration above", icon=":material/info:")
 
 
         # Index button section
         st.markdown("---")
-        st.subheader("🔧 Crawler Settings")
+        st.subheader("Crawler Settings")
         colA, colB, colC = st.columns(3)
         with colA:
             max_urls_per_run = st.number_input("Max URLs per run (crawl budget)",
@@ -2049,11 +2044,11 @@ def main():
                                 help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.")
 
         st.markdown("---")
-        st.markdown("## 🚀 Start Indexing")
+        st.markdown("## Start Indexing")
         
         # Pre-flight check and guidance
         if not st.session_state.url_configs:
-            st.warning("⚠️ **No URLs configured yet!** Add at least one URL configuration above to start indexing.")
+            st.warning("**No URLs configured yet!** Add at least one URL configuration above to start indexing.", icon=":material/warning:")
             st.stop()
         
         # Show what will be processed
@@ -2080,9 +2075,9 @@ def main():
         cli_job: CLIJob | None = st.session_state.get("scrape_cli_job")
         job_running = cli_job is not None and cli_job.is_running()
 
-        if st.button("🚀 **START INDEXING ALL URLS**", type="primary", width="stretch", disabled=job_running):
+        if st.button("**START INDEXING ALL URLS**", type="primary", width="stretch", disabled=job_running, icon=":material/rocket_launch:"):
             if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
-                st.error("❌ No valid URLs found in configurations. Please add at least one URL.")
+                st.error("No valid URLs found in configurations. Please add at least one URL.", icon=":material/error:")
             else:
                 cli_args = ["--budget", str(max_urls_per_run)]
                 if keep_query_str:
@@ -2102,7 +2097,7 @@ def main():
                         return
 
                     try:
-                        job = launch_cli_job(mode=cli_mode, args=cli_args)
+                        job = launch_cli_job(mode=cli_mode, args=cli_args, auto_rerun=True)
                     except CLIJobError as exc:
                         st.error(f"Failed to start scraping job: {exc}", icon=":material/error:")
                     else:
@@ -2119,7 +2114,7 @@ def main():
             st.info(st.session_state["scrape_cli_message"], icon=":material/center_focus_weak:")
 
         if cli_job:
-            st.markdown("### 📟 CLI Scrape Log")
+            st.markdown("### CLI Scrape Log")
             log_lines = "\n".join(list(cli_job.logs))
             st.text_area(
                 "Scrape job log",

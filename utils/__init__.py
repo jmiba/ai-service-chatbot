@@ -38,6 +38,7 @@ from .utils import (
     get_request_classifications,
     save_request_classifications,
     get_document_status_counts,
+    get_document_metrics,
     show_blocking_overlay,
     hide_blocking_overlay,
 )

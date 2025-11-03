@@ -378,6 +378,34 @@ def get_kb_entries(limit=None):
         conn.close()
 
 
+def get_document_metrics() -> dict[str, int]:
+    """Return lightweight aggregate counts for documents."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT
+                COUNT(*) AS total_pages,
+                COALESCE(SUM(CASE WHEN vector_file_id IS NULL THEN 1 ELSE 0 END), 0) AS pending_sync,
+                COALESCE(SUM(CASE WHEN is_stale IS TRUE THEN 1 ELSE 0 END), 0) AS stale_pages
+            FROM documents
+            """
+        )
+        total_pages, pending_sync, stale_pages = cursor.fetchone()
+        return {
+            "total_pages": int(total_pages or 0),
+            "pending_sync": int(pending_sync or 0),
+            "stale_pages": int(stale_pages or 0),
+        }
+    except Exception as exc:
+        print(f"[DB ERROR] Failed to compute document metrics: {exc}")
+        raise RuntimeError("Failed to compute document metrics") from exc
+    finally:
+        cursor.close()
+        conn.close()
+
+
 def get_document_by_identifier(*, doc_id: int | None = None, file_id: str | None = None):
     """Fetch a single document row by numeric id or vector/legacy file id."""
     if doc_id is None and not file_id:

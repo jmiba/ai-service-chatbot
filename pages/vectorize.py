@@ -822,7 +822,7 @@ if HAS_STREAMLIT_CONTEXT:
                     )
                     if (datetime.datetime.now(datetime.UTC) - generated_at) >= datetime.timedelta(minutes=30):
                         st.info(
-                            "Der Schnappschuss ist älter als 30 Minuten. Aktualisieren Sie ihn bei Bedarf unten.",
+                            "Snapshot is over 30 minutes old. Refresh below if required.",
                             icon=":material/info:",
                         )
             else:
@@ -836,11 +836,11 @@ if HAS_STREAMLIT_CONTEXT:
                 if st.button(
                     "Refresh live status",
                     icon=":material/refresh:",
-                    help="Aktualisiert die Kennzahlen direkt aus dem Vector Store (kann ein paar Sekunden dauern).",
+                    help="Updates the metrics directly from the vector store (this may take a few seconds).",
                 ):
                     overlay = show_blocking_overlay()
                     try:
-                        with st.spinner("Aktualisiere Vector-Store-Status..."):
+                        with st.spinner("Updating vector store status..."):
                             try:
                                 status = compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
                                 write_vector_status(status)
@@ -998,17 +998,17 @@ if HAS_STREAMLIT_CONTEXT:
                 "Load vector store details",
                 icon=":material/database:",
                 disabled=vector_details is not None,
-                help="Lädt Dateiinformationen aus dem Vector Store für die folgenden Bereinigungsaktionen.",
+                help="Loading file information from the vector store for the following cleanup actions.",
             ):
                 overlay = show_blocking_overlay()
                 try:
-                    with st.spinner("Lade Vector-Store-Daten..."):
+                    with st.spinner("Loading Vector Store data..."):
                         try:
                             vector_details = _load_vector_details(VECTOR_STORE_ID, force=True)
-                            st.success("Details geladen.", icon=":material/check_circle:")
+                            st.success("Details loaded.", icon=":material/check_circle:")
                         except Exception as exc:
                             st.session_state.pop("vector_details", None)
-                            st.error(f"Laden fehlgeschlagen: {exc}", icon=":material/error:")
+                            st.error(f"Failed to load: {exc}", icon=":material/error:")
                             vector_details = None
                 finally:
                     hide_blocking_overlay(overlay)
@@ -1017,17 +1017,17 @@ if HAS_STREAMLIT_CONTEXT:
                 "Reload details",
                 icon=":material/cached:",
                 disabled=vector_details is None,
-                help="Aktualisiert die Datensätze mit einem frischen Aufruf.",
+                help="Updates the records with a fresh call.",
             ):
                 overlay = show_blocking_overlay()
                 try:
-                    with st.spinner("Aktualisiere Vector-Store-Daten..."):
+                    with st.spinner("Updating vector store data..."):
                         try:
                             vector_details = _load_vector_details(VECTOR_STORE_ID, force=True)
-                            st.success("Details aktualisiert.", icon=":material/check_circle:")
+                            st.success("Details updated.", icon=":material/check_circle:")
                         except Exception as exc:
                             st.session_state.pop("vector_details", None)
-                            st.error(f"Aktualisierung fehlgeschlagen: {exc}", icon=":material/error:")
+                            st.error(f"Update failed: {exc}", icon=":material/error:")
                             vector_details = None
                 finally:
                     hide_blocking_overlay(overlay)
@@ -1040,7 +1040,7 @@ if HAS_STREAMLIT_CONTEXT:
                 if loaded_at.tzinfo is None:
                     loaded_at = loaded_at.replace(tzinfo=datetime.UTC)
                 age_minutes = int((datetime.datetime.now(datetime.UTC) - loaded_at).total_seconds() // 60)
-                st.caption(f"Details geladen am {loaded_at.isoformat(timespec='seconds')} (Alter: {age_minutes} min).")
+                st.caption(f"Details loaded at {loaded_at.isoformat(timespec='seconds')} (Age: {age_minutes} min).")
 
             vs_file_count = vector_details["vs_file_count"]
             current_ids = vector_details["current_ids"]
@@ -1182,7 +1182,7 @@ if HAS_STREAMLIT_CONTEXT:
             else:
                 st.info("Vector store is empty - no files to manage.", icon=":material/info:")
         else:
-            st.info("Laden Sie die Vector-Store-Daten, um Bereinigungsaktionen auszuführen.", icon=":material/info:")
+            st.info("Load vector store data to execute cleanup operations.", icon=":material/info:")
 
     
     else:
