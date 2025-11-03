@@ -902,7 +902,7 @@ if HAS_STREAMLIT_CONTEXT:
                 st.info(f"**{pending_resync_count} documents** need re-sync (content changes or exclusion cleanup).", icon=":material/cached:")
             
             if len(true_orphan_ids) > 0:
-                st.warning(f"🧹 **{len(true_orphan_ids)} orphaned files** in vector store are no longer in the database.", icon=":material/warning:")
+                st.warning(f"**{len(true_orphan_ids)} orphaned files** in vector store are no longer in the database.", icon=":material/cleaning_service:")
             
             if len(pending_replacement_ids) > 0:
                 st.info(f"**{len(pending_replacement_ids)} old files** can be cleaned up after successful replacements.", icon=":material/cached:")
@@ -1123,7 +1123,7 @@ if HAS_STREAMLIT_CONTEXT:
                 with col1:
                     if len(true_orphan_ids) > 0:
                         st.markdown("**Remove Orphaned Files**")
-                        st.write(f"Found {len(true_orphan_ids)} files in vector store that no longer exist in the database")
+                        st.warning(f"Found {len(true_orphan_ids)} files in vector store that no longer exist in the database", icon=":material/warning:")
                         st.caption("Safe to delete - these files are no longer referenced by any documents")
                         if st.button("Delete Orphans", key="delete_orphans", icon=":material/delete_sweep:"):
                             overlay = show_blocking_overlay()
@@ -1140,13 +1140,13 @@ if HAS_STREAMLIT_CONTEXT:
                                 hide_blocking_overlay(overlay)
                     else:
                         st.markdown("**Remove Orphaned Files**")
-                        st.write("✅ No orphaned files found")
+                        st.success("No orphaned files found", icon=":material/check_circle:")
                         st.caption("All vector store files are properly referenced in the database")
 
                 with col2:
                     if len(pending_replacement_ids) > 0:
                         st.markdown("**Clean Up Old Versions**")
-                        st.write(f"🔄 Found {len(pending_replacement_ids)} old file versions after content updates")
+                        st.warning(f"Found {len(pending_replacement_ids)} old file versions after content updates", icon=":material/warning:")
                         st.caption("Safe to delete - these are old versions that have been replaced with updated content")
                         if st.button("Clean Up Old Versions", key="finalize_replacements", icon=":material/restore_page:"):
                             overlay = show_blocking_overlay()
