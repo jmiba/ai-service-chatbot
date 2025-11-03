@@ -2124,7 +2124,7 @@ def main():
             st.info(st.session_state["scrape_cli_message"], icon=":material/center_focus_weak:")
 
         if cli_job:
-            st.markdown("### CLI Scrape Log")
+            st.markdown("#### CLI Scrape Log")
             log_lines = "\n".join(list(cli_job.logs))
 
             render_log_output(log_lines, element_id="scrape-log")

@@ -931,7 +931,7 @@ if HAS_STREAMLIT_CONTEXT:
         st.header("Vector Store File Management")
 
         # Action: Sync now
-        st.markdown("#### Sync Knowlede Base Now")
+        st.subheader("Sync Knowlede Base Now")
         st.caption("Uploads new or changed knowledge base entries to vector store and deletes files marked as excluded from vector store.")
         
         # Sync button with better context
@@ -973,7 +973,7 @@ if HAS_STREAMLIT_CONTEXT:
             st.info(st.session_state["vector_cli_message"], icon=":material/center_focus_weak:")
 
         if vector_job:
-            st.markdown("### CLI Sync Log")
+            st.markdown("#### CLI Sync Log")
             log_lines = "\n".join(list(vector_job.logs))
 
             render_log_output(log_lines, element_id="vector-sync-log")
@@ -1011,10 +1011,39 @@ if HAS_STREAMLIT_CONTEXT:
                     st.session_state["vector_cli_last_return"] = None
 
         st.markdown("---")
+        st.subheader("Manage Vector Store Files")
         vector_details = st.session_state.get("vector_details")
 
-        st.markdown("#### Vector Store Details")
-        if vector_details:
+        load_label = "Reload vector store details" if vector_details else "Load vector store details"
+        load_icon = ":material/cached:" if vector_details else ":material/database:"
+
+        if st.button(
+            load_label,
+            icon=load_icon,
+            help="Fetch vector-store file information for the cleanup actions below.",
+        ):
+            overlay = show_blocking_overlay()
+            try:
+                with st.spinner("Loading Vector Store data..."):
+                    try:
+                        vector_details = _load_vector_details(VECTOR_STORE_ID, force=True)
+                        st.success("Details updated." if load_label.startswith("Reload") else "Details loaded.", icon=":material/check_circle:")
+                    except Exception as exc:
+                        st.session_state.pop("vector_details", None)
+                        st.error(f"Failed to load: {exc}", icon=":material/error:")
+                        vector_details = None
+            finally:
+                hide_blocking_overlay(overlay)
+
+        vector_details = st.session_state.get("vector_details")
+
+        vector_details = st.session_state.get("vector_details")
+        #st.markdown(vector_details)
+
+        if not vector_details:
+            st.info("Load vector store data to execute cleanup operations.", icon=":material/info:")
+        else:
+            st.markdown("#### Vector Store Details")
             loaded_at = vector_details.get("loaded_at")
             if loaded_at:
                 if loaded_at.tzinfo is None:
@@ -1023,57 +1052,9 @@ if HAS_STREAMLIT_CONTEXT:
                 st.caption(f"Details loaded at {loaded_at.isoformat(timespec='seconds')} (Age: {age_minutes} min).")
 
             details_col1, details_col2, details_col3 = st.columns(3)
-            details_col1.metric("Vector store files", vector_details["vs_file_count"])
-            details_col2.metric("Live KB entries", len(vector_details["current_ids"]))
-            details_col3.metric("Pending replacements", len(vector_details["pending_replacement_ids"]))
-        else:
-            st.info("Vector store details not loaded yet.", icon=":material/info:")
-
-        button_col1, button_col2 = st.columns(2)
-        with button_col1:
-            if st.button(
-                "Load vector store details",
-                icon=":material/database:",
-                disabled=vector_details is not None,
-                help="Loading file information from the vector store for the following cleanup actions.",
-            ):
-                overlay = show_blocking_overlay()
-                try:
-                    with st.spinner("Loading Vector Store data..."):
-                        try:
-                            vector_details = _load_vector_details(VECTOR_STORE_ID, force=True)
-                            st.success("Details loaded.", icon=":material/check_circle:")
-                        except Exception as exc:
-                            st.session_state.pop("vector_details", None)
-                            st.error(f"Failed to load: {exc}", icon=":material/error:")
-                            vector_details = None
-                finally:
-                    hide_blocking_overlay(overlay)
-        with button_col2:
-            if st.button(
-                "Reload details",
-                icon=":material/cached:",
-                disabled=vector_details is None,
-                help="Updates the records with a fresh call.",
-            ):
-                overlay = show_blocking_overlay()
-                try:
-                    with st.spinner("Updating vector store data..."):
-                        try:
-                            vector_details = _load_vector_details(VECTOR_STORE_ID, force=True)
-                            st.success("Details updated.", icon=":material/check_circle:")
-                        except Exception as exc:
-                            st.session_state.pop("vector_details", None)
-                            st.error(f"Update failed: {exc}", icon=":material/error:")
-                            vector_details = None
-                finally:
-                    hide_blocking_overlay(overlay)
-
-        vector_details = st.session_state.get("vector_details")
-
-        if not vector_details:
-            st.info("Load vector store data to execute cleanup operations.", icon=":material/info:")
-        else:
+            details_col1.metric("Vector store files", vector_details["vs_file_count"], border=True)
+            details_col2.metric("Live KB entries", len(vector_details["current_ids"]), border=True)
+            details_col3.metric("Pending replacements", len(vector_details["pending_replacement_ids"]), border=True)
             vs_file_count = vector_details["vs_file_count"]
             current_ids = vector_details["current_ids"]
             pending_replacement_ids = vector_details["pending_replacement_ids"]
@@ -1081,8 +1062,6 @@ if HAS_STREAMLIT_CONTEXT:
             excluded_live_ids = vector_details["excluded_live_ids"] & vector_details["vs_ids"]
             combined_pending_cleanup_ids = vector_details["combined_pending_cleanup_ids"]
             live_ids_display = vector_details["live_ids_display"]
-
-            st.markdown("#### Vector Store Cleanup Actions")
 
             st.markdown("#### Clean Excluded Now")
             st.caption("Only deletes vector store files for documents marked as excluded and clears DB references.")
@@ -1188,7 +1167,6 @@ if HAS_STREAMLIT_CONTEXT:
                         st.write("✅ No old versions to clean up")
                         st.caption("All file replacements have been properly finalized")
 
-                st.markdown("---")
                 st.markdown("#### Nuclear Option")
                 st.error("**DANGER**: This will permanently delete ALL files in the vector store!", icon=":material/warning:")
                 st.caption("Only use this if you want to completely rebuild the vector store from scratch.")
@@ -1216,6 +1194,5 @@ if HAS_STREAMLIT_CONTEXT:
             else:
                 st.info("Vector store is empty - no files to manage.", icon=":material/info:")
 
-    
     else:
         st.warning("Authentication required to access the Vector Store Management.", icon=":material/lock:")
