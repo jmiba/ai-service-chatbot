@@ -822,7 +822,7 @@ if HAS_STREAMLIT_CONTEXT:
                 excluded_live = status_snapshot.get("excluded_live_count", 0)
                 if status_snapshot.get("orphan_count", 0):
                     st.warning(
-                        f"🧹 **{status_snapshot['orphan_count']} orphaned files** in vector store are no longer in the database.",
+                        f"**{status_snapshot['orphan_count']} orphaned files** in vector store are no longer in the database.",
                         icon=":material/warning:",
                     )
                 if status_snapshot.get("pending_cleanup_count", 0):
