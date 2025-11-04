@@ -39,6 +39,7 @@ from .utils import (
     save_request_classifications,
     get_document_status_counts,
     get_document_metrics,
+    is_job_locked,
     release_job_lock,
     show_blocking_overlay,
     hide_blocking_overlay,

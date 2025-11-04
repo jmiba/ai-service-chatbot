@@ -421,6 +421,21 @@ def get_document_metrics() -> dict[str, int]:
         conn.close()
 
 
+def is_job_locked(name: str) -> bool:
+    """Return True if the named job lock exists."""
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM job_locks WHERE name=%s LIMIT 1", (name,))
+            return cur.fetchone() is not None
+    except Exception as exc:
+        raise RuntimeError(f"Failed to check job lock '{name}': {exc}") from exc
+    finally:
+        if conn:
+            conn.close()
+
+
 def release_job_lock(name: str) -> None:
     """Best-effort removal of a named job lock."""
     conn = None

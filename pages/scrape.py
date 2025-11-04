@@ -28,6 +28,7 @@ from utils import (
     show_blocking_overlay,
     hide_blocking_overlay,
     get_document_metrics,
+    is_job_locked,
     release_job_lock,
     render_log_output,
 )
@@ -1784,8 +1785,40 @@ def main():
         cli_job: CLIJob | None = st.session_state.get("scrape_cli_job")
         job_running = cli_job is not None and cli_job.is_running()
 
-        if st.button("**Start Indexing All URLs**", type="primary", width="stretch", disabled=job_running, icon=":material/rocket_launch:"):
-            if not any(config.get('url', '').strip() for config in st.session_state.url_configs):
+        lock_check_error = None
+        external_job_running = False
+        try:
+            lock_held = is_job_locked("scrape_job")
+            external_job_running = lock_held and not job_running
+        except RuntimeError as exc:
+            lock_check_error = str(exc)
+
+        if lock_check_error:
+            st.warning(f"Could not verify indexing job status: {lock_check_error}", icon=":material/warning:")
+        elif external_job_running:
+            st.warning(
+                "Another indexing/vectorization job is currently running (scheduled cron or different session). "
+                "Please wait for it to finish before starting a new run.",
+                icon=":material/pending_actions:",
+            )
+
+        start_button_disabled = job_running or external_job_running
+
+        if st.button(
+            "**Start Indexing All URLs**",
+            type="primary",
+            width="stretch",
+            disabled=start_button_disabled,
+            icon=":material/rocket_launch:",
+        ):
+            if job_running:
+                st.warning("An indexing job is already running.", icon=":material/info:")
+            elif external_job_running:
+                st.warning(
+                    "Another indexing/vectorization job is active. Please retry after it finishes.",
+                    icon=":material/pending_actions:",
+                )
+            elif not any(config.get('url', '').strip() for config in st.session_state.url_configs):
                 st.error("No valid URLs found in configurations. Please add at least one URL.", icon=":material/error:")
             else:
                 cli_args = ["--budget", str(max_urls_per_run)]
@@ -1806,10 +1839,6 @@ def main():
                         return
 
                     try:
-                        try:
-                            release_job_lock("scrape_job")
-                        except Exception:
-                            pass
                         job = launch_cli_job(mode=cli_mode, args=cli_args)
                     except CLIJobError as exc:
                         st.error(f"Failed to start scraping job: {exc}", icon=":material/error:")

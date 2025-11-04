@@ -15,6 +15,7 @@ from utils import (
     admin_authentication,
     render_sidebar,
     get_document_status_counts,
+    is_job_locked,
     launch_cli_job,
     CLIJob,
     CLIJobError,
@@ -920,9 +921,30 @@ if HAS_STREAMLIT_CONTEXT:
         vector_job: CLIJob | None = st.session_state.get("vector_cli_job")
         job_running = vector_job is not None and vector_job.is_running()
 
-        if st.button(sync_button_text, type="primary", icon=":material/sync:", disabled=job_running):
+        vector_lock_error = None
+        external_job_running = False
+        try:
+            lock_held = is_job_locked("scrape_job")
+            external_job_running = lock_held and not job_running
+        except RuntimeError as exc:
+            vector_lock_error = str(exc)
+
+        if vector_lock_error:
+            st.warning(f"Could not verify job status: {vector_lock_error}", icon=":material/warning:")
+        elif external_job_running:
+            st.warning(
+                "A scrape/vectorize job is already running (e.g., via the scheduler). "
+                "Wait for it to finish before starting another vector sync.",
+                icon=":material/pending_actions:",
+            )
+
+        sync_disabled = job_running or external_job_running
+
+        if st.button(sync_button_text, type="primary", icon=":material/sync:", disabled=sync_disabled):
             if job_running:
                 st.warning("A vector sync job is already running.", icon=":material/warning:")
+            elif external_job_running:
+                st.warning("Another scrape/vectorize job is active. Try again once it finishes.", icon=":material/pending_actions:")
             else:
                 overlay = show_blocking_overlay()
                 rerun_needed = False
