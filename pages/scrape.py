@@ -1736,21 +1736,6 @@ def main():
             st.info("**No configurations yet** - Add your first URL configuration above", icon=":material/info:")
 
 
-        # Index button section
-        st.markdown("---")
-        st.subheader("Crawler Settings")
-        colA, colB = st.columns(2)
-        with colA:
-            max_urls_per_run = st.number_input("Max URLs per run (crawl budget)",
-                                            min_value=100, max_value=100000, value=5000, step=100)
-        with colB:
-            keep_query_str = st.text_input(
-                "Whitelist query keys (comma-separated)",
-                value="",
-                help="By default the crawler normalizes links by stripping all query strings (so /page?id=123 and /page?id=456 collapse to the same URL and you don’t crawl endless variants). If you enter a list here—e.g. page,lang—those keys are preserved while all others are dropped. Use it when certain query params are meaningful (pagination, language, etc.) and you need the crawler to treat ?page=2 or ?lang=en as distinct pages, while still ignoring the rest (like tracking tags).",
-            )
-        st.caption("Dry-run mode now lives inside the manual indexing controls below.")
-
         st.markdown("---")
         st.markdown("## Manual Indexing (override)")
         st.info(
@@ -1764,6 +1749,23 @@ def main():
 
         with st.expander("Show manual indexing controls", expanded=False):
             st.markdown("**Indexing will:** Discover and crawl pages, process content with LLM, save to knowledge base, show real-time progress")
+
+            st.markdown("### Crawler settings")
+            colA, colB = st.columns(2)
+            with colA:
+                max_urls_per_run = st.number_input(
+                    "Max URLs per run (crawl budget)",
+                    min_value=1000,
+                    max_value=200000,
+                    value=30000,
+                    step=1000,
+                )
+            with colB:
+                keep_query_str = st.text_input(
+                    "Whitelist query keys (comma-separated)",
+                    value="",
+                    help="By default the crawler normalizes links by stripping all query strings (so /page?id=123 and /page?id=456 collapse to the same URL and you don’t crawl endless variants). If you enter a list here—e.g. page,lang—those keys are preserved while all others are dropped. Use it when certain query params are meaningful (pagination, language, etc.) and you need the crawler to treat ?page=2 or ?lang=en as distinct pages, while still ignoring the rest (like tracking tags).",
+                )
 
             manual_dry_run = st.checkbox(
                 "Dry run (no DB writes, no LLM calls)",

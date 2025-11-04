@@ -160,7 +160,12 @@ def reset_scraper_state():
 
 def main():
     parser = argparse.ArgumentParser(description="Run scheduled scraping of configured URLs")
-    parser.add_argument("--budget", type=int, default=5000, help="Max URLs per run (crawl budget)")
+    parser.add_argument(
+        "--budget",
+        type=int,
+        default=100000,
+        help="Max URLs per run (crawl budget). Default: 30,000",
+    )
     parser.add_argument("--keep-query", type=str, default="", help="Comma-separated query keys to whitelist")
     parser.add_argument("--dry-run", action="store_true", help="Traverse without DB writes or LLM calls")
     parser.add_argument("--only", type=str, default="", help="Only run configs whose recordset contains this substring")
