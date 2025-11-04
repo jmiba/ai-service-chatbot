@@ -129,118 +129,6 @@ def rerun_app():
         except AttributeError:
             pass
 
-
-# def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
-#     """Update `documents.is_stale` by confirming which pages disappeared during this crawl."""
-#     connection_owned = False
-#     if conn is None:
-#         if dry_run:
-#             try:
-#                 conn = get_connection()
-#                 connection_owned = True
-#                 if log_callback:
-#                     log_callback("🔍 [DRY RUN] Opened temporary DB connection for stale check")
-#             except Exception as exc:
-#                 if log_callback:
-#                     log_callback(f"⚠️ Could not open DB connection for stale detection: {exc}")
-#                 return []
-#         else:
-#             return []
-
-#     def _log(msg: str):
-#         if log_callback:
-#             log_callback(msg)
-
-#     visited_by_recordset: dict[str, set[str]] = {
-#         (rs_key or "").strip(): set(urls) for rs_key, urls in recordset_latest_urls.items()
-#     }
-
-#     stale_checks: list[dict] = []
-#     seen_ids: set[int] = set()
-
-#     try:
-#         with conn.cursor() as cur:
-#             for rs_key, urls in visited_by_recordset.items():
-#                 cur.execute(
-#                     "SELECT id, recordset, url, title, crawl_date FROM documents WHERE recordset = %s",
-#                     (rs_key,),
-#                 )
-#                 rows = cur.fetchall()
-#                 for doc_id, doc_recordset, doc_url, doc_title, doc_crawl in rows:
-#                     if doc_url in urls:
-#                         seen_ids.add(doc_id)
-#                     else:
-#                         stale_checks.append(
-#                             {
-#                                 "id": doc_id,
-#                                 "recordset": doc_recordset,
-#                                 "url": doc_url,
-#                                 "title": doc_title,
-#                                 "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
-#                             }
-#                         )
-#     except Exception as exc:
-#         _log(f"⚠️ Could not compute stale documents: {exc}")
-#         try:
-#             conn.rollback()
-#         except Exception:
-#             pass
-#         return []
-
-#     # Ensure pages we actually saw are marked fresh
-#     if seen_ids and not dry_run:
-#         try:
-#             with conn.cursor() as cur:
-#                 cur.execute(
-#                     "UPDATE documents SET is_stale = FALSE WHERE id = ANY(%s)",
-#                     (list(seen_ids),)
-#                 )
-#         except Exception as exc:
-#             _log(f"⚠️ Could not reset stale flag for seen documents: {exc}")
-
-#     confirmed_stale: list[dict] = []
-#     retained_ids: list[int] = []
-
-#     for entry in stale_checks:
-#         is_missing, reason = verify_url_deleted(entry["url"], log_callback=_log)
-#         if is_missing:
-#             entry["reason"] = reason
-#             confirmed_stale.append(entry)
-#             _log(f"🗑️ Confirmed missing: {entry['url']} ({reason})")
-#         else:
-#             retained_ids.append(entry["id"])
-#             _log(f"✅ Still reachable: {entry['url']}")
-
-#     if not dry_run:
-#         try:
-#             with conn.cursor() as cur:
-#                 if confirmed_stale:
-#                     cur.execute(
-#                         "UPDATE documents SET is_stale = TRUE, updated_at = NOW() WHERE id = ANY(%s)",
-#                         ([entry["id"] for entry in confirmed_stale],),
-#                     )
-#                 if retained_ids:
-#                     cur.execute(
-#                         "UPDATE documents SET is_stale = FALSE WHERE id = ANY(%s)",
-#                         (retained_ids,),
-#                     )
-#             conn.commit()
-#         except Exception as exc:
-#             _log(f"⚠️ Failed to persist stale status updates: {exc}")
-#             try:
-#                 conn.rollback()
-#             except Exception:
-#                 pass
-
-#     if connection_owned and conn:
-#         try:
-#             conn.close()
-#         except Exception:
-#             pass
-
-#     _log(f"📦 Stale detection complete: {len(confirmed_stale)} confirmed missing / {len(stale_checks)} checked")
-#     return confirmed_stale
-
 def render_kb_entry_details(entry: tuple):
     """Render a single knowledge base entry and associated actions."""
 
@@ -550,7 +438,6 @@ def get_canonical_url(soup: BeautifulSoup, fetched_url: str) -> str | None:
 # -----------------------------
 # DB helpers (unchanged, except we upsert by normalized URL)
 # -----------------------------
-# def delete_docs():
 #     conn = get_connection()
 #     cursor = conn.cursor()
 #     try:
