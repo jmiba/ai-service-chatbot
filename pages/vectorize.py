@@ -902,106 +902,111 @@ if HAS_STREAMLIT_CONTEXT:
         st.markdown("---")
         st.header("Vector Store File Management")
 
-        # Action: Sync now
-        st.subheader("Sync Knowlede Base Now")
-        st.caption("Uploads new or changed knowledge base entries to vector store and deletes files marked as excluded from vector store.")
+        st.subheader("Manual Sync (override)")
+        st.info(
+            "Scheduled scrapes already trigger vector syncs. Use the manual controls below for urgent overrides.",
+            icon=":material/schedule:",
+        )
+
+        with st.expander("Show manual vector sync controls", expanded=False):
+            st.caption("Uploads new or changed knowledge base entries to vector store and deletes files marked as excluded from vector store.")
+            
+            # Sync button with better context
+            sync_button_text = "Sync Documents with Vector Store"
+            if new_unsynced_count > 0 or pending_resync_count > 0:
+                sync_button_text += f" ({new_unsynced_count + pending_resync_count} pending)"
         
-        # Sync button with better context
-        sync_button_text = "Sync Documents with Vector Store"
-        if new_unsynced_count > 0 or pending_resync_count > 0:
-            sync_button_text += f" ({new_unsynced_count + pending_resync_count} pending)"
-    
-        if "vector_cli_job" not in st.session_state:
-            st.session_state["vector_cli_job"] = None
-        if "vector_cli_message" not in st.session_state:
-            st.session_state["vector_cli_message"] = None
-        if "vector_cli_last_return" not in st.session_state:
-            st.session_state["vector_cli_last_return"] = None
+            if "vector_cli_job" not in st.session_state:
+                st.session_state["vector_cli_job"] = None
+            if "vector_cli_message" not in st.session_state:
+                st.session_state["vector_cli_message"] = None
+            if "vector_cli_last_return" not in st.session_state:
+                st.session_state["vector_cli_last_return"] = None
 
-        vector_job: CLIJob | None = st.session_state.get("vector_cli_job")
-        job_running = vector_job is not None and vector_job.is_running()
+            vector_job: CLIJob | None = st.session_state.get("vector_cli_job")
+            job_running = vector_job is not None and vector_job.is_running()
 
-        vector_lock_error = None
-        external_job_running = False
-        try:
-            lock_held = is_job_locked("scrape_job")
-            external_job_running = lock_held and not job_running
-        except RuntimeError as exc:
-            vector_lock_error = str(exc)
+            vector_lock_error = None
+            external_job_running = False
+            try:
+                lock_held = is_job_locked("scrape_job")
+                external_job_running = lock_held and not job_running
+            except RuntimeError as exc:
+                vector_lock_error = str(exc)
 
-        if vector_lock_error:
-            st.warning(f"Could not verify job status: {vector_lock_error}", icon=":material/warning:")
-        elif external_job_running:
-            st.warning(
-                "A scrape/vectorize job is already running (e.g., via the scheduler). "
-                "Wait for it to finish before starting another vector sync.",
-                icon=":material/pending_actions:",
-            )
-
-        sync_disabled = job_running or external_job_running
-
-        if st.button(sync_button_text, type="primary", icon=":material/sync:", disabled=sync_disabled):
-            if job_running:
-                st.warning("A vector sync job is already running.", icon=":material/warning:")
+            if vector_lock_error:
+                st.warning(f"Could not verify job status: {vector_lock_error}", icon=":material/warning:")
             elif external_job_running:
-                st.warning("Another scrape/vectorize job is active. Try again once it finishes.", icon=":material/pending_actions:")
-            else:
-                overlay = show_blocking_overlay()
-                rerun_needed = False
-                try:
-                    job = launch_cli_job(mode="vectorize")
-                except CLIJobError as exc:
-                    st.error(f"Failed to start vector sync job: {exc}", icon=":material/error:")
-                else:
-                    st.session_state["vector_cli_job"] = job
-                    st.session_state["vector_cli_message"] = "Vector sync running via cli_scrape.py."
-                    st.session_state["vector_cli_last_return"] = None
-                    rerun_needed = True
-                finally:
-                    hide_blocking_overlay(overlay)
-                if rerun_needed:
-                    rerun_app()
-
-        if st.session_state["vector_cli_message"]:
-            st.info(st.session_state["vector_cli_message"], icon=":material/center_focus_weak:")
-
-        if vector_job:
-            st.markdown("#### CLI Sync Log")
-            log_lines = "\n".join(list(vector_job.logs))
-
-            render_log_output(log_lines, element_id="vector-sync-log")
-
-            if vector_job.is_running():
-                st.info(
-                    f"Vector sync in progress (PID {vector_job.process.pid}). Use the controls below to refresh or cancel.",
-                    icon=":material/progress_activity:",
+                st.warning(
+                    "A scrape/vectorize job is already running (e.g., via the scheduler). "
+                    "Wait for it to finish before starting another vector sync.",
+                    icon=":material/pending_actions:",
                 )
-                refresh_col, cancel_col = st.columns(2)
-                with refresh_col:
-                    st.button("Refresh status", key="refresh_vector_job")
-                with cancel_col:
-                    if st.button("Cancel job", key="cancel_vector_job"):
-                        vector_job.terminate()
-                        st.session_state["vector_cli_message"] = "Cancellation requested. Check the log for confirmation."
-                        rerun_app()
-            else:
-                if st.session_state["vector_cli_last_return"] is None:
-                    st.session_state["vector_cli_last_return"] = vector_job.returncode()
-                exit_code = st.session_state["vector_cli_last_return"] or 0
-                if exit_code == 0:
-                    st.session_state["vector_cli_message"] = None
-                    _vs_files_cache["data"] = None
-                    st.session_state.pop("vector_details", None)
-                    st.success("Vector sync completed successfully.", icon=":material/check_circle:")
-                else:
-                    st.session_state["vector_cli_message"] = None
-                    st.error(f"Vector sync finished with exit code {exit_code}.", icon=":material/error:")
 
-                st.button("Refresh status", key="refresh_vector_job_done")
-                if st.button("Clear log", key="clear_vector_job"):
-                    st.session_state["vector_cli_job"] = None
-                    st.session_state["vector_cli_message"] = None
-                    st.session_state["vector_cli_last_return"] = None
+            sync_disabled = job_running or external_job_running
+
+            if st.button(sync_button_text, type="primary", icon=":material/sync:", disabled=sync_disabled):
+                if job_running:
+                    st.warning("A vector sync job is already running.", icon=":material/warning:")
+                elif external_job_running:
+                    st.warning("Another scrape/vectorize job is active. Try again once it finishes.", icon=":material/pending_actions:")
+                else:
+                    overlay = show_blocking_overlay()
+                    rerun_needed = False
+                    try:
+                        job = launch_cli_job(mode="vectorize")
+                    except CLIJobError as exc:
+                        st.error(f"Failed to start vector sync job: {exc}", icon=":material/error:")
+                    else:
+                        st.session_state["vector_cli_job"] = job
+                        st.session_state["vector_cli_message"] = "Vector sync running via cli_scrape.py."
+                        st.session_state["vector_cli_last_return"] = None
+                        rerun_needed = True
+                    finally:
+                        hide_blocking_overlay(overlay)
+                    if rerun_needed:
+                        rerun_app()
+
+            if st.session_state["vector_cli_message"]:
+                st.info(st.session_state["vector_cli_message"], icon=":material/center_focus_weak:")
+
+            if vector_job:
+                st.markdown("#### CLI Sync Log")
+                log_lines = "\n".join(list(vector_job.logs))
+
+                render_log_output(log_lines, element_id="vector-sync-log")
+
+                if vector_job.is_running():
+                    st.info(
+                        f"Vector sync in progress (PID {vector_job.process.pid}). Use the controls below to refresh or cancel.",
+                        icon=":material/progress_activity:",
+                    )
+                    refresh_col, cancel_col = st.columns(2)
+                    with refresh_col:
+                        st.button("Refresh status", key="refresh_vector_job")
+                    with cancel_col:
+                        if st.button("Cancel job", key="cancel_vector_job"):
+                            vector_job.terminate()
+                            st.session_state["vector_cli_message"] = "Cancellation requested. Check the log for confirmation."
+                            rerun_app()
+                else:
+                    if st.session_state["vector_cli_last_return"] is None:
+                        st.session_state["vector_cli_last_return"] = vector_job.returncode()
+                    exit_code = st.session_state["vector_cli_last_return"] or 0
+                    if exit_code == 0:
+                        st.session_state["vector_cli_message"] = None
+                        _vs_files_cache["data"] = None
+                        st.session_state.pop("vector_details", None)
+                        st.success("Vector sync completed successfully.", icon=":material/check_circle:")
+                    else:
+                        st.session_state["vector_cli_message"] = None
+                        st.error(f"Vector sync finished with exit code {exit_code}.", icon=":material/error:")
+
+                    st.button("Refresh status", key="refresh_vector_job_done")
+                    if st.button("Clear log", key="clear_vector_job"):
+                        st.session_state["vector_cli_job"] = None
+                        st.session_state["vector_cli_message"] = None
+                        st.session_state["vector_cli_last_return"] = None
 
         st.markdown("---")
         st.subheader("Manage Vector Store Files")

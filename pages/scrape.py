@@ -1739,7 +1739,7 @@ def main():
         # Index button section
         st.markdown("---")
         st.subheader("Crawler Settings")
-        colA, colB, colC = st.columns(3)
+        colA, colB = st.columns(2)
         with colA:
             max_urls_per_run = st.number_input("Max URLs per run (crawl budget)",
                                             min_value=100, max_value=100000, value=5000, step=100)
@@ -1749,165 +1749,171 @@ def main():
                 value="",
                 help="By default the crawler normalizes links by stripping all query strings (so /page?id=123 and /page?id=456 collapse to the same URL and you don’t crawl endless variants). If you enter a list here—e.g. page,lang—those keys are preserved while all others are dropped. Use it when certain query params are meaningful (pagination, language, etc.) and you need the crawler to treat ?page=2 or ?lang=en as distinct pages, while still ignoring the rest (like tracking tags).",
             )
-        with colC:
-            dry_run = st.checkbox("Dry run (no DB writes, no LLM calls)", value=True,
-                                help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.")
+        st.caption("Dry-run mode now lives inside the manual indexing controls below.")
 
         st.markdown("---")
-        st.markdown("## Start Indexing")
-        
-        # Pre-flight check and guidance
+        st.markdown("## Manual Indexing (override)")
+        st.info(
+            "A scheduled CLI job runs every 12 hours. Use the manual controls below only if you need an immediate run.",
+            icon=":material/schedule:",
+        )
+
         if not st.session_state.url_configs:
             st.warning("**No URLs configured yet!** Add at least one URL configuration above to start indexing.", icon=":material/warning:")
             st.stop()
-        
-        # Show what will be processed
 
-        st.markdown("**Indexing will:** Discover  and crawl pages, process content with LLM, save to knowledge base, show real-time progress")
-        
-        if "scrape_cli_job" not in st.session_state:
-            st.session_state["scrape_cli_job"] = None
-        if "scrape_cli_message" not in st.session_state:
-            st.session_state["scrape_cli_message"] = None
-        if "scrape_cli_last_return" not in st.session_state:
-            st.session_state["scrape_cli_last_return"] = None
+        with st.expander("Show manual indexing controls", expanded=False):
+            st.markdown("**Indexing will:** Discover and crawl pages, process content with LLM, save to knowledge base, show real-time progress")
 
-        job_mode = st.radio(
-            "Job mode",
-            options=["Scrape only", "Scrape + vector sync"],
-            index=1 if not dry_run else 0,
-            help="Choose whether to run vector store synchronization after scraping. Dry run forces 'Scrape only'.",
-        )
-        if dry_run and job_mode != "Scrape only":
-            st.info("Dry run enabled — skipping vector store synchronization.", icon=":material/info:")
-            job_mode = "Scrape only"
-
-        cli_job: CLIJob | None = st.session_state.get("scrape_cli_job")
-        job_running = cli_job is not None and cli_job.is_running()
-
-        lock_check_error = None
-        external_job_running = False
-        try:
-            lock_held = is_job_locked("scrape_job")
-            external_job_running = lock_held and not job_running
-        except RuntimeError as exc:
-            lock_check_error = str(exc)
-
-        if lock_check_error:
-            st.warning(f"Could not verify indexing job status: {lock_check_error}", icon=":material/warning:")
-        elif external_job_running:
-            st.warning(
-                "Another indexing/vectorization job is currently running (scheduled cron or different session). "
-                "Please wait for it to finish before starting a new run.",
-                icon=":material/pending_actions:",
+            manual_dry_run = st.checkbox(
+                "Dry run (no DB writes, no LLM calls)",
+                value=True,
+                help="When enabled, the crawler won't write to the database or call the LLM. It will only traverse and show which URLs would be processed.",
             )
 
-        start_button_disabled = job_running or external_job_running
+            if "scrape_cli_job" not in st.session_state:
+                st.session_state["scrape_cli_job"] = None
+            if "scrape_cli_message" not in st.session_state:
+                st.session_state["scrape_cli_message"] = None
+            if "scrape_cli_last_return" not in st.session_state:
+                st.session_state["scrape_cli_last_return"] = None
 
-        if st.button(
-            "**Start Indexing All URLs**",
-            type="primary",
-            width="stretch",
-            disabled=start_button_disabled,
-            icon=":material/rocket_launch:",
-        ):
-            if job_running:
-                st.warning("An indexing job is already running.", icon=":material/info:")
+            job_mode = st.radio(
+                "Job mode",
+                options=["Scrape only", "Scrape + vector sync"],
+                index=1 if not manual_dry_run else 0,
+                help="Choose whether to run vector store synchronization after scraping. Dry run forces 'Scrape only'.",
+            )
+            if manual_dry_run and job_mode != "Scrape only":
+                st.info("Dry run enabled — skipping vector store synchronization.", icon=":material/info:")
+                job_mode = "Scrape only"
+
+            cli_job: CLIJob | None = st.session_state.get("scrape_cli_job")
+            job_running = cli_job is not None and cli_job.is_running()
+
+            lock_check_error = None
+            external_job_running = False
+            try:
+                lock_held = is_job_locked("scrape_job")
+                external_job_running = lock_held and not job_running
+            except RuntimeError as exc:
+                lock_check_error = str(exc)
+
+            if lock_check_error:
+                st.warning(f"Could not verify indexing job status: {lock_check_error}", icon=":material/warning:")
             elif external_job_running:
                 st.warning(
-                    "Another indexing/vectorization job is active. Please retry after it finishes.",
+                    "Another indexing/vectorization job is currently running (scheduled cron or different session). "
+                    "Please wait for it to finish before starting a new run.",
                     icon=":material/pending_actions:",
                 )
-            elif not any(config.get('url', '').strip() for config in st.session_state.url_configs):
-                st.error("No valid URLs found in configurations. Please add at least one URL.", icon=":material/error:")
-            else:
-                cli_args = ["--budget", str(max_urls_per_run)]
-                if keep_query_str:
-                    cli_args.extend(["--keep-query", keep_query_str])
-                if dry_run:
-                    cli_args.append("--dry-run")
 
-                cli_mode = "both" if job_mode == "Scrape + vector sync" and not dry_run else "scrape"
+            start_button_disabled = job_running or external_job_running
 
-                overlay = show_blocking_overlay()
-                rerun_needed = False
-                try:
+            if st.button(
+                "**Start Indexing All URLs**",
+                type="primary",
+                width="stretch",
+                disabled=start_button_disabled,
+                icon=":material/rocket_launch:",
+            ):
+                if job_running:
+                    st.warning("An indexing job is already running.", icon=":material/info:")
+                elif external_job_running:
+                    st.warning(
+                        "Another indexing/vectorization job is active. Please retry after it finishes.",
+                        icon=":material/pending_actions:",
+                    )
+                elif not any(config.get('url', '').strip() for config in st.session_state.url_configs):
+                    st.error("No valid URLs found in configurations. Please add at least one URL.", icon=":material/error:")
+                else:
+                    cli_args = ["--budget", str(max_urls_per_run)]
+                    if keep_query_str:
+                        cli_args.extend(["--keep-query", keep_query_str])
+                    if manual_dry_run:
+                        cli_args.append("--dry-run")
+
+                    cli_mode = "both" if job_mode == "Scrape + vector sync" and not manual_dry_run else "scrape"
+
+                    overlay = show_blocking_overlay()
+                    rerun_needed = False
                     try:
-                        save_url_configs(st.session_state.url_configs)
-                    except Exception as exc:
-                        st.error(f"Failed to save configurations before starting job: {exc}")
-                        return
+                        try:
+                            save_url_configs(st.session_state.url_configs)
+                        except Exception as exc:
+                            st.error(f"Failed to save configurations before starting job: {exc}")
+                            return
 
-                    try:
-                        job = launch_cli_job(mode=cli_mode, args=cli_args)
-                    except CLIJobError as exc:
-                        st.error(f"Failed to start scraping job: {exc}", icon=":material/error:")
-                    else:
-                        st.session_state["scrape_cli_job"] = job
-                        st.session_state["scrape_cli_message"] = "Scrape job running via cli_scrape.py."
-                        st.session_state["scrape_cli_last_return"] = None
-                        rerun_needed = True
-                finally:
-                    hide_blocking_overlay(overlay)
-                if rerun_needed:
-                    rerun_app()
+                        try:
+                            job = launch_cli_job(mode=cli_mode, args=cli_args)
+                        except CLIJobError as exc:
+                            st.error(f"Failed to start scraping job: {exc}", icon=":material/error:")
+                        else:
+                            st.session_state["scrape_cli_job"] = job
+                            st.session_state["scrape_cli_message"] = "Scrape job running via cli_scrape.py."
+                            st.session_state["scrape_cli_last_return"] = None
+                            rerun_needed = True
+                    finally:
+                        hide_blocking_overlay(overlay)
+                    if rerun_needed:
+                        rerun_app()
 
-        if st.session_state["scrape_cli_message"]:
-            st.info(st.session_state["scrape_cli_message"], icon=":material/center_focus_weak:")
+            if st.session_state["scrape_cli_message"]:
+                st.info(st.session_state["scrape_cli_message"], icon=":material/center_focus_weak:")
 
-        if cli_job:
-            st.markdown("#### CLI Scrape Log")
-            log_lines = "\n".join(list(cli_job.logs))
+            if cli_job:
+                st.markdown("#### CLI Scrape Log")
+                log_lines = "\n".join(list(cli_job.logs))
 
-            render_log_output(log_lines, element_id="scrape-log")
+                render_log_output(log_lines, element_id="scrape-log")
 
-            job_running = cli_job.is_running()
-            if job_running:
-                st.info(
-                    f"Scrape job in progress (PID {cli_job.process.pid}). Use the controls below to refresh or cancel.",
-                    icon=":material/hourglass:",
-                )
-                refresh_col, cancel_col = st.columns(2)
-                with refresh_col:
-                    st.button("Refresh status", key="refresh_scrape_job", icon=":material/refresh:")
-                with cancel_col:
-                    if st.button("  Cancel job  ", key="cancel_scrape_job", icon=":material/cancel:"):
-                        cli_job.terminate()
+                job_running = cli_job.is_running()
+                if job_running:
+                    st.info(
+                        f"Scrape job in progress (PID {cli_job.process.pid}). Use the controls below to refresh or cancel.",
+                        icon=":material/hourglass:",
+                    )
+                    refresh_col, cancel_col = st.columns(2)
+                    with refresh_col:
+                        st.button("Refresh status", key="refresh_scrape_job", icon=":material/refresh:")
+                    with cancel_col:
+                        if st.button("  Cancel job  ", key="cancel_scrape_job", icon=":material/cancel:"):
+                            cli_job.terminate()
+                            try:
+                                release_job_lock("scrape_job")
+                            except Exception:
+                                pass
+                            st.session_state["scrape_cli_message"] = "Cancellation requested. Check the log for confirmation."
+                            rerun_app()
+                else:
+                    if st.session_state["scrape_cli_last_return"] is None:
+                        st.session_state["scrape_cli_last_return"] = cli_job.returncode()
+
+                if not job_running:
+                    if st.session_state["scrape_cli_last_return"] is None:
+                        st.session_state["scrape_cli_last_return"] = cli_job.returncode()
+                    exit_code = st.session_state["scrape_cli_last_return"] or 0
+                    if exit_code == 0:
+                        st.session_state["scrape_cli_message"] = None
+                        st.success("Scrape job completed successfully.", icon=":material/check_circle:")
                         try:
                             release_job_lock("scrape_job")
                         except Exception:
                             pass
-                        st.session_state["scrape_cli_message"] = "Cancellation requested. Check the log for confirmation."
+                    else:
+                        st.session_state["scrape_cli_message"] = None
+                        st.error(f"Scrape job finished with exit code {exit_code}.", icon=":material/error:")
+                        try:
+                            release_job_lock("scrape_job")
+                        except Exception:
+                            pass
+
+                    st.button("Refresh status", key="refresh_scrape_job_done", icon=":material/refresh:")
+                    if st.button("Clear log", key="clear_scrape_job", icon=":material/delete:"):
+                        st.session_state["scrape_cli_job"] = None
+                        st.session_state["scrape_cli_message"] = None
+                        st.session_state["scrape_cli_last_return"] = None
                         rerun_app()
-            else:
-                if st.session_state["scrape_cli_last_return"] is None:
-                    st.session_state["scrape_cli_last_return"] = cli_job.returncode()
-
-            if not job_running:
-                if st.session_state["scrape_cli_last_return"] is None:
-                    st.session_state["scrape_cli_last_return"] = cli_job.returncode()
-                exit_code = st.session_state["scrape_cli_last_return"] or 0
-                if exit_code == 0:
-                    st.session_state["scrape_cli_message"] = None
-                    st.success("Scrape job completed successfully.", icon=":material/check_circle:")
-                    try:
-                        release_job_lock("scrape_job")
-                    except Exception:
-                        pass
-                else:
-                    st.session_state["scrape_cli_message"] = None
-                    st.error(f"Scrape job finished with exit code {exit_code}.", icon=":material/error:")
-                    try:
-                        release_job_lock("scrape_job")
-                    except Exception:
-                        pass
-
-                st.button("Refresh status", key="refresh_scrape_job_done", icon=":material/refresh:")
-                if st.button("Clear log", key="clear_scrape_job", icon=":material/delete:"):
-                    st.session_state["scrape_cli_job"] = None
-                    st.session_state["scrape_cli_message"] = None
-                    st.session_state["scrape_cli_last_return"] = None
-                    rerun_app()
 
         # --- Show current knowledge base entries ---
         # Fetch entries for filters and display
