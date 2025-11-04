@@ -212,25 +212,25 @@ def write_last_vector_sync_timestamp(ts: datetime.datetime | None = None):
         f.write(ts.isoformat())
 
 
-def count_new_unsynced_docs() -> int:
-    """
-    Count docs that were added by scraping and have never been synced:
-    vector_file_id IS NULL AND old_file_id IS NULL
-    Excludes documents marked no_upload = TRUE
-    """
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT COUNT(*)
-        FROM documents
-        WHERE vector_file_id IS NULL
-          AND old_file_id IS NULL
-          AND (no_upload IS FALSE OR no_upload IS NULL)
-    """)
-    (cnt,) = cur.fetchone()
-    cur.close()
-    conn.close()
-    return cnt
+# def count_new_unsynced_docs() -> int:
+#     """
+#     Count docs that were added by scraping and have never been synced:
+#     vector_file_id IS NULL AND old_file_id IS NULL
+#     Excludes documents marked no_upload = TRUE
+#     """
+#     conn = get_connection()
+#     cur = conn.cursor()
+#     cur.execute("""
+#         SELECT COUNT(*)
+#         FROM documents
+#         WHERE vector_file_id IS NULL
+#           AND old_file_id IS NULL
+#           AND (no_upload IS FALSE OR no_upload IS NULL)
+#     """)
+#     (cnt,) = cur.fetchone()
+#     cur.close()
+#     conn.close()
+#     return cnt
 
 
 def list_new_unsynced_docs(limit: int = 20):
@@ -337,34 +337,34 @@ def delete_all_files_in_vector_store(vector_store_id: str):
     except Exception as e:
         print(f"❌ Failed to list or delete files in vector store: {e}")
 
-def upload_md_to_vector_store(safe_title: str, content: str, vector_store_id: str) -> str | None:
-    file_stream = BytesIO(content.encode("utf-8"))
-    file_name = f"{safe_title}.md"
+# def upload_md_to_vector_store(safe_title: str, content: str, vector_store_id: str) -> str | None:
+#     file_stream = BytesIO(content.encode("utf-8"))
+#     file_name = f"{safe_title}.md"
 
-    openai_client = _get_openai_client()
+#     openai_client = _get_openai_client()
 
-    try:
-        batch = openai_client.vector_stores.file_batches.upload_and_poll(
-            vector_store_id=vector_store_id,
-            files=[(file_name, file_stream)]
-        )
-        print(f"✅ Upload for doc {safe_title} complete. Status: {batch.status}")
-        print("📄 File counts:", batch.file_counts)
+#     try:
+#         batch = openai_client.vector_stores.file_batches.upload_and_poll(
+#             vector_store_id=vector_store_id,
+#             files=[(file_name, file_stream)]
+#         )
+#         print(f"✅ Upload for doc {safe_title} complete. Status: {batch.status}")
+#         print("📄 File counts:", batch.file_counts)
 
-        # Look through *all* files to find the new one by filename (async metadata fetch)
-        vs_files = list_all_files_in_vector_store(vector_store_id)
-        filename_map = build_filename_to_id_map_efficiently(vs_files)
-        file_id = filename_map.get(file_name)
-        if file_id:
-            print(f"📂 Upload successful, found vector file ID: {file_id} for {file_name}")
-            return file_id
+#         # Look through *all* files to find the new one by filename (async metadata fetch)
+#         vs_files = list_all_files_in_vector_store(vector_store_id)
+#         filename_map = build_filename_to_id_map_efficiently(vs_files)
+#         file_id = filename_map.get(file_name)
+#         if file_id:
+#             print(f"📂 Upload successful, found vector file ID: {file_id} for {file_name}")
+#             return file_id
 
-        print(f"⚠️ No matching vector file found for {file_name}")
-        return None
+#         print(f"⚠️ No matching vector file found for {file_name}")
+#         return None
 
-    except Exception as e:
-        print(f"❌ Upload failed for doc {safe_title}:", e)
-        return None
+#     except Exception as e:
+#         print(f"❌ Upload failed for doc {safe_title}:", e)
+#         return None
     
 def chunked(iterable, size):
     """Yield successive chunks of length `size` from a list."""
