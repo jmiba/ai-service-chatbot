@@ -22,6 +22,38 @@ Try it: https://viadrina.streamlit.app
 - **Live DBIS lookup** via Model Context Protocol (MCP) tools so the assistant can fetch authoritative database information directly from the DBIS API with clear in-chat indicators.
 - **Downloadable transcripts**: export any chat as Markdown with automatic footnote-style references for cited sources.
 
+## 📸  Screenshots
+
+### Logging and Analytics Dashboard
+
+![Loging](image.png)
+
+![Session Analytics](image-1.png)
+
+![System performance metrics](image-2.png)
+
+### Content Indexing
+
+![Knowledge base](image-3.png)
+
+![Manual knowldege base entry](image-4.png)
+
+![Scraping tool](image-5.png)
+
+### Vector Store Management
+
+![Vector store sync](image-6.png)
+
+### Settings Section
+
+![System prompt editing](image-7.png)
+
+![LLM settings](image-8.png)
+
+![REquest categorization settings](image-9.png)
+
+![Web search and mcp settings](image-10.png)
+
 ## 🆕 What’s New (recent changes)
 
 - Switched the admin login flow to OpenID Connect (authorization code + PKCE) with email allowlists instead of the old SAML integration
