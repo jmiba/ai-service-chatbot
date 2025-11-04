@@ -130,300 +130,116 @@ def rerun_app():
             pass
 
 
-def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
-    """Update `documents.is_stale` by confirming which pages disappeared during this crawl."""
-    connection_owned = False
-    if conn is None:
-        if dry_run:
-            try:
-                conn = get_connection()
-                connection_owned = True
-                if log_callback:
-                    log_callback("🔍 [DRY RUN] Opened temporary DB connection for stale check")
-            except Exception as exc:
-                if log_callback:
-                    log_callback(f"⚠️ Could not open DB connection for stale detection: {exc}")
-                return []
-        else:
-            return []
+# def update_stale_documents(conn, dry_run: bool = False, log_callback=None):
+#     """Update `documents.is_stale` by confirming which pages disappeared during this crawl."""
+#     connection_owned = False
+#     if conn is None:
+#         if dry_run:
+#             try:
+#                 conn = get_connection()
+#                 connection_owned = True
+#                 if log_callback:
+#                     log_callback("🔍 [DRY RUN] Opened temporary DB connection for stale check")
+#             except Exception as exc:
+#                 if log_callback:
+#                     log_callback(f"⚠️ Could not open DB connection for stale detection: {exc}")
+#                 return []
+#         else:
+#             return []
 
-    def _log(msg: str):
-        if log_callback:
-            log_callback(msg)
+#     def _log(msg: str):
+#         if log_callback:
+#             log_callback(msg)
 
-    visited_by_recordset: dict[str, set[str]] = {
-        (rs_key or "").strip(): set(urls) for rs_key, urls in recordset_latest_urls.items()
-    }
+#     visited_by_recordset: dict[str, set[str]] = {
+#         (rs_key or "").strip(): set(urls) for rs_key, urls in recordset_latest_urls.items()
+#     }
 
-    stale_checks: list[dict] = []
-    seen_ids: set[int] = set()
+#     stale_checks: list[dict] = []
+#     seen_ids: set[int] = set()
 
-    try:
-        with conn.cursor() as cur:
-            for rs_key, urls in visited_by_recordset.items():
-                cur.execute(
-                    "SELECT id, recordset, url, title, crawl_date FROM documents WHERE recordset = %s",
-                    (rs_key,),
-                )
-                rows = cur.fetchall()
-                for doc_id, doc_recordset, doc_url, doc_title, doc_crawl in rows:
-                    if doc_url in urls:
-                        seen_ids.add(doc_id)
-                    else:
-                        stale_checks.append(
-                            {
-                                "id": doc_id,
-                                "recordset": doc_recordset,
-                                "url": doc_url,
-                                "title": doc_title,
-                                "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
-                            }
-                        )
-    except Exception as exc:
-        _log(f"⚠️ Could not compute stale documents: {exc}")
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        return []
+#     try:
+#         with conn.cursor() as cur:
+#             for rs_key, urls in visited_by_recordset.items():
+#                 cur.execute(
+#                     "SELECT id, recordset, url, title, crawl_date FROM documents WHERE recordset = %s",
+#                     (rs_key,),
+#                 )
+#                 rows = cur.fetchall()
+#                 for doc_id, doc_recordset, doc_url, doc_title, doc_crawl in rows:
+#                     if doc_url in urls:
+#                         seen_ids.add(doc_id)
+#                     else:
+#                         stale_checks.append(
+#                             {
+#                                 "id": doc_id,
+#                                 "recordset": doc_recordset,
+#                                 "url": doc_url,
+#                                 "title": doc_title,
+#                                 "crawl_date": doc_crawl.isoformat() if doc_crawl else None,
+#                             }
+#                         )
+#     except Exception as exc:
+#         _log(f"⚠️ Could not compute stale documents: {exc}")
+#         try:
+#             conn.rollback()
+#         except Exception:
+#             pass
+#         return []
 
-    # Ensure pages we actually saw are marked fresh
-    if seen_ids and not dry_run:
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE documents SET is_stale = FALSE WHERE id = ANY(%s)",
-                    (list(seen_ids),)
-                )
-        except Exception as exc:
-            _log(f"⚠️ Could not reset stale flag for seen documents: {exc}")
+#     # Ensure pages we actually saw are marked fresh
+#     if seen_ids and not dry_run:
+#         try:
+#             with conn.cursor() as cur:
+#                 cur.execute(
+#                     "UPDATE documents SET is_stale = FALSE WHERE id = ANY(%s)",
+#                     (list(seen_ids),)
+#                 )
+#         except Exception as exc:
+#             _log(f"⚠️ Could not reset stale flag for seen documents: {exc}")
 
-    confirmed_stale: list[dict] = []
-    retained_ids: list[int] = []
+#     confirmed_stale: list[dict] = []
+#     retained_ids: list[int] = []
 
-    for entry in stale_checks:
-        is_missing, reason = verify_url_deleted(entry["url"], log_callback=_log)
-        if is_missing:
-            entry["reason"] = reason
-            confirmed_stale.append(entry)
-            _log(f"🗑️ Confirmed missing: {entry['url']} ({reason})")
-        else:
-            retained_ids.append(entry["id"])
-            _log(f"✅ Still reachable: {entry['url']}")
+#     for entry in stale_checks:
+#         is_missing, reason = verify_url_deleted(entry["url"], log_callback=_log)
+#         if is_missing:
+#             entry["reason"] = reason
+#             confirmed_stale.append(entry)
+#             _log(f"🗑️ Confirmed missing: {entry['url']} ({reason})")
+#         else:
+#             retained_ids.append(entry["id"])
+#             _log(f"✅ Still reachable: {entry['url']}")
 
-    if not dry_run:
-        try:
-            with conn.cursor() as cur:
-                if confirmed_stale:
-                    cur.execute(
-                        "UPDATE documents SET is_stale = TRUE, updated_at = NOW() WHERE id = ANY(%s)",
-                        ([entry["id"] for entry in confirmed_stale],),
-                    )
-                if retained_ids:
-                    cur.execute(
-                        "UPDATE documents SET is_stale = FALSE WHERE id = ANY(%s)",
-                        (retained_ids,),
-                    )
-            conn.commit()
-        except Exception as exc:
-            _log(f"⚠️ Failed to persist stale status updates: {exc}")
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+#     if not dry_run:
+#         try:
+#             with conn.cursor() as cur:
+#                 if confirmed_stale:
+#                     cur.execute(
+#                         "UPDATE documents SET is_stale = TRUE, updated_at = NOW() WHERE id = ANY(%s)",
+#                         ([entry["id"] for entry in confirmed_stale],),
+#                     )
+#                 if retained_ids:
+#                     cur.execute(
+#                         "UPDATE documents SET is_stale = FALSE WHERE id = ANY(%s)",
+#                         (retained_ids,),
+#                     )
+#             conn.commit()
+#         except Exception as exc:
+#             _log(f"⚠️ Failed to persist stale status updates: {exc}")
+#             try:
+#                 conn.rollback()
+#             except Exception:
+#                 pass
 
-    if connection_owned and conn:
-        try:
-            conn.close()
-        except Exception:
-            pass
+#     if connection_owned and conn:
+#         try:
+#             conn.close()
+#         except Exception:
+#             pass
 
-    _log(f"📦 Stale detection complete: {len(confirmed_stale)} confirmed missing / {len(stale_checks)} checked")
-    return confirmed_stale
-
-
-def render_crawl_summary(summary: dict, show_log: bool = True) -> None:
-    """Render crawl summary, logs, and results using stored session data."""
-
-    if show_log:
-        log_entries = summary.get("log") or []
-        st.markdown("##### 📟 Processing Log")
-        st.text_area(
-            label="Processing log",
-            value="\n".join(log_entries[-20:]) if log_entries else "No log entries recorded.",
-            height=300,
-            disabled=True,
-            label_visibility="collapsed",
-            key="scrape_saved_log",
-        )
-
-    if summary.get("error"):
-        st.error(f"Error during crawl: {summary['error']}")
-
-    st.markdown("### 📊 Crawl Summary")
-
-    visited = summary.get("visited", 0)
-    processed = summary.get("processed", 0)
-    dry_run_count = summary.get("dry_run_llm", 0)
-    max_budget = summary.get("max_urls_per_run", 0)
-    dry_run = summary.get("dry_run", False)
-    stale_count = len(summary.get("stale_candidates") or [])
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("URLs Visited", f"{visited}", help="Total number of URLs that were visited and processed")
-    with col2:
-        st.metric("Crawl Budget", f"{max_budget}", help="Maximum number of URLs allowed per crawl session")
-    with col3:
-        if dry_run:
-            st.metric("Would LLM Process", f"{dry_run_count}", help="Pages that would trigger LLM processing in a real run")
-        else:
-            st.metric("Pages Processed by LLM", f"{processed}",
-                      help="Number of pages processed by LLM and saved to the database")
-
-    if stale_count > 0:
-        st.metric("Potentially Stale Pages", f"{stale_count}", help="Documents present in the knowledge base but not seen in this crawl")
-
-    if dry_run:
-        if dry_run_count > 0:
-            st.info(f"🧪 Dry run completed – {dry_run_count} pages would be processed by the LLM.")
-        else:
-            st.info("🧪 Dry run completed – no pages would be processed by the LLM (likely duplicates or filtered out).")
-    else:
-        if processed > 0:
-            st.success("Indexing completed. Pages are ready for vector store synchronization.")
-        else:
-            st.info("Indexing completed. No new pages were processed (all may have been skipped or already exist).")
-
-    stale_entries = summary.get("stale_candidates") or []
-    if stale_entries:
-        st.markdown("### 🧹 Review pages missing in the latest crawl")
-        if dry_run:
-            st.info("Stale pages detected (dry run). They are not deleted in dry-run mode.")
-        st.caption("Select entries to remove from the knowledge base. Only URLs not seen in the current crawl are listed.")
-
-        display_rows = [
-            {
-                "Recordset": entry.get("recordset") or "(none)",
-                "Title": entry.get("title") or "—",
-                "URL": entry.get("url"),
-                "Last Crawl": entry.get("crawl_date") or "—",
-            }
-            for entry in stale_entries
-        ]
-        stale_df = pd.DataFrame(display_rows)
-
-        selection_enabled = True
-        try:
-            table_event = st.dataframe(
-                stale_df,
-                hide_index=True,
-                width="stretch",
-                selection_mode="multi-row",
-                on_select="rerun",
-                key="scrape_stale_table",
-            )
-        except TypeError:
-            selection_enabled = False
-            table_event = st.dataframe(
-                stale_df,
-                hide_index=True,
-                width="stretch",
-                key="scrape_stale_table",
-            )
-
-        selected_entries: list[dict] = []
-        selected_indices = st.session_state.get("scrape_stale_selected_indices", [])
-
-        if selection_enabled:
-            event_selection = getattr(table_event, "selection", None)
-            if isinstance(event_selection, dict):
-                selected_indices = event_selection.get("rows", []) or []
-                st.session_state["scrape_stale_selected_indices"] = selected_indices
-            selected_entries = [
-                stale_entries[idx]
-                for idx in selected_indices
-                if 0 <= idx < len(stale_entries)
-            ]
-        else:
-            option_map: dict[str, tuple[int, dict]] = {
-                f"{entry.get('recordset') or '(none)'} • {entry.get('title') or entry.get('url')}": (idx, entry)
-                for idx, entry in enumerate(stale_entries)
-            }
-            default_labels = [
-                label
-                for label, (idx, _) in option_map.items()
-                if idx in selected_indices
-            ]
-            selected_labels = st.multiselect(
-                "Select pages to delete",
-                options=list(option_map.keys()),
-                default=default_labels,
-                key="stale_select",
-                disabled=dry_run,
-            )
-            selected_entries = [option_map[label][1] for label in selected_labels]
-            st.session_state["scrape_stale_selected_indices"] = [
-                option_map[label][0] for label in selected_labels
-            ]
-
-        if st.button(
-            "Delete selected pages",
-            type="secondary",
-            disabled=dry_run or not selected_entries,
-            key="delete_stale",
-        ):
-            ids_to_delete = [entry["id"] for entry in selected_entries]
-            try:
-                conn = get_connection()
-                with conn:
-                    with conn.cursor() as cur:
-                        cur.execute("DELETE FROM documents WHERE id = ANY(%s)", (ids_to_delete,))
-                st.success(f"Deleted {len(ids_to_delete)} page(s) from the knowledge base.")
-                remaining = [entry for entry in stale_entries if entry["id"] not in ids_to_delete]
-                summary["stale_candidates"] = remaining
-                if "scrape_results" in st.session_state:
-                    st.session_state.scrape_results["stale_candidates"] = remaining
-                    st.session_state.scrape_results = dict(st.session_state.scrape_results)
-                st.session_state["scrape_stale_selected_indices"] = []
-                st.rerun()
-            except Exception as delete_exc:
-                st.error(f"Failed to delete selected pages: {delete_exc}")
-
-    llm_results = summary.get("llm_analysis") or []
-    if llm_results and not dry_run:
-        with st.expander(f"LLM Analysis Results ({len(llm_results)} pages)", expanded=True, icon=":material/insights:"):
-            for i, result in enumerate(llm_results, 1):
-                st.markdown(f"**{i}. {result['title']}**")
-                st.markdown(f"🔗 *{result['url']}*")
-                st.markdown(f"📝 **Summary:** {result['summary']}")
-                st.markdown(f"🌍 **Language:** {result['language']}")
-                st.markdown(f"🏷️ **Tags:** {', '.join(result['tags'])}")
-                st.markdown(f"📄 **Type:** {result['page_type']}")
-                if i < len(llm_results):
-                    st.divider()
-
-    frontier = summary.get("frontier") or []
-    if frontier:
-        with st.expander(f"View Processed URLs ({len(frontier)} total)", expanded=False, icon=":material/visibility:"):
-            from collections import defaultdict
-
-            url_groups = defaultdict(list)
-            for url in frontier[:1000]:
-                domain = urlparse(url).netloc
-                url_groups[domain].append(url)
-
-            for domain, urls in url_groups.items():
-                st.markdown(f"**{domain}** ({len(urls)} URLs)")
-                for url in urls[:10]:
-                    st.text(f"  • {url}")
-                if len(urls) > 10:
-                    st.text(f"  ... and {len(urls) - 10} more URLs")
-                st.markdown("---")
-
-            if len(frontier) > 1000:
-                st.info(f"Showing first 1000 URLs. Total processed: {len(frontier)}")
-
+#     _log(f"📦 Stale detection complete: {len(confirmed_stale)} confirmed missing / {len(stale_checks)} checked")
+#     return confirmed_stale
 
 def render_kb_entry_details(entry: tuple):
     """Render a single knowledge base entry and associated actions."""
@@ -734,18 +550,18 @@ def get_canonical_url(soup: BeautifulSoup, fetched_url: str) -> str | None:
 # -----------------------------
 # DB helpers (unchanged, except we upsert by normalized URL)
 # -----------------------------
-def delete_docs():
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM documents")
-        conn.commit()
-    except Exception as e:
-        print(f"[DB ERROR] Failed to delete documents: {e}")
-        raise e
-    finally:
-        cursor.close()
-        conn.close()
+# def delete_docs():
+#     conn = get_connection()
+#     cursor = conn.cursor()
+#     try:
+#         cursor.execute("DELETE FROM documents")
+#         conn.commit()
+#     except Exception as e:
+#         print(f"[DB ERROR] Failed to delete documents: {e}")
+#         raise e
+#     finally:
+#         cursor.close()
+#         conn.close()
 
 def get_html_lang(soup):
     html_tag = soup.find("html")
