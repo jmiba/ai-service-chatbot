@@ -1,6 +1,10 @@
 # Viadrina Library Assistant 🤖📚
 
-An AI-powered Streamlit app using OpenAI Responses API. It answers university- and library-related questions with Retrieval-Augmented Generation (RAG), web search, and rich citations. Includes an admin UI for settings, prompt versioning, filters, analytics, and scraping/vectorization workflows.
+An AI-powered Streamlit app using OpenAI Responses API. It answers domain-specific questions with Retrieval-Augmented Generation (RAG), web search, mcp support, and rich citations. Includes an admin UI for settings, prompt versioning, tools, analytics, and scraping/vectorization workflows.
+
+It can index any set of websites or internal documents to build a knowledge base for RAG.
+
+Use the app for research assistance, document discovery, or general Q&A over custom corpora. Feel free to use it as a starting point for building your own AI chat assistant with Streamlit and OpenAI.
 
 ![Viadrina Library Assistant](assets/viadrina-ub-logo.png)
 
