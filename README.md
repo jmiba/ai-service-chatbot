@@ -98,7 +98,7 @@ We ship a `docker-compose.yaml` that runs three services:
    ```
 2. Start everything:
    ```bash
-   docker compose up -d      # podman-compose up -d
+   docker compose up --build -d   # podman-compose up --build -d
    ```
    The cron sidecar shares the same `.streamlit` and `state` volumes as the UI, so it reuses secrets and job locks. It kicks off a scrape immediately on start, then sleeps 12 hours before the next run.
 
