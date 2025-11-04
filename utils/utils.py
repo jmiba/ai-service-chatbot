@@ -394,7 +394,15 @@ def get_document_metrics() -> dict[str, int]:
             """
             SELECT
                 COUNT(*) AS total_pages,
-                COALESCE(SUM(CASE WHEN vector_file_id IS NULL THEN 1 ELSE 0 END), 0) AS pending_sync,
+                COALESCE(
+                    SUM(
+                        CASE
+                            WHEN vector_file_id IS NULL AND (no_upload IS NOT TRUE) THEN 1
+                            ELSE 0
+                        END
+                    ),
+                    0
+                ) AS pending_sync,
                 COALESCE(SUM(CASE WHEN is_stale IS TRUE THEN 1 ELSE 0 END), 0) AS stale_pages
             FROM documents
             """

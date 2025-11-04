@@ -1810,7 +1810,7 @@ def main():
                             release_job_lock("scrape_job")
                         except Exception:
                             pass
-                        job = launch_cli_job(mode=cli_mode, args=cli_args, auto_rerun=True)
+                        job = launch_cli_job(mode=cli_mode, args=cli_args)
                     except CLIJobError as exc:
                         st.error(f"Failed to start scraping job: {exc}", icon=":material/error:")
                     else:

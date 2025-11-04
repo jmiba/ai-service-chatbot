@@ -6,23 +6,11 @@ import os
 import subprocess
 import sys
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Deque, Iterable, Optional
-
-try:  # Streamlit is only available when running inside the app
-    from streamlit.runtime.scriptrunner import (
-        RerunData,
-        add_script_run_ctx,
-        get_script_run_ctx,
-    )
-except Exception:  # pragma: no cover - streamlit not installed in some environments
-    RerunData = None  # type: ignore[assignment]
-    add_script_run_ctx = None  # type: ignore[assignment]
-    get_script_run_ctx = None  # type: ignore[assignment]
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -67,7 +55,6 @@ def launch_cli_job(
     env_overrides: Optional[dict[str, str]] = None,
     log_callback: Optional[Callable[[str], None]] = None,
     max_log_lines: int = 500,
-    auto_rerun: bool = False,
 ) -> CLIJob:
     """Spawn cli_scrape.py with the provided mode in a background process.
 
@@ -83,9 +70,6 @@ def launch_cli_job(
         Called for each stdout line emitted by the CLI.
     max_log_lines:
         Retained line count for the job's in-memory log buffer.
-    auto_rerun:
-        When True and running inside Streamlit, enqueue a rerun when new log output
-        arrives so the UI updates without manual refreshes.
     """
 
     script_path = _ensure_cli_script()
@@ -120,18 +104,7 @@ def launch_cli_job(
 
     logs: Deque[str] = deque(maxlen=max_log_lines)
 
-    rerun_ctx = None
-    if auto_rerun and RerunData and get_script_run_ctx:
-        try:
-            rerun_ctx = get_script_run_ctx()  # type: ignore[call-arg]
-        except Exception:
-            rerun_ctx = None
-    rerun_enabled = rerun_ctx is not None
-
     def _reader() -> None:
-        last_rerun_ts = 0.0
-        rerun_interval = 0.4  # throttle reruns so we do not spin the UI
-
         assert process.stdout is not None
         with process.stdout:
             for raw_line in process.stdout:
@@ -142,23 +115,8 @@ def launch_cli_job(
                         log_callback(line)
                     except Exception:
                         pass
-                if rerun_enabled and getattr(rerun_ctx, "script_requests", None):
-                    now = time.monotonic()
-                    if now - last_rerun_ts > rerun_interval:
-                        try:
-                            rerun_ctx.script_requests.request_rerun(  # type: ignore[attr-defined]
-                                RerunData(is_auto_rerun=True)  # type: ignore[call-arg]
-                            )
-                            last_rerun_ts = now
-                        except Exception:
-                            pass
 
     thread = threading.Thread(target=_reader, name=f"cli-scrape-{mode}", daemon=True)
-    if rerun_enabled and add_script_run_ctx:
-        try:
-            add_script_run_ctx(thread, rerun_ctx)  # type: ignore[arg-type]
-        except Exception:
-            pass
     thread.start()
 
     return CLIJob(process=process, mode=mode, start_time=datetime.utcnow(), logs=logs, _reader=thread)

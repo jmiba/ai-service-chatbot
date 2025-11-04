@@ -13,6 +13,24 @@ services:
       - autoheal=true
     # Healthcheck inherited from Dockerfile; override here if you need different timing.
 
+  scraper-cron:
+    image: chatbot:latest
+    container_name: chatbot-cron
+    depends_on:
+      - chatbot
+    restart: unless-stopped
+    volumes:
+      - /home/chatbot/app/.streamlit:/app/.streamlit
+      - /home/chatbot/app/state:/app/state
+    entrypoint: ["/bin/bash", "-lc"]
+    command: |
+      while true; do
+        echo "[$(date -Is)] Starting scheduled scrape..."
+        python scripts/cli_scrape.py --mode both || echo "[$(date -Is)] scrape job failed"
+        echo "[$(date -Is)] Sleeping for 12 hours before next run."
+        sleep 43200
+      done
+
   autoheal:
     image: willfarrell/autoheal
     container_name: autoheal
