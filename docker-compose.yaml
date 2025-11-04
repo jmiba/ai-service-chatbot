@@ -22,7 +22,7 @@ services:
     volumes:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
-    entrypoint: ["/bin/bash", "/app/scripts/run_scraper_cron.sh"]
+    entrypoint: ["/app/scripts/run_scraper_cron.sh"]
 
   autoheal:
     image: willfarrell/autoheal
