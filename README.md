@@ -83,26 +83,26 @@ Run:
 streamlit run app.py
 ```
 
-### Docker (optional)
+### Container Deploy (Docker or Podman)
 
-The Dockerfile uses a slim Python 3.12 base with a multi-stage build so the runtime image contains only your app and its virtualenv.
+We ship a `docker-compose.yaml` that runs three services:
 
-Build the image:
+- `chatbot`: the Streamlit UI (builds the local app and exposes `8501`)
+- `scraper-cron`: a sidecar that runs `python scripts/cli_scrape.py --mode both` every 12 hours so the knowledge base stays fresh without systemd timers
+- `autoheal`: optional watchdog that restarts unhealthy containers
 
-```bash
-docker build -t viadrina-chatbot .
-```
+1. Build the image (Docker or Podman both work):
+   ```bash
+   docker build -t chatbot .
+   # or: podman build --format docker -t chatbot .
+   ```
+2. Start everything:
+   ```bash
+   docker compose up -d      # podman-compose up -d
+   ```
+   The cron sidecar shares the same `.streamlit` and `state` volumes as the UI, so it reuses secrets and job locks. It kicks off a scrape immediately on start, then sleeps 12 hours before the next run.
 
-Run it locally (mount your secrets file or provide env vars):
-
-```bash
-docker run \
-  -p 8501:8501 \
-  -v $(pwd)/.streamlit/secrets.toml:/app/.streamlit/secrets.toml:ro \
-  viadrina-chatbot
-```
-
-The container exposes port `8501` and reads the same `secrets.toml`. If your PostgreSQL server runs on the host machine, set `host = "host.docker.internal"` in the secrets file so the container can reach it.
+To run only the Streamlit UI (without the scheduled scraper), omit the `scraper-cron` service or run `docker compose up chatbot autoheal`.
 
 ## 🔌 DBIS MCP Integration
 
