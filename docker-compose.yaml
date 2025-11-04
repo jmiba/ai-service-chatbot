@@ -1,9 +1,11 @@
 services:
-  app:
+  chatbot:
+    image: chatbot:latest
+    build: .
+    container_name: chatbot
     volumes:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
-    build: .
     restart: unless-stopped
     ports:
       - "8501:8501"
@@ -21,4 +23,4 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - app
+      - chatbot
