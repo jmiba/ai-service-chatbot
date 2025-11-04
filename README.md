@@ -88,7 +88,7 @@ streamlit run app.py
 We ship a `docker-compose.yaml` that runs three services:
 
 - `chatbot`: the Streamlit UI (builds the local app and exposes `8501`)
-- `scraper-cron`: a sidecar that runs `python scripts/cli_scrape.py --mode both` every 12 hours so the knowledge base stays fresh without systemd timers
+- `scraper-cron`: a sidecar that runs `scripts/run_scraper_cron.sh` every 12 hours so the knowledge base stays fresh without systemd timers
 - `autoheal`: optional watchdog that restarts unhealthy containers
 
 1. Build the image (Docker or Podman both work):
@@ -101,7 +101,7 @@ We ship a `docker-compose.yaml` that runs three services:
    docker compose up --build -d      # podman-compose up --build -d
    # or, if you wrapped compose in systemd: systemctl restart chatbot
    ```
-   The cron sidecar shares the same `.streamlit` and `state` volumes as the UI, so it reuses secrets and job locks. It kicks off a scrape immediately on start, then sleeps 12 hours before the next run.
+   The cron sidecar shares the same `.streamlit` and `state` volumes as the UI, so it reuses secrets and job locks. It runs `/app/scripts/run_scraper_cron.sh`, which kicks off a scrape immediately on start, then sleeps 12 hours (override with `SCRAPER_INTERVAL_SECONDS`) before the next run.
 
 To run only the Streamlit UI (without the scheduled scraper), omit the `scraper-cron` service or run `docker compose up chatbot autoheal`.
 

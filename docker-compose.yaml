@@ -22,14 +22,7 @@ services:
     volumes:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
-    entrypoint: ["/bin/bash", "-lc"]
-    command: |
-      while true; do
-        echo "[$(date -Is)] Starting scheduled scrape..."
-        python scripts/cli_scrape.py --mode both || echo "[$(date -Is)] scrape job failed"
-        echo "[$(date -Is)] Sleeping for 12 hours before next run."
-        sleep 43200
-      done
+    entrypoint: ["/bin/bash", "/app/scripts/run_scraper_cron.sh"]
 
   autoheal:
     image: willfarrell/autoheal
