@@ -31,6 +31,7 @@ from utils import (
     is_job_locked,
     release_job_lock,
     render_log_output,
+    mark_vector_store_dirty,
 )
 from pathlib import Path
 import pandas as pd
@@ -221,6 +222,7 @@ def render_kb_entry_details(entry: tuple):
                     st.success(f"Record {entry_id} included in vector store.")
                 else:
                     st.success(f"Record {entry_id} excluded from vector store.")
+                mark_vector_store_dirty()
                 rerun_app()
             except Exception as exc:
                 st.error(f"Failed to update vector store inclusion for record {entry_id}: {exc}")
@@ -239,6 +241,7 @@ def render_kb_entry_details(entry: tuple):
                     conn.commit()
                 conn.close()
                 st.success(f"Record {entry_id} deleted successfully.")
+                mark_vector_store_dirty()
                 rerun_app()
             except Exception as exc:
                 st.error(f"Failed to delete record {entry_id}: {exc}")
@@ -372,6 +375,7 @@ def render_kb_entry_details(entry: tuple):
                         "url": new_url,
                     }
                     st.session_state["internal_edit_id"] = None
+                    mark_vector_store_dirty()
                     rerun_app()
                 except Exception as exc:
                     st.error(f"Failed to update document: {exc}")
@@ -2263,6 +2267,7 @@ def main():
                         with conn.cursor() as cur:
                             cur.execute("DELETE FROM documents WHERE id = ANY(%s)", (ids_to_delete,))
                     st.success(f"Deleted {len(ids_to_delete)} record(s) matching the current filters.")
+                    mark_vector_store_dirty()
                     st.rerun()
                 except Exception as e:
                     st.error(f"Failed to delete filtered documents: {e}")

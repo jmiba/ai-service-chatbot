@@ -24,7 +24,11 @@ services:
       - /home/chatbot/app/state:/app/state
     entrypoint: ["/app/scripts/run_scraper_cron.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "test -f /app/state/last_scraper_ok && find /app/state -maxdepth 1 -name last_scraper_ok -mmin -lt 780 | grep -q last_scraper_ok"]
+      test:
+        [
+          "CMD-SHELL",
+          "python3 -c 'import os, sys, time; path = \"/app/state/last_scraper_ok\"; max_age = 780 * 60; now = time.time(); sys.exit(0) if os.path.exists(path) and (now - os.path.getmtime(path)) < max_age else sys.exit(1)'",
+        ]
       interval: 5m
       timeout: 10s
       retries: 3

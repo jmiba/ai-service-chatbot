@@ -36,9 +36,12 @@ if ROOT not in sys.path:
 from scrape.maintenance import sync_vector_store, update_stale_documents
 
 try:
-    from utils import write_vector_store_details
+    from utils import write_vector_store_details, clear_vector_store_dirty
 except ImportError:
     def write_vector_store_details(_data):
+        return None
+
+    def clear_vector_store_dirty():
         return None
 
 # Provide Streamlit secrets in headless mode
@@ -361,6 +364,7 @@ def main():
                             write_vector_status(status)
                             details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=True)
                             write_vector_store_details(details)
+                            clear_vector_store_dirty()
                             print("[INFO] Vector store status and details snapshots updated.")
                         except Exception as status_exc:
                             print(f"[WARN] Could not update vector store snapshots: {status_exc}")

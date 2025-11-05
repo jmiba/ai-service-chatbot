@@ -26,12 +26,18 @@ from utils import (
 )
 
 try:
-    from utils import read_vector_store_details, write_vector_store_details
+    from utils import read_vector_store_details, write_vector_store_details, is_vector_store_dirty, clear_vector_store_dirty
 except ImportError:  # backwards compatibility on deployments without new helpers
     def read_vector_store_details():
         return None
 
     def write_vector_store_details(_data):
+        return None
+
+    def is_vector_store_dirty():
+        return False
+
+    def clear_vector_store_dirty():
         return None
 
 try:
@@ -57,6 +63,49 @@ else:
     _script_ctx = None
 
 HAS_STREAMLIT_CONTEXT = _script_ctx is not None
+SNAPSHOT_MAX_AGE_MINUTES = 15
+
+
+def _coerce_datetime(value: Any) -> datetime.datetime | None:
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=datetime.UTC)
+        return value
+    if isinstance(value, str):
+        try:
+            dt = datetime.datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.UTC)
+        return dt
+    return None
+
+
+def _snapshot_is_stale(timestamp_value: Any, *, max_age_minutes: int = SNAPSHOT_MAX_AGE_MINUTES) -> bool:
+    if timestamp_value is None:
+        return True
+    dt = _coerce_datetime(timestamp_value)
+    if not dt:
+        return True
+    age_minutes = (datetime.datetime.now(datetime.UTC) - dt).total_seconds() / 60
+    return age_minutes >= max_age_minutes
+
+
+def _refresh_vector_snapshots() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Force refresh of status + details snapshots and persist them."""
+
+    _vs_files_cache["data"] = None
+    status = compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
+    write_vector_status(status)
+    st.session_state["vector_status"] = status
+
+    details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=True)
+    write_vector_store_details(details)
+    st.session_state["vector_details"] = details
+    clear_vector_store_dirty()
+
+    return status, details
 
 
 def rerun_app() -> None:
@@ -638,7 +687,7 @@ if HAS_STREAMLIT_CONTEXT:
                 if st.button(
                     "Clear cache",
                     icon=":material/delete_forever:",
-                    help="Clear the in-memory vector store cache used for detailliertere Operationen.",
+                    help="Clear the in-memory vector store file listing cache used for detailed operations.",
                 ):
                     _vs_files_cache["data"] = None
                     st.session_state.pop("vector_details", None)
@@ -806,6 +855,7 @@ if HAS_STREAMLIT_CONTEXT:
         load_label = "Reload all vector store details" if vector_details else "Load vector store details"
         load_icon = ":material/cached:" if vector_details else ":material/database:"
 
+        reload_triggered = False
         if st.button(
             load_label,
             icon=load_icon,
@@ -813,14 +863,17 @@ if HAS_STREAMLIT_CONTEXT:
         ):
             overlay = show_blocking_overlay()
             try:
-                with st.spinner("Loading Vector Store data..."):
+                with st.spinner("Refreshing vector store snapshots..."):
                     try:
-                        vector_details = _load_vector_details(VECTOR_STORE_ID, force=True)
-                        st.success("Details updated." if load_label.startswith("Reload") else "Details loaded.", icon=":material/check_circle:")
+                        status_snapshot, vector_details = _refresh_vector_snapshots()
+                        st.success("Snapshots updated." if load_label.startswith("Reload") else "Snapshots loaded.", icon=":material/check_circle:")
+                        reload_triggered = True
                     except Exception as exc:
                         st.session_state.pop("vector_details", None)
-                        st.error(f"Failed to load: {exc}", icon=":material/error:")
+                        st.session_state.pop("vector_status", None)
+                        st.error(f"Failed to refresh snapshots: {exc}", icon=":material/error:")
                         vector_details = None
+                        status_snapshot = None
             finally:
                 hide_blocking_overlay(overlay)
 
@@ -830,6 +883,37 @@ if HAS_STREAMLIT_CONTEXT:
             if persisted_details:
                 st.session_state["vector_details"] = persisted_details
                 vector_details = persisted_details
+
+        status_stale = False
+        if status_snapshot:
+            status_stale = _snapshot_is_stale(status_snapshot.get("generated_at"))
+        details_stale = False
+        if vector_details:
+            details_stale = _snapshot_is_stale(vector_details.get("loaded_at"))
+
+        dirty_flag = False
+        try:
+            dirty_flag = is_vector_store_dirty()
+        except Exception:
+            dirty_flag = False
+
+        if dirty_flag:
+            _vs_files_cache["data"] = None
+
+        if status_stale or details_stale or dirty_flag:
+            overlay = show_blocking_overlay()
+            try:
+                with st.spinner("Refreshing vector store snapshots..."):
+                    try:
+                        status_snapshot, vector_details = _refresh_vector_snapshots()
+                        if dirty_flag:
+                            rerun_app()
+                    except Exception as exc:
+                        st.error(f"Automatic snapshot refresh failed: {exc}", icon=":material/error:")
+            finally:
+                hide_blocking_overlay(overlay)
+        elif reload_triggered:
+            rerun_app()
 
         if not vector_details:
             st.info("Load vector store data to execute cleanup operations.", icon=":material/info:")
@@ -903,6 +987,12 @@ if HAS_STREAMLIT_CONTEXT:
 
                                 _vs_files_cache["data"] = None
                                 st.session_state.pop("vector_details", None)
+                                updated_details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=True)
+                                write_vector_store_details(updated_details)
+                                st.session_state["vector_details"] = updated_details
+                                status = compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
+                                write_vector_status(status)
+                                st.session_state["vector_status"] = status
                                 st.success("Cleaned excluded files and cleared references.", icon=":material/check_circle:")
                             except Exception as e:
                                 st.error(f"Failed to clean excluded files: {e}", icon=":material/error:")
@@ -930,6 +1020,12 @@ if HAS_STREAMLIT_CONTEXT:
                                         delete_file_ids(VECTOR_STORE_ID, true_orphan_ids, label="orphan")
                                         _vs_files_cache["data"] = None
                                         st.session_state.pop("vector_details", None)
+                                        updated_details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=True)
+                                        write_vector_store_details(updated_details)
+                                        st.session_state["vector_details"] = updated_details
+                                        status = compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
+                                        write_vector_status(status)
+                                        st.session_state["vector_status"] = status
                                         st.success("Deleted all orphaned files from the vector store.", icon=":material/check_circle:")
                                         rerun_app()
                                     except Exception as e:
@@ -955,6 +1051,12 @@ if HAS_STREAMLIT_CONTEXT:
                                         clear_old_file_ids(pending_replacement_ids)
                                         _vs_files_cache["data"] = None
                                         st.session_state.pop("vector_details", None)
+                                        updated_details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=True)
+                                        write_vector_store_details(updated_details)
+                                        st.session_state["vector_details"] = updated_details
+                                        status = compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
+                                        write_vector_status(status)
+                                        st.session_state["vector_status"] = status
                                         st.success("Cleaned up old file versions and updated database references.", icon=":material/check_circle:")
                                         rerun_app()
                                     except Exception as e:
@@ -991,6 +1093,12 @@ if HAS_STREAMLIT_CONTEXT:
                                     delete_all_files_in_vector_store(VECTOR_STORE_ID)
                                     _vs_files_cache["data"] = None
                                     st.session_state.pop("vector_details", None)
+                                    updated_details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=True)
+                                    write_vector_store_details(updated_details)
+                                    st.session_state["vector_details"] = updated_details
+                                    status = compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
+                                    write_vector_status(status)
+                                    st.session_state["vector_status"] = status
                                     st.session_state.pop("confirm_delete_all", None)
                                     st.success("All files deleted from the vector store.", icon=":material/check_circle:")
                                     rerun_app()
