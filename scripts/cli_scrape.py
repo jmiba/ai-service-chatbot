@@ -34,7 +34,12 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from scrape.maintenance import sync_vector_store, update_stale_documents
-from utils import write_vector_store_details
+
+try:
+    from utils import write_vector_store_details
+except ImportError:
+    def write_vector_store_details(_data):
+        return None
 
 # Provide Streamlit secrets in headless mode
 import streamlit as st

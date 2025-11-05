@@ -20,12 +20,19 @@ from utils import (
     CLIJobError,
     read_vector_status,
     write_vector_status,
-    read_vector_store_details,
-    write_vector_store_details,
     show_blocking_overlay,
     hide_blocking_overlay,
     render_log_output,
 )
+
+try:
+    from utils import read_vector_store_details, write_vector_store_details
+except ImportError:  # backwards compatibility on deployments without new helpers
+    def read_vector_store_details():
+        return None
+
+    def write_vector_store_details(_data):
+        return None
 
 try:
     from streamlit.runtime import exists as streamlit_runtime_exists  # type: ignore
