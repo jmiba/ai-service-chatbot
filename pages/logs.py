@@ -573,7 +573,7 @@ if authenticated:
             with detail_container:
                 render_log_details(selected_entry)
 
-        if st.button("Delete All Logs", icon=":material/delete_forever:"):
+        if st.button("Delete all logs", icon=":material/delete_forever:"):
             delete_logs()
             st.success("All logs have been deleted.")
 

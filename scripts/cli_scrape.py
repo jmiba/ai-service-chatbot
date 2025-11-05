@@ -34,6 +34,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from scrape.maintenance import sync_vector_store, update_stale_documents
+from utils import write_vector_store_details
 
 # Provide Streamlit secrets in headless mode
 import streamlit as st
@@ -336,6 +337,7 @@ def main():
                 print("[INFO] Starting vector store sync...")
                 try:
                     from pages.vectorize import (
+                        collect_vector_store_details,
                         compute_vector_store_status,
                         VECTOR_STORE_ID,
                     )
@@ -352,9 +354,11 @@ def main():
                         try:
                             status = compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
                             write_vector_status(status)
-                            print("[INFO] Vector store status snapshot updated.")
+                            details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=True)
+                            write_vector_store_details(details)
+                            print("[INFO] Vector store status and details snapshots updated.")
                         except Exception as status_exc:
-                            print(f"[WARN] Could not update vector store status snapshot: {status_exc}")
+                            print(f"[WARN] Could not update vector store snapshots: {status_exc}")
                     except Exception as e:
                         print(f"[ERROR] Vector store sync failed: {e}")
         elif args.mode == "scrape":

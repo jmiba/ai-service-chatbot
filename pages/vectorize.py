@@ -20,6 +20,8 @@ from utils import (
     CLIJobError,
     read_vector_status,
     write_vector_status,
+    read_vector_store_details,
+    write_vector_store_details,
     show_blocking_overlay,
     hide_blocking_overlay,
     render_log_output,
@@ -368,18 +370,14 @@ def compute_vector_store_status(vector_store_id: str, *, force_refresh: bool = F
     }
 
 
-def _load_vector_details(vector_store_id: str, *, force: bool = False) -> dict[str, Any]:
-    """Load detailed vector store information and cache it in session_state."""
+def collect_vector_store_details(vector_store_id: str, *, force_refresh: bool = False) -> dict[str, Any]:
+    """Collect detailed vector store information for cleanup workflows."""
 
-    cache_key = "vector_details"
-    if not force and cache_key in st.session_state:
-        return st.session_state[cache_key]
-
-    vs_files = get_cached_vector_store_files(vector_store_id, force_refresh=force)
+    vs_files = get_cached_vector_store_files(vector_store_id, force_refresh=force_refresh)
     vs_ids = {f.id for f in vs_files}
     current_ids, pending_replacement_ids, true_orphan_ids = compute_vector_store_sets(
         vector_store_id,
-        use_cache=not force,
+        use_cache=not force_refresh,
     )
 
     try:
@@ -394,8 +392,8 @@ def _load_vector_details(vector_store_id: str, *, force: bool = False) -> dict[s
     except Exception:
         excluded_live_ids = set()
 
-    details = {
-        "loaded_at": datetime.datetime.now(datetime.UTC),
+    return {
+        "loaded_at": datetime.datetime.now(datetime.UTC).isoformat(),
         "vs_file_count": len(vs_files),
         "vs_ids": vs_ids,
         "current_ids": current_ids,
@@ -406,7 +404,18 @@ def _load_vector_details(vector_store_id: str, *, force: bool = False) -> dict[s
         "live_ids_display": current_ids - excluded_live_ids,
     }
 
+
+def _load_vector_details(vector_store_id: str, *, force: bool = False) -> dict[str, Any]:
+    """Load detailed vector store information and cache it in session_state."""
+
+    cache_key = "vector_details"
+    if not force and cache_key in st.session_state:
+        return st.session_state[cache_key]
+
+    details = collect_vector_store_details(vector_store_id, force_refresh=force)
+
     st.session_state[cache_key] = details
+    write_vector_store_details(details)
     return details
 
 if HAS_STREAMLIT_CONTEXT:
@@ -467,24 +476,23 @@ if HAS_STREAMLIT_CONTEXT:
         # Quick explanation with performance info
         with st.expander("How this works", icon=":material/info:", expanded=False):
             st.markdown("""
-            **What is this?** This tool manages the synchronization between your document database and OpenAI's vector store.
+            **What is this?** A housekeeping console for the knowledge base. It watches what the scheduled scraper already collects, mirrors the documents into OpenAI’s vector store, and gives you buttons to tidy things up when needed.
         
-            **The Process:**
-            1. 📄 Documents are scraped and stored in your database
-            2. 🔄 This tool uploads them to OpenAI's vector store for AI search
-            3. 🧹 Old versions and orphaned files are cleaned up to save storage space
+            **Simple story:**
+            1. 📅 Every 12 hours the scraper/CLI job runs automatically: it crawls the configured sites, updates the database, and then syncs any changes to the vector store.
+            2. 🧾 After each run the job saves two snapshots—quick stats and detailed file listings—so when you open this page you immediately see the latest state without extra API calls.
+            3. 🧹 You only press “Reload all vector store details” when you changed things outside the normal run (manual DB edits, emergency cleanups, etc.).
         
-            **File Lifecycle:**
-            - **New documents**: Need to be uploaded to vector store
-            - **Updated documents**: Create new vector files, old ones marked for cleanup  
-            - **Orphaned files**: Vector files no longer linked to any database entry
-            - **Old versions**: Previous versions of updated documents that can be safely deleted
+            **What the file states mean:**
+            - **New** → scraped but never uploaded yet; will go up on the next run.
+            - **Updated** → already re-uploaded, but the old file is still around until you clean it.
+            - **Excluded** → documents flagged “don’t upload”; their vector files should be removed.
+            - **Orphaned** → files left in the vector store even though no DB row points to them anymore (safe to delete once reviewed).
         
-            **⚡ Performance Optimizations:**
-            - **5-minute caching** of vector store data to avoid repeated API calls
-            - **Batch processing** for uploads and deletions
-            - **Progress indicators** for long-running operations
-            - **Efficient filename mapping** with progress tracking
+            **Why it stays fast:**
+            - We reuse cached vector-store listings for five minutes to avoid rate limits.
+            - Uploads, deletions and metadata lookups happen in batches so long runs stay manageable.
+            - The CLI writes the persisted detail file the UI reads, so most visits require zero manual refreshes.
             """)
     
         st.markdown("---")
@@ -788,13 +796,13 @@ if HAS_STREAMLIT_CONTEXT:
         st.subheader("Manage Vector Store Files")
         vector_details = st.session_state.get("vector_details")
 
-        load_label = "Reload vector store details" if vector_details else "Load vector store details"
+        load_label = "Reload all vector store details" if vector_details else "Load vector store details"
         load_icon = ":material/cached:" if vector_details else ":material/database:"
 
         if st.button(
             load_label,
             icon=load_icon,
-            help="Fetch vector-store file information for the cleanup actions below.",
+            help="Force a complete refresh after manual database changes or external cleanup operations.",
         ):
             overlay = show_blocking_overlay()
             try:
@@ -810,15 +818,23 @@ if HAS_STREAMLIT_CONTEXT:
                 hide_blocking_overlay(overlay)
 
         vector_details = st.session_state.get("vector_details")
-
-        vector_details = st.session_state.get("vector_details")
-        #st.markdown(vector_details)
+        if not vector_details:
+            persisted_details = read_vector_store_details()
+            if persisted_details:
+                st.session_state["vector_details"] = persisted_details
+                vector_details = persisted_details
 
         if not vector_details:
             st.info("Load vector store data to execute cleanup operations.", icon=":material/info:")
         else:
             st.markdown("#### Vector Store Details")
-            loaded_at = vector_details.get("loaded_at")
+            loaded_at_raw = vector_details.get("loaded_at")
+            loaded_at = loaded_at_raw
+            if isinstance(loaded_at_raw, str):
+                try:
+                    loaded_at = datetime.datetime.fromisoformat(loaded_at_raw)
+                except ValueError:
+                    loaded_at = None
             if loaded_at:
                 if loaded_at.tzinfo is None:
                     loaded_at = loaded_at.replace(tzinfo=datetime.UTC)
@@ -843,7 +859,7 @@ if HAS_STREAMLIT_CONTEXT:
             excluded_live_count = len(excluded_live_ids)
             if excluded_live_count > 0:
                 if st.button(
-                    f"Clean Excluded Files ({excluded_live_count})",
+                    f"Clean excluded files ({excluded_live_count})",
                     key="clean_excluded_now",
                     icon=":material/mop:",
                 ):
@@ -899,7 +915,7 @@ if HAS_STREAMLIT_CONTEXT:
                         st.markdown("**Remove Orphaned Files**")
                         st.warning(f"Found {len(true_orphan_ids)} files in vector store that no longer exist in the database", icon=":material/warning:")
                         st.caption("Safe to delete - these files are no longer referenced by any documents")
-                        if st.button("Delete Orphans", key="delete_orphans", icon=":material/delete_sweep:"):
+                        if st.button("Delete orphans", key="delete_orphans", icon=":material/delete_sweep:"):
                             overlay = show_blocking_overlay()
                             try:
                                 with st.spinner("Deleting orphans..."):
@@ -923,7 +939,7 @@ if HAS_STREAMLIT_CONTEXT:
                         st.markdown("**Clean Up Old Versions**")
                         st.warning(f"Found {len(pending_replacement_ids)} old file versions after content updates", icon=":material/warning:")
                         st.caption("Safe to delete - these are old versions that have been replaced with updated content")
-                        if st.button("Clean Up Old Versions", key="finalize_replacements", icon=":material/restore_page:"):
+                        if st.button("Clean up old versions", key="finalize_replacements", icon=":material/restore_page:"):
                             overlay = show_blocking_overlay()
                             try:
                                 with st.spinner("Cleaning up old versions..."):
@@ -949,8 +965,14 @@ if HAS_STREAMLIT_CONTEXT:
 
                 col_danger1, col_danger2, col_danger3 = st.columns([1, 1, 2])
                 with col_danger2:
+                    confirm_delete_all = st.checkbox(
+                        "Yes, delete every vector file",
+                        key="confirm_delete_all",
+                        help="You must confirm before the delete button is enabled.",
+                    )
                     if st.button(
-                        "Delete Everything",
+                        "Delete everything",
+                        disabled=not confirm_delete_all,
                         type="secondary",
                         help="This will permanently delete all files in the vector store",
                         icon=":material/delete_forever:",
@@ -962,6 +984,7 @@ if HAS_STREAMLIT_CONTEXT:
                                     delete_all_files_in_vector_store(VECTOR_STORE_ID)
                                     _vs_files_cache["data"] = None
                                     st.session_state.pop("vector_details", None)
+                                    st.session_state.pop("confirm_delete_all", None)
                                     st.success("All files deleted from the vector store.", icon=":material/check_circle:")
                                     rerun_app()
                                 except Exception as e:

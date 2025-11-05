@@ -48,6 +48,7 @@ from .utils import (
 
 from .cli_runner import CLIJob, CLIJobError, launch_cli_job
 from .vector_status import read_vector_status, write_vector_status
+from .vector_details import read_vector_store_details, write_vector_store_details
 
 # Now you can import from utils directly, e.g.:
 # from utils import get_connection, load_css

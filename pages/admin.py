@@ -105,7 +105,7 @@ if authenticated:
         new_prompt = st.text_area("**System prompt:**", value=current_prompt, height=400)
         new_note = st.text_input("**Edit note (optional):**", value="")
 
-        if st.button("Save Prompt", icon=":material/save:", type="primary"):
+        if st.button("Save prompt", icon=":material/save:", type="primary"):
             backup_prompt_to_db(new_prompt, edited_by=(st.session_state.get("admin_email") or "Admin"), note=new_note)
             st.success("System prompt updated successfully.")
 
@@ -136,7 +136,7 @@ if authenticated:
         # Show model count and refresh option
         col_refresh, col_count = st.columns([3, 1])
         with col_refresh:
-            if st.button("Refresh Models", icon=":material/refresh:", help="Reload available models from OpenAI API"):
+            if st.button("Refresh models", icon=":material/refresh:", help="Reload available models from OpenAI API"):
                 st.cache_data.clear()
                 st.rerun()
         with col_count:
@@ -385,5 +385,5 @@ if authenticated:
         st.caption("These settings affect the web_search tool and DBIS MCP tool at runtime.")
         
         # Reset button outside the form
-        if st.button("Reset to Defaults", icon=":material/cached:",):
+        if st.button("Reset to defaults", icon=":material/cached:",):
             st.rerun()

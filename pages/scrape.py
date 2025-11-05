@@ -205,7 +205,7 @@ def render_kb_entry_details(entry: tuple):
                 rerun_app()
 
     with cols[1]:
-        toggle_label = "Include in Vector Store" if no_upload else "Exclude from Vector Store"
+        toggle_label = "Include in vector store" if no_upload else "Exclude from vector store"
         toggle_icon = ":material/check_circle:" if no_upload else ":material/block:"
         if st.button(toggle_label, key=f"toggle_upload_{entry_id}", icon=toggle_icon, type="secondary"):
             try:
@@ -227,7 +227,7 @@ def render_kb_entry_details(entry: tuple):
 
     with cols[2]:
         if st.button(
-            "Delete from Knowledge Base",
+            "Delete from knowledge base",
             key=f"delete_button_{entry_id}",
             icon=":material/delete:",
             type="secondary",
@@ -1362,7 +1362,7 @@ def main():
                 key="manual_no_upload"
             )
             submitted_manual = st.form_submit_button(
-                "Save Entry",
+                "Save entry",
                 disabled=st.session_state["manual_form_submitting"],
                 icon=":material/save:"
             )
@@ -1614,7 +1614,7 @@ def main():
                 col_save, col_delete, col_spacer = st.columns([1, 1, 2])
                 
                 with col_save:
-                    if st.button(f"Save Config {i+1}", icon=":material/save:", key=f"save_config_{i}", type="primary"):
+                    if st.button(f"Save config {i+1}", icon=":material/save:", key=f"save_config_{i}", type="primary"):
                         try:
                             save_url_configs(st.session_state.url_configs)
                             st.success(f"Configuration {i+1} saved!", icon=":material/check_circle:")
@@ -1622,7 +1622,7 @@ def main():
                                                        st.error(f"Failed to save configuration {i+1}: {e}")
                             
                 with col_delete:
-                    if st.button(f"Delete Config {i+1}", icon=":material/delete:", key=f"delete_config_{i}", type="secondary"):
+                    if st.button(f"Delete config {i+1}", icon=":material/delete:", key=f"delete_config_{i}", type="secondary"):
                         # Remove this specific configuration
                         st.session_state.url_configs.pop(i)
                         try:
@@ -1701,7 +1701,7 @@ def main():
         with col1:
             st.markdown("**Save All Changes**")
             st.caption("Save all configuration changes to the database")
-            if st.button("Save All Configurations", type="primary", icon=":material/save:"):
+            if st.button("Save all configurations", type="primary", icon=":material/save:"):
                 try:
                     save_url_configs(st.session_state.url_configs)
                     message_placeholder.success("All configurations saved to database!", icon=":material/check_circle:")
@@ -1711,7 +1711,7 @@ def main():
         with col2:
             st.markdown("**Reset to Database**")
             st.caption("Discard unsaved changes and reload from database")
-            if st.button("Reset to Saved", type="secondary", icon=":material/restore:"):
+            if st.button("Reset to saved", type="secondary", icon=":material/restore:"):
                 try:
                     st.session_state.url_configs = load_url_configs()
                     message_placeholder.success(f"Reset to saved state: {len(st.session_state.url_configs)} configurations loaded!", icon=":material/check_circle:")
