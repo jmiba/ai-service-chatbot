@@ -618,13 +618,14 @@ if authenticated:
         if stats:
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Total Sessions", stats[0] or 0)
+                st.metric("Total Sessions", stats[0] or 0, border=True)
             with col2:
-                st.metric("Total Interactions", stats[1] or 0)
+                st.metric("Total Interactions", stats[1] or 0, border=True)
             with col3:
                 st.metric(
                     "Avg Interactions/Session",
                     f"{stats[2]:.1f}" if stats[2] else "0.0",
+                    border=True
                 )
 
         try:
@@ -938,11 +939,11 @@ if authenticated:
         avg_latency = (sum(latencies) / len(latencies) / 1000) if latencies else 0.0
 
         c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Input tokens", f"{total_in:,}")
-        c2.metric("Output tokens", f"{total_out:,}")
-        c3.metric("Reasoning tokens", f"{total_reason:,}")
-        c4.metric("Estimated cost (USD)", f"${total_cost:,.2f}")
-        c5.metric("Avg. latency (s)", f"{avg_latency:,.1f}")
+        c1.metric("Input tokens", f"{total_in:,}", border=True)
+        c2.metric("Output tokens", f"{total_out:,}", border=True)
+        c3.metric("Reasoning tokens", f"{total_reason:,}", border=True)
+        c4.metric("Estimated cost (USD)", f"${total_cost:,.2f}", border=True)
+        c5.metric("Avg. latency (s)", f"{avg_latency:,.1f}", border=True)
 
         # Prepare daily aggregates
         from collections import defaultdict
