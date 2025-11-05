@@ -513,7 +513,7 @@ if authenticated:
                     {
                         "Timestamp": fmt_dt(entry.get("timestamp")),
                         "Session": entry.get("session_id") or "(no session)",
-                        "Error": entry.get("error_code") or "OK",
+                        "Response quality": entry.get("error_code") or "OK",
                         "Topic": entry.get("request_classification") or "(unclassified)",
                         "Citations": entry.get("citation_count", 0),
                     }
@@ -703,7 +703,7 @@ if authenticated:
                 st.info("No topic data available yet.")
 
         with chart_cols[1]:
-            st.markdown("### Response quality (error codes)")
+            st.markdown("### Response quality")
             conn_err = None
             cur_err = None
             try:
