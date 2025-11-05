@@ -1,15 +1,31 @@
 import streamlit as st
 from psycopg2.extras import DictCursor
 from datetime import datetime, timedelta
-import json
 from pathlib import Path
-from utils import get_connection, admin_authentication, render_sidebar
+import json
+from utils import (
+    get_connection,
+    admin_authentication,
+    render_sidebar,
+    load_error_code_labels,
+    human_error_label,
+)
 import base64
 import pandas as pd
 import math
 
 BASE_DIR = Path(__file__).parent.parent
 ICON_PATH = (BASE_DIR / "assets" / "search_activity.png")
+
+
+@st.cache_data(show_spinner=False)
+def _cached_error_labels() -> dict[str, str]:
+    return load_error_code_labels()
+
+
+def resolve_error_label(code: str | None) -> str:
+    return human_error_label(code, labels=_cached_error_labels())
+
 
 # Helfer: Datums-/Zeitformatierung
 def fmt_dt(value, fmt="%Y-%m-%d %H:%M:%S") -> str:
@@ -633,54 +649,143 @@ if authenticated:
             cursor.close()
             conn.close()
 
-        st.markdown("### Topics")
-        if topic_rows:
-            try:
-                import altair as alt
+        chart_cols = st.columns(2)
 
-                records: list[dict] = []
-                for row in topic_rows:
-                    try:
-                        topic_val = row["topic"]
-                    except Exception:
-                        topic_val = row[0]
-                    if not isinstance(topic_val, str):
-                        topic_val = str(topic_val) if topic_val is not None else "(unclassified)"
-
-                    try:
-                        count_val = int(row["count"])
-                    except Exception:
-                        count_val = int(row[1]) if len(row) > 1 else 0
-                    records.append({"topic": topic_val, "count": count_val})
-
-                df_topics = pd.DataFrame.from_records(records)
-                df_topics = df_topics[df_topics["count"] > 0]
-                if df_topics.empty:
-                    st.info("No topic data available yet.")
-                else:
-                    pie = (
-                        alt.Chart(df_topics)
-                        .mark_arc()
-                        .encode(
-                            theta=alt.Theta(field="count", type="quantitative"),
-                            color=alt.Color(field="topic", type="nominal", legend=alt.Legend(title="Topic")),
-                            tooltip=[
-                                alt.Tooltip("topic:N", title="Topic"),
-                                alt.Tooltip("count:Q", title="Count"),
-                            ],
-                        )
-                        .properties(height=320)
-                    )
-                    st.altair_chart(pie)
-            except Exception as exc:
-                st.warning("Falling back to table view due to a charting error.")
+        with chart_cols[0]:
+            st.markdown("### Topics")
+            if topic_rows:
                 try:
-                    st.exception(exc)
-                except Exception:
-                    pass
-                st.table(df_topics if "df_topics" in locals() else topic_rows)
-        else:
-            st.info("No topic data available yet.")
+                    import altair as alt
+
+                    records: list[dict] = []
+                    for row in topic_rows:
+                        try:
+                            topic_val = row["topic"]
+                        except Exception:
+                            topic_val = row[0]
+                        if not isinstance(topic_val, str):
+                            topic_val = str(topic_val) if topic_val is not None else "(unclassified)"
+
+                        try:
+                            count_val = int(row["count"])
+                        except Exception:
+                            count_val = int(row[1]) if len(row) > 1 else 0
+                        records.append({"topic": topic_val, "count": count_val})
+
+                    df_topics = pd.DataFrame.from_records(records)
+                    df_topics = df_topics[df_topics["count"] > 0]
+                    if df_topics.empty:
+                        st.info("No topic data available yet.")
+                    else:
+                        pie = (
+                            alt.Chart(df_topics)
+                            .mark_arc()
+                            .encode(
+                                theta=alt.Theta(field="count", type="quantitative"),
+                                color=alt.Color(field="topic", type="nominal", legend=alt.Legend(title="Topic")),
+                                tooltip=[
+                                    alt.Tooltip("topic:N", title="Topic"),
+                                    alt.Tooltip("count:Q", title="Count"),
+                                ],
+                            )
+                            .properties(height=320)
+                        )
+                        st.altair_chart(pie)
+                except Exception as exc:
+                    st.warning("Falling back to table view due to a charting error.")
+                    try:
+                        st.exception(exc)
+                    except Exception:
+                        pass
+                    st.table(df_topics if "df_topics" in locals() else topic_rows)
+            else:
+                st.info("No topic data available yet.")
+
+        with chart_cols[1]:
+            st.markdown("### Response quality (error codes)")
+            conn_err = None
+            cur_err = None
+            try:
+                conn_err = get_connection()
+                cur_err = conn_err.cursor(cursor_factory=DictCursor)
+                cur_err.execute(
+                    """
+                    SELECT COALESCE(error_code, 'E00') AS code,
+                           COUNT(*)::int AS count
+                    FROM log_table
+                    GROUP BY code
+                    ORDER BY count DESC
+                    """
+                )
+                error_rows = cur_err.fetchall()
+            except Exception as exc:
+                error_rows = []
+                st.warning(f"Could not load error code data: {exc}")
+            finally:
+                if cur_err:
+                    try:
+                        cur_err.close()
+                    except Exception:
+                        pass
+                if conn_err:
+                    try:
+                        conn_err.close()
+                    except Exception:
+                        pass
+
+            if error_rows:
+                records: list[dict[str, object]] = []
+                for row in error_rows:
+                    if isinstance(row, dict):
+                        code_val = row.get("code") or row.get("error_code") or "E00"
+                        count_val = row.get("count") or row.get("sum") or 0
+                    else:
+                        code_val = row[0] if len(row) > 0 else "E00"
+                        count_val = row[1] if len(row) > 1 else 0
+                    try:
+                        count_int = int(count_val)
+                    except Exception:
+                        count_int = 0
+                    records.append(
+                        {
+                            "code": str(code_val or "E00"),
+                            "count": count_int,
+                            "label": resolve_error_label(str(code_val or "E00")),
+                        }
+                    )
+
+                df_errors = pd.DataFrame.from_records(records)
+                df_errors = df_errors[df_errors["count"] > 0]
+
+                if df_errors.empty:
+                    st.info("No error data available yet.")
+                else:
+                    try:
+                        import altair as alt
+
+                        pie_errors = (
+                            alt.Chart(df_errors)
+                            .mark_arc()
+                            .encode(
+                                theta=alt.Theta(field="count", type="quantitative"),
+                                color=alt.Color(field="label", type="nominal", legend=alt.Legend(title="Response quality")),
+                                tooltip=[
+                                    alt.Tooltip("label:N", title="Status"),
+                                    alt.Tooltip("count:Q", title="Interactions"),
+                                ],
+                            )
+                            .properties(height=320)
+                        )
+                        st.altair_chart(pie_errors)
+                    except Exception as exc:
+                        st.warning("Could not render error code chart; showing table instead.")
+                        try:
+                            st.exception(exc)
+                        except Exception:
+                            pass
+                        st.table(df_errors[["label", "count"]])
+            else:
+                st.info("No error data available yet.")
 
         st.markdown("### Topics — Interactions and Sessions")
         try:
@@ -894,3 +999,10 @@ if authenticated:
             st.dataframe(table, width="stretch", hide_index=True)
 
         st.info("Costs are estimated from stored usage and pricing in config/pricing.json.")
+@st.cache_data(show_spinner=False)
+def cached_error_labels() -> dict[str, str]:
+    return load_error_code_labels()
+
+
+def resolve_error_label(code: str | None) -> str:
+    return human_error_label(code, labels=cached_error_labels())
