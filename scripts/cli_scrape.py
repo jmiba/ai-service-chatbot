@@ -33,6 +33,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+from scrape.maintenance import sync_vector_store, update_stale_documents
+
 # Provide Streamlit secrets in headless mode
 import streamlit as st
 
@@ -295,10 +297,12 @@ def main():
             if conn:
                 stale_candidates = []
                 try:
-                    stale_candidates = scraper_mod.update_stale_documents(
+                    stale_candidates = update_stale_documents(
                         conn,
                         dry_run=args.dry_run,
                         log_callback=log_cb,
+                        recordset_latest_urls=getattr(scraper_mod, "recordset_latest_urls", {}),
+                        verify_url_deleted=scraper_mod.verify_url_deleted,
                     )
                 except Exception as e:
                     print(f"[WARN] Failed to compute stale documents: {e}")
@@ -332,7 +336,6 @@ def main():
                 print("[INFO] Starting vector store sync...")
                 try:
                     from pages.vectorize import (
-                        sync_vector_store,
                         compute_vector_store_status,
                         VECTOR_STORE_ID,
                     )

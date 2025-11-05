@@ -1,13 +1,10 @@
 import datetime
-from collections import defaultdict
 from pathlib import Path
 import sys
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import pages.scrape as scrape
+from scrape import maintenance
 
 
 class FakeCursor:
@@ -70,19 +67,11 @@ class FakeConnection:
         pass
 
 
-@pytest.fixture(autouse=True)
-def reset_globals():
-    prev = scrape.recordset_latest_urls
-    scrape.recordset_latest_urls = defaultdict(set)
-    try:
-        yield
-    finally:
-        scrape.recordset_latest_urls = prev
-
-
-def test_update_stale_documents_handles_deleted_and_retained(monkeypatch):
-    scrape.recordset_latest_urls["rs"] = {
-        "https://example.com/kept",
+def test_update_stale_documents_handles_deleted_and_retained():
+    recordset_latest_urls = {
+        "rs": {
+            "https://example.com/kept",
+        }
     }
 
     doc_rows = {
@@ -101,9 +90,12 @@ def test_update_stale_documents_handles_deleted_and_retained(monkeypatch):
             return False, "reachable"
         return False, "reachable"
 
-    monkeypatch.setattr(scrape, "verify_url_deleted", fake_verify)
-
-    stale_candidates = scrape.update_stale_documents(conn, dry_run=False)
+    stale_candidates = maintenance.update_stale_documents(
+        conn,
+        dry_run=False,
+        recordset_latest_urls=recordset_latest_urls,
+        verify_url_deleted=fake_verify,
+    )
 
     assert len(stale_candidates) == 1
     assert stale_candidates[0]["url"] == "https://example.com/missing"

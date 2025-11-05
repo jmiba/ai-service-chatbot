@@ -3,7 +3,6 @@ import datetime
 import asyncio
 from pathlib import Path
 import time
-from io import BytesIO
 import base64
 from typing import Any
 
@@ -206,13 +205,6 @@ def read_last_vector_sync_timestamp():
     except FileNotFoundError:
         return None  # no previous sync
 
-def write_last_vector_sync_timestamp(ts: datetime.datetime | None = None):
-    if ts is None:
-        ts = datetime.datetime.now()
-    with open("last_vector_sync.txt", "w") as f:
-        f.write(ts.isoformat())
-
-
 # def count_new_unsynced_docs() -> int:
 #     """
 #     Count docs that were added by scraping and have never been synced:
@@ -338,58 +330,6 @@ def delete_all_files_in_vector_store(vector_store_id: str):
     except Exception as e:
         print(f"❌ Failed to list or delete files in vector store: {e}")
     
-def chunked(iterable, size):
-    """Yield successive chunks of length `size` from a list."""
-    for i in range(0, len(iterable), size):
-        yield iterable[i:i+size]
-    
-    
-def build_filename_to_id_map_efficiently(vs_files):
-    """
-    Build filename to ID mapping more efficiently by batching API calls.
-    """
-    print(f"🔍 Mapping {len(vs_files)} vector store files to filenames...")
-
-    async def _build_map():
-        async_openai = _create_async_openai_client()
-        semaphore = asyncio.Semaphore(15)
-        filename_to_id: dict[str, str] = {}
-        failed_retrievals = 0
-        processed = 0
-        total = len(vs_files)
-        status_lock = asyncio.Lock()
-
-        async def _fetch_metadata(vs_file):
-            nonlocal failed_retrievals, processed
-            try:
-                async with semaphore:
-                    file_obj = await async_openai.files.retrieve(vs_file.id)
-            except Exception as exc:
-                async with status_lock:
-                    failed_retrievals += 1
-                print(f"⚠️ Failed to retrieve file object for {vs_file.id}: {exc}")
-                return
-
-            async with status_lock:
-                filename_to_id[file_obj.filename] = vs_file.id
-                processed += 1
-                if processed % 50 == 0:
-                    print(f"📍 Processed {processed}/{total} files...")
-
-        try:
-            await asyncio.gather(*(_fetch_metadata(vs_file) for vs_file in vs_files))
-        finally:
-            await async_openai.close()
-
-        if failed_retrievals > 0:
-            print(f"⚠️ {failed_retrievals} file retrievals failed")
-
-        print(f"✅ Successfully mapped {len(filename_to_id)} filenames")
-        return filename_to_id
-
-    return _run_async_task(_build_map())
-
-
 def compute_vector_store_status(vector_store_id: str, *, force_refresh: bool = False) -> dict[str, Any]:
     """Collect lightweight vector store status metrics."""
 
@@ -468,170 +408,6 @@ def _load_vector_details(vector_store_id: str, *, force: bool = False) -> dict[s
 
     st.session_state[cache_key] = details
     return details
-
-def sync_vector_store():
-    conn = get_connection()
-    cur = conn.cursor()
-    openai_client = _get_openai_client()
-
-    cur.execute("""
-        SELECT id, url, title, safe_title, crawl_date, lang, summary, tags,
-               markdown_content, vector_file_id, old_file_id, no_upload
-        FROM documents
-    """)
-
-    print("🔁 Starting sync for documents...")
-
-    docs_to_upload = []
-    id_to_old_file = {}
-    excluded_doc_ids = []
-    excluded_file_ids = set()
-
-    for row in cur:
-        doc_id, url, title, safe_title, crawl_date, lang, summary, tags, markdown, file_id, old_file_id, no_upload = row
-        
-        # Always ensure safe_title fallback
-        safe_title = safe_title or (title or "untitled")
-        
-        # If document is excluded from vector store
-        if no_upload:
-            if file_id:
-                # Schedule deletion of current vector file
-                excluded_doc_ids.append(doc_id)
-                excluded_file_ids.add(file_id)
-                print(f"🚫 Excluding doc {safe_title} (ID {doc_id}) -> will delete vector file {file_id}")
-            else:
-                if old_file_id:
-                    # No live vector file; clear any lingering old_file_id
-                    id_to_old_file[doc_id] = old_file_id
-                    print(f"🧹 Excluded doc {safe_title} has old_file_id {old_file_id} scheduled to clear")
-            continue  # Skip upload logic entirely
-        
-        # Include in sync workflow (no_upload is False)
-        content = f"""---
-title: "{title}"
-url: "{url}"
-summary: "{summary or ''}"
-tags: {tags or []}
-crawl_date: "{crawl_date.isoformat() if crawl_date else ''}"
-language: "{lang or ''}"
-safe_title: "{safe_title or ''}" 
----
-
-{markdown}
-"""
-        
-        if file_id:
-            print(f"⏩ Skipping unchanged doc {safe_title} -> {file_id}")
-            continue
-        else:
-            if old_file_id:  # only track real IDs
-                id_to_old_file[doc_id] = old_file_id
-                print(f"Content change detected for {safe_title}, will delete old file -> {old_file_id}")
-            else:
-                print(f"ℹ️ No old_file_id for {safe_title} (first-time upload or already cleaned).")
-
-        file_name = f"{doc_id}_{safe_title}.md"
-        docs_to_upload.append((doc_id, file_name, content))
-
-
-    # First, handle deletions for excluded documents (and clear DB refs)
-    if excluded_file_ids:
-        print(f"🗑️ Deleting {len(excluded_file_ids)} excluded vector files...")
-        delete_file_ids(VECTOR_STORE_ID, excluded_file_ids, label="excluded")
-    
-    if excluded_doc_ids:
-        # Clear DB references for excluded docs
-        cur2 = conn.cursor()
-        cur2.execute(
-            """
-            UPDATE documents
-            SET vector_file_id = NULL,
-                old_file_id = NULL,
-                updated_at = NOW()
-            WHERE id = ANY(%s)
-            """,
-            (excluded_doc_ids,)
-        )
-        conn.commit()
-        cur2.close()
-        print(f"✅ Cleared DB references for {len(excluded_doc_ids)} excluded docs")
-
-    if not docs_to_upload:
-        print("✅ No changes to sync.")
-        cur.close()
-        conn.close()
-        return
-
-    print(f"📤 Will upload {len(docs_to_upload)} documents")
-
-    # Batch delete old files for better performance
-    old_file_ids = [fid for fid in id_to_old_file.values() if fid]
-    if old_file_ids:
-        delete_file_ids(VECTOR_STORE_ID, set(old_file_ids), label="old")
-
-    # Prepare files for upload
-    upload_files = [
-        (file_name, BytesIO(content.encode("utf-8")))
-        for (_, file_name, content) in docs_to_upload
-    ]
-
-    print(f"📤 Starting batch upload of {len(upload_files)} files...")
-    
-    try:
-        for idx, files_chunk in enumerate(chunked(upload_files, 100), start=1):
-            print(f"📦 Uploading batch {idx} ({len(files_chunk)} files)...")
-            batch = openai_client.vector_stores.file_batches.upload_and_poll(
-                vector_store_id=VECTOR_STORE_ID,
-                files=files_chunk
-            )
-            print(f"✅ Batch {idx} upload complete. Status: {batch.status}")
-            print("📄 File counts:", batch.file_counts)
-    except Exception as e:
-        print("❌ Batch upload failed:", e)
-        cur.close()
-        conn.close()
-        return
-    
-    print("🔄 Refreshing vector store cache after upload...")
-    # Force refresh cache after upload
-    vs_files = get_cached_vector_store_files(VECTOR_STORE_ID, force_refresh=True)
-
-    # Build filename mapping more efficiently  
-    filename_to_id = build_filename_to_id_map_efficiently(vs_files)
-
-    # Update the database with new file IDs
-    print(f"💾 Updating database for {len(docs_to_upload)} documents...")
-    for doc_id, file_name, _ in docs_to_upload:
-        file_id = filename_to_id.get(file_name)
-        if not file_id:
-            print(f"❌ Could not find file ID for {file_name}, skipping DB update.")
-            continue
-
-        cur.execute("""
-            UPDATE documents
-            SET vector_file_id = %s,
-                old_file_id = NULL,  -- Reset old_file_id since we are updating
-                updated_at = NOW()
-            WHERE id = %s
-        """, (file_id, doc_id))
-        print(f"✅ Synced doc {file_name} → file {file_id}")
-
-    conn.commit()
-    cur.close()
-    conn.close()
-    print("🎉 Sync complete.")
-    
-    # Mark the time of the successful vector sync
-    write_last_vector_sync_timestamp(datetime.datetime.now())
-
-    
-    # Return summary info for Streamlit
-    return {
-        "uploaded_count": len(docs_to_upload),
-        "synced_files": [file_name for (_, file_name, _) in docs_to_upload]
-    }
-
 
 if HAS_STREAMLIT_CONTEXT:
     authenticated = admin_authentication(return_to="/pages/vectorize")

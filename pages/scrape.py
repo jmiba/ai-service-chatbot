@@ -129,7 +129,7 @@ def rerun_app():
             st.experimental_rerun()
         except AttributeError:
             pass
-
+        
 def render_kb_entry_details(entry: tuple):
     """Render a single knowledge base entry and associated actions."""
 
@@ -439,17 +439,19 @@ def get_canonical_url(soup: BeautifulSoup, fetched_url: str) -> str | None:
 # -----------------------------
 # DB helpers (unchanged, except we upsert by normalized URL)
 # -----------------------------
-#     conn = get_connection()
-#     cursor = conn.cursor()
-#     try:
-#         cursor.execute("DELETE FROM documents")
-#         conn.commit()
-#     except Exception as e:
-#         print(f"[DB ERROR] Failed to delete documents: {e}")
-#         raise e
-#     finally:
-#         cursor.close()
-#         conn.close()
+def delete_docs():
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM documents")
+        conn.commit()
+    except Exception as e:
+        print(f"[DB ERROR] Failed to delete documents: {e}")
+        raise e
+    finally:
+        cursor.close()
+        conn.close()
+
 
 def get_html_lang(soup):
     html_tag = soup.find("html")
