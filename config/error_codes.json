@@ -1,0 +1,6 @@
+{
+  "E00": "Good answer",
+  "E01": "Need more information from user",
+  "E02": "Significant gaps – user might be disappointed",
+  "E03": "User needs human assistance"
+}

@@ -7,16 +7,32 @@ from typing import Dict
 BASE_DIR = Path(__file__).resolve().parents[1]
 ERROR_CONFIG_PATH = BASE_DIR / "config" / "error_codes.json"
 
+DEFAULT_ERROR_LABELS: Dict[str, str] = {
+    "E00": "Good answer",
+    "E01": "Need more information from user",
+    "E02": "Significant gaps – user might be disappointed",
+    "E03": "User needs human assistance",
+}
+
 
 def load_error_code_labels() -> Dict[str, str]:
+    labels: Dict[str, str] = DEFAULT_ERROR_LABELS.copy()
     try:
         raw = ERROR_CONFIG_PATH.read_text(encoding="utf-8")
         data = json.loads(raw)
-        if not isinstance(data, dict):
-            return {}
-        return {str(key).upper(): str(value) for key, value in data.items()}
+        if isinstance(data, dict):
+            for key, value in data.items():
+                labels[str(key).upper()] = str(value)
     except Exception:
-        return {}
+        pass
+
+    numeric_aliases: Dict[str, str] = {}
+    for code, label in labels.items():
+        digits = "".join(ch for ch in code if ch.isdigit())
+        if digits:
+            numeric_aliases[digits] = label
+    labels.update(numeric_aliases)
+    return labels
 
 
 def human_error_label(code: str | None, *, labels: Dict[str, str] | None = None) -> str:

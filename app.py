@@ -112,6 +112,7 @@ from utils import (
     create_filter_settings_table,
     create_knowledge_base_table,
     get_document_status_counts,
+    format_error_code_legend,
 )
 
 # -------------------------------------
@@ -305,6 +306,10 @@ except RuntimeError as exc:  # pragma: no cover - requires misconfiguration
 
 if PROMPTS_LOAD_ERROR:
     st.stop()
+
+legend_text = format_error_code_legend() or "Error codes: 0=good answer, 1=need more information, 2=significant gaps, 3=user needs human assistance"
+evaluation_template = PROMPT_CONFIG["evaluation"]["system"]
+PROMPT_CONFIG["evaluation"]["system"] = evaluation_template.replace("{error_code_legend}", legend_text)
 
 DEFAULT_PROMPT = PROMPT_CONFIG["default_chat_system_prompt"]
 EVALUATION_SYSTEM_TEMPLATE = PROMPT_CONFIG["evaluation"]["system"]

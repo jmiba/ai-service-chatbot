@@ -746,11 +746,14 @@ if authenticated:
                         count_int = int(count_val)
                     except Exception:
                         count_int = 0
+                    code_str = str(code_val or "E00").upper()
+                    human_label = resolve_error_label(code_str)
                     records.append(
                         {
-                            "code": str(code_val or "E00"),
+                            "code": code_str,
                             "count": count_int,
-                            "label": resolve_error_label(str(code_val or "E00")),
+                            "label": human_label,
+                            "label_with_code": f"{code_str} — {human_label}",
                         }
                     )
 
@@ -768,9 +771,9 @@ if authenticated:
                             .mark_arc()
                             .encode(
                                 theta=alt.Theta(field="count", type="quantitative"),
-                                color=alt.Color(field="label", type="nominal", legend=alt.Legend(title="Response quality")),
+                                color=alt.Color(field="label_with_code", type="nominal", legend=alt.Legend(title="Response quality")),
                                 tooltip=[
-                                    alt.Tooltip("label:N", title="Status"),
+                                    alt.Tooltip("label_with_code:N", title="Status"),
                                     alt.Tooltip("count:Q", title="Interactions"),
                                 ],
                             )
