@@ -1,6 +1,6 @@
 {
-  "E00": "User question",
-  "E01": "User comment or complaint",
-  "E02": "Suggestion(s) made by user",
+  "E00": "Question",
+  "E01": "Comment or complaint",
+  "E02": "Suggestion(s)",
   "E03": "Invective or harmful content"
 }

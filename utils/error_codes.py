@@ -8,10 +8,10 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 ERROR_CONFIG_PATH = BASE_DIR / "config" / "error_codes.json"
 
 DEFAULT_ERROR_LABELS: Dict[str, str] = {
-    "E00": "Good answer",
-    "E01": "Need more information from user",
-    "E02": "Significant gaps – user might be disappointed",
-    "E03": "User needs human assistance",
+    "E00": "Question",
+    "E01": "Comment",
+    "E02": "Suggestion",
+    "E03": "Invective",
 }
 
 
@@ -69,13 +69,20 @@ def format_error_code_legend() -> str:
     labels = load_error_code_labels()
     if not labels:
         return ""
-    def sort_key(item):
-        code, _ = item
-        digits = ''.join(ch for ch in code if ch.isdigit())
-        return int(digits) if digits else 0
-    parts = []
-    for code, label in sorted(labels.items(), key=sort_key):
-        digits = ''.join(ch for ch in code if ch.isdigit())
-        canonical = digits if digits else code
-        parts.append(f"{canonical}={label}")
+    canonical_labels: dict[str, str] = {}
+    for code, label in labels.items():
+        digits = "".join(ch for ch in code if ch.isdigit())
+        if digits:
+            canonical = digits.lstrip("0") or "0"
+        else:
+            canonical = code
+        canonical_labels.setdefault(canonical, label)
+
+    def sort_key(item: tuple[str, str]) -> tuple[int, object]:
+        key, _ = item
+        if key.isdigit():
+            return (0, int(key))
+        return (1, key)
+
+    parts = [f"{key}={label}" for key, label in sorted(canonical_labels.items(), key=sort_key)]
     return "Error codes: " + ", ".join(parts)
