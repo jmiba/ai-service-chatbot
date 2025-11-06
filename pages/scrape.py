@@ -1595,7 +1595,7 @@ def main():
                 
                 with col2:
                     st.session_state.url_configs[i]["depth"] = st.number_input(
-                        f"Max Scraping Depth",
+                        f"Max scraping depth",
                         min_value=0,
                         max_value=100,
                         value=config["depth"],
@@ -1612,7 +1612,7 @@ def main():
                 recordset_options.append("Create a new one...")
                 
                 selected_recordset = st.selectbox(
-                    f"Available Recordsets",
+                    f"Available recordsets",
                     options=recordset_options,
                     index=recordset_options.index(config["recordset"]) if config["recordset"] in recordset_options else (len(recordset_options)-1 if config["recordset"] and config["recordset"] not in recordset_options else 0),
                     key=f"recordset_select_{i}",
@@ -1621,7 +1621,7 @@ def main():
 
                 if selected_recordset == "Create a new one...":
                     custom_recordset = st.text_input(
-                        f"New Recordset Name",
+                        f"New recordset name",
                         value=config["recordset"] if config["recordset"] not in recordset_options else "",
                         key=f"recordset_custom_{i}",
                         placeholder="Enter a descriptive name for this content group"
@@ -1635,7 +1635,7 @@ def main():
                 
                 with col1:
                     exclude_paths_str = st.text_area(
-                        f"Exclude Paths (comma-separated)", 
+                        f"Exclude paths (comma-separated)", 
                         value=", ".join(config.get("exclude_paths", [])), 
                         key=f"exclude_paths_{i}",
                         height=100,
@@ -1646,7 +1646,7 @@ def main():
 
                 with col2:
                     include_prefixes_str = st.text_area(
-                        f"Include Language Prefixes (comma-separated)", 
+                        f"Restrict to prefixes or paths (comma-separated)", 
                         value=", ".join(config.get("include_lang_prefixes", [])), 
                         key=f"include_lang_prefixes_{i}",
                         height=100,
