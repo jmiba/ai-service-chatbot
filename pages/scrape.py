@@ -34,6 +34,7 @@ from utils import (
     mark_vector_store_dirty,
 )
 from pathlib import Path
+import uuid
 import pandas as pd
 
 
@@ -119,6 +120,11 @@ processed_pages_count = 0  # count of pages processed by LLM and saved to DB
 dry_run_llm_eligible_count = 0  # count of pages that would be LLM processed in dry run mode
 llm_analysis_results = []  # collect LLM analysis summaries for display in info box
 recordset_latest_urls = defaultdict(set)  # track URLs seen per recordset in the latest crawl
+
+def ensure_url_config_ids(configs: list[dict]) -> None:
+    """Assign stable IDs so Streamlit widget keys stay aligned after reordering."""
+    for config in configs:
+        config.setdefault("_id", uuid.uuid4().hex)
 
 
 def rerun_app():
@@ -1484,6 +1490,7 @@ def main():
             except Exception as e:
                 st.error(f"Failed to load URL configurations: {e}")
                 st.session_state.url_configs = []
+        ensure_url_config_ids(st.session_state.url_configs)
 
         # Status Dashboard - Give users immediate overview of system state
         st.markdown("---")
@@ -1538,16 +1545,34 @@ def main():
 
         # Render each URL config with improved layout
         for i, config in enumerate(st.session_state.url_configs):
+            config_id = config.setdefault("_id", uuid.uuid4().hex)
             # Create a container for each configuration with better visual separation
             with st.expander(f"URL Configuration {i+1}" + (f" - {config.get('url', 'No URL set')[:50]}..." if config.get('url') else ""), expanded=False, icon=":material/web_asset:"):
                 # Reordering controls
-                move_up_col, move_down_col = st.columns([0.2,0.8])
-                with move_up_col:
+                move_cols = st.columns([0.2, 0.2, 0.2, 0.4])
+                with move_cols[0]:
+                    move_to_start_disabled = i == 0
+                    if st.button(
+                        f"Move config {i+1} to start",
+                        icon=":material/vertical_align_top:",
+                        key=f"move_start_{config_id}",
+                        type="secondary",
+                        disabled=move_to_start_disabled,
+                    ):
+                        config_entry = st.session_state.url_configs.pop(i)
+                        st.session_state.url_configs.insert(0, config_entry)
+                        try:
+                            save_url_configs(st.session_state.url_configs)
+                            st.success(f"Configuration {i+1} moved to beginning!", icon=":material/check_circle:")
+                        except Exception as e:
+                            st.error(f"Failed to save configuration order: {e}")
+                        st.rerun()
+                with move_cols[1]:
                     move_up_disabled = i == 0
                     if st.button(
-                        f"Move up {i+1}",
+                        f"Move config {i+1} up",
                         icon=":material/arrow_upward:",
-                        key=f"move_up_{i}",
+                        key=f"move_up_{config_id}",
                         type="secondary",
                         disabled=move_up_disabled,
                     ):
@@ -1561,12 +1586,12 @@ def main():
                         except Exception as e:
                             st.error(f"Failed to save configuration order: {e}")
                         st.rerun()
-                with move_down_col:
+                with move_cols[2]:
                     move_down_disabled = i == len(st.session_state.url_configs) - 1
                     if st.button(
-                        f"Move down {i+1}",
+                        f"Move config {i+1} down",
                         icon=":material/arrow_downward:",
-                        key=f"move_down_{i}",
+                        key=f"move_down_{config_id}",
                         type="secondary",
                         disabled=move_down_disabled,
                     ):
@@ -1580,19 +1605,36 @@ def main():
                         except Exception as e:
                             st.error(f"Failed to save configuration order: {e}")
                         st.rerun()
+                with move_cols[3]:
+                    move_to_end_disabled = i == len(st.session_state.url_configs) - 1
+                    if st.button(
+                        f"Move config {i+1} to end",
+                        icon=":material/vertical_align_bottom:",
+                        key=f"move_end_{config_id}",
+                        type="secondary",
+                        disabled=move_to_end_disabled,
+                    ):
+                        config_entry = st.session_state.url_configs.pop(i)
+                        st.session_state.url_configs.append(config_entry)
+                        try:
+                            save_url_configs(st.session_state.url_configs)
+                            st.success(f"Configuration {i+1} moved to end!", icon=":material/check_circle:")
+                        except Exception as e:
+                            st.error(f"Failed to save configuration order: {e}")
+                        st.rerun()
 
                 # Use columns for better layout
                 col1, col2 = st.columns([2, 1])
-                
+
                 with col1:
                     st.session_state.url_configs[i]["url"] = st.text_input(
-                        f"Start URL", 
-                        value=config["url"], 
-                        key=f"start_url_{i}",
+                        f"Start URL",
+                        value=config["url"],
+                        key=f"start_url_{config_id}",
                         help="The scraper will only follow links within the same path as this starting URL",
                         placeholder="https://example.com/path/to/start"
                     )
-                
+
                 with col2:
                     st.session_state.url_configs[i]["depth"] = st.number_input(
                         f"Max scraping depth",
@@ -1600,7 +1642,7 @@ def main():
                         max_value=100,
                         value=config["depth"],
                         step=1,
-                        key=f"depth_{i}",
+                        key=f"depth_{config_id}",
                         help="How many levels deep to follow links"
                     )
 
@@ -1615,7 +1657,7 @@ def main():
                     f"Available recordsets",
                     options=recordset_options,
                     index=recordset_options.index(config["recordset"]) if config["recordset"] in recordset_options else (len(recordset_options)-1 if config["recordset"] and config["recordset"] not in recordset_options else 0),
-                    key=f"recordset_select_{i}",
+                    key=f"recordset_select_{config_id}",
                     help="Choose an existing recordset or create a new one to group your scraped content"
                 )
 
@@ -1623,7 +1665,7 @@ def main():
                     custom_recordset = st.text_input(
                         f"New recordset name",
                         value=config["recordset"] if config["recordset"] not in recordset_options else "",
-                        key=f"recordset_custom_{i}",
+                        key=f"recordset_custom_{config_id}",
                         placeholder="Enter a descriptive name for this content group"
                     )
                     st.session_state.url_configs[i]["recordset"] = custom_recordset
@@ -1635,9 +1677,9 @@ def main():
                 
                 with col1:
                     exclude_paths_str = st.text_area(
-                        f"Exclude paths (comma-separated)", 
-                        value=", ".join(config.get("exclude_paths", [])), 
-                        key=f"exclude_paths_{i}",
+                        f"Exclude paths (comma-separated)",
+                        value=", ".join(config.get("exclude_paths", [])),
+                        key=f"exclude_paths_{config_id}",
                         height=100,
                         help="Paths to exclude from scraping (supports '*' wildcards, e.g., /en, /site-*, /admin)",
                         placeholder="/en, /pl, /site-*, /_ablage-alte-www"
@@ -1646,9 +1688,9 @@ def main():
 
                 with col2:
                     include_prefixes_str = st.text_area(
-                        f"Restrict to prefixes or paths (comma-separated)", 
-                        value=", ".join(config.get("include_lang_prefixes", [])), 
-                        key=f"include_lang_prefixes_{i}",
+                        f"Restrict to prefixes or paths (comma-separated)",
+                        value=", ".join(config.get("include_lang_prefixes", [])),
+                        key=f"include_lang_prefixes_{config_id}",
                         height=100,
                         help="Only include paths starting with these prefixes (supports '*' wildcards, e.g., /de, /fr, /research-*)",
                         placeholder="/de, /fr, /research-*"
@@ -1658,17 +1700,17 @@ def main():
                 # Save and Delete buttons for this configuration
                 st.markdown("---")
                 col_save, col_delete, col_spacer = st.columns([1, 1, 2])
-                
+
                 with col_save:
-                    if st.button(f"Save config {i+1}", icon=":material/save:", key=f"save_config_{i}", type="primary"):
+                    if st.button(f"Save config {i+1}", icon=":material/save:", key=f"save_config_{config_id}", type="primary"):
                         try:
                             save_url_configs(st.session_state.url_configs)
                             st.success(f"Configuration {i+1} saved!", icon=":material/check_circle:")
                         except Exception as e:
-                                                       st.error(f"Failed to save configuration {i+1}: {e}")
-                            
+                            st.error(f"Failed to save configuration {i+1}: {e}")
+
                 with col_delete:
-                    if st.button(f"Delete config {i+1}", icon=":material/delete:", key=f"delete_config_{i}", type="secondary"):
+                    if st.button(f"Delete config {i+1}", icon=":material/delete:", key=f"delete_config_{config_id}", type="secondary"):
                         # Remove this specific configuration
                         st.session_state.url_configs.pop(i)
                         try:
@@ -1727,7 +1769,8 @@ def main():
                         "recordset": f"Quick_{quick_template}_{len(st.session_state.url_configs)+1}",
                         "depth": config["depth"],
                         "exclude_paths": config["exclude_paths"],
-                        "include_lang_prefixes": config["include_lang_prefixes"]
+                        "include_lang_prefixes": config["include_lang_prefixes"],
+                        "_id": uuid.uuid4().hex,
                     })
                     
                     try:
@@ -1760,6 +1803,7 @@ def main():
             if st.button("Reset to saved", type="secondary", icon=":material/restore:"):
                 try:
                     st.session_state.url_configs = load_url_configs()
+                    ensure_url_config_ids(st.session_state.url_configs)
                     message_placeholder.success(f"Reset to saved state: {len(st.session_state.url_configs)} configurations loaded!", icon=":material/check_circle:")
                     st.rerun()
                 except Exception as e:
