@@ -1,6 +1,6 @@
 {
-  "E00": "Good answer",
-  "E01": "Need more information from user",
-  "E02": "Significant gaps – user might be disappointed",
-  "E03": "User needs human assistance"
+  "E00": "User question",
+  "E01": "User comment or complaint",
+  "E02": "Suggestion(s) made by user",
+  "E03": "Invective or harmful content"
 }

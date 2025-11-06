@@ -1540,6 +1540,47 @@ def main():
         for i, config in enumerate(st.session_state.url_configs):
             # Create a container for each configuration with better visual separation
             with st.expander(f"URL Configuration {i+1}" + (f" - {config.get('url', 'No URL set')[:50]}..." if config.get('url') else ""), expanded=False, icon=":material/web_asset:"):
+                # Reordering controls
+                move_up_col, move_down_col = st.columns([0.2,0.8])
+                with move_up_col:
+                    move_up_disabled = i == 0
+                    if st.button(
+                        f"Move up {i+1}",
+                        icon=":material/arrow_upward:",
+                        key=f"move_up_{i}",
+                        type="secondary",
+                        disabled=move_up_disabled,
+                    ):
+                        st.session_state.url_configs[i - 1], st.session_state.url_configs[i] = (
+                            st.session_state.url_configs[i],
+                            st.session_state.url_configs[i - 1],
+                        )
+                        try:
+                            save_url_configs(st.session_state.url_configs)
+                            st.success(f"Configuration {i+1} moved up!", icon=":material/check_circle:")
+                        except Exception as e:
+                            st.error(f"Failed to save configuration order: {e}")
+                        st.rerun()
+                with move_down_col:
+                    move_down_disabled = i == len(st.session_state.url_configs) - 1
+                    if st.button(
+                        f"Move down {i+1}",
+                        icon=":material/arrow_downward:",
+                        key=f"move_down_{i}",
+                        type="secondary",
+                        disabled=move_down_disabled,
+                    ):
+                        st.session_state.url_configs[i + 1], st.session_state.url_configs[i] = (
+                            st.session_state.url_configs[i],
+                            st.session_state.url_configs[i + 1],
+                        )
+                        try:
+                            save_url_configs(st.session_state.url_configs)
+                            st.success(f"Configuration {i+1} moved down!", icon=":material/check_circle:")
+                        except Exception as e:
+                            st.error(f"Failed to save configuration order: {e}")
+                        st.rerun()
+
                 # Use columns for better layout
                 col1, col2 = st.columns([2, 1])
                 
@@ -1554,10 +1595,11 @@ def main():
                 
                 with col2:
                     st.session_state.url_configs[i]["depth"] = st.number_input(
-                        f"Max Scraping Depth", 
-                        min_value=0, max_value=20, 
-                        value=config["depth"], 
-                        step=1, 
+                        f"Max Scraping Depth",
+                        min_value=0,
+                        max_value=100,
+                        value=config["depth"],
+                        step=1,
                         key=f"depth_{i}",
                         help="How many levels deep to follow links"
                     )

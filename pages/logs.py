@@ -170,6 +170,24 @@ def render_log_details(entry: dict | None) -> None:
     else:
         st.success(assistant_text, icon=":material/robot_2:")
 
+    evaluation_notes = entry.get("evaluation_notes")
+    if evaluation_notes:
+        parsed_notes = evaluation_notes
+        if isinstance(evaluation_notes, str):
+            stripped = evaluation_notes.strip()
+            if stripped:
+                try:
+                    parsed_notes = json.loads(stripped)
+                except json.JSONDecodeError:
+                    parsed_notes = stripped
+            else:
+                parsed_notes = ""
+        st.markdown("**Evaluation notes**")
+        if isinstance(parsed_notes, (dict, list)):
+            st.json(parsed_notes)
+        elif parsed_notes:
+            st.info(parsed_notes, icon=":material/rate_review:")
+
     citations = entry.get("citations")
     if citations:
         if isinstance(citations, str):
@@ -513,7 +531,7 @@ if authenticated:
                     {
                         "Timestamp": fmt_dt(entry.get("timestamp")),
                         "Session": entry.get("session_id") or "(no session)",
-                        "Response quality": entry.get("error_code") or "OK",
+                        "Request type": entry.get("error_code") or "OK",
                         "Topic": entry.get("request_classification") or "(unclassified)",
                         "Citations": entry.get("citation_count", 0),
                     }
@@ -703,7 +721,7 @@ if authenticated:
                 st.info("No topic data available yet.")
 
         with chart_cols[1]:
-            st.markdown("### Response quality")
+            st.markdown("### Request Type")
             conn_err = None
             cur_err = None
             try:
