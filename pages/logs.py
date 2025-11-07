@@ -790,7 +790,7 @@ if authenticated:
                             .mark_arc()
                             .encode(
                                 theta=alt.Theta(field="count", type="quantitative"),
-                                color=alt.Color(field="label_with_code", type="nominal", legend=alt.Legend(title="Response quality")),
+                                color=alt.Color(field="label_with_code", type="nominal", legend=alt.Legend(title="Request type")),
                                 tooltip=[
                                     alt.Tooltip("label_with_code:N", title="Status"),
                                     alt.Tooltip("count:Q", title="Interactions"),
