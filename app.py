@@ -10,6 +10,7 @@ from functools import lru_cache
 import uuid
 import threading
 import httpx
+from typing import Any, Sequence
 
 # Try to import Streamlit's script run context helper (safe fallback if unavailable)
 try:
@@ -18,6 +19,7 @@ except Exception:  # pragma: no cover - compatibility
     _st_add_ctx = None
 
 PRELIGHT_TTL_SECONDS = 600  # 10 minutes
+PRINT_EVAL_SCHEMA_WARNING = False
 
 @st.cache_resource(show_spinner=False)
 def _get_httpx_client() -> httpx.Client:
@@ -215,6 +217,86 @@ def _safe_output_text(resp_obj):
                 if isinstance(ptxt, dict) and isinstance(ptxt.get("value"), str) and ptxt["value"].strip():
                     return ptxt["value"]
     return ""
+
+
+def _humanize_debug_text(text: str) -> str:
+    """Make escaped newline/tab sequences readable for debug printing."""
+    if not isinstance(text, str):
+        return str(text)
+    return (
+        text.replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\r", "\r")
+    )
+
+
+def _extract_output_json(resp_obj) -> dict[str, Any]:
+    """Return first JSON dict emitted via response_format."""
+    output = getattr(resp_obj, "output", None)
+    if not output:
+        return {}
+    for item in output:
+        content = getattr(item, "content", None) or []
+        for part in content:
+            candidate = getattr(part, "json", None)
+            if isinstance(candidate, dict):
+                return candidate
+            if isinstance(part, dict):
+                inner = part.get("json")
+                if isinstance(inner, dict):
+                    return inner
+    return {}
+
+
+def _extract_first_json_object(payload_text: str) -> dict[str, Any]:
+    """Fallback parser when the model emits raw text instead of pure JSON."""
+    text = (payload_text or "").strip()
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if match:
+            snippet = match.group(0)
+            try:
+                return json.loads(snippet)
+            except json.JSONDecodeError:
+                return {}
+    except Exception:
+        return {}
+    return {}
+
+
+def _build_eval_response_format(allowed_topics: Sequence[str] | None = None) -> dict[str, Any]:
+    """Generate a json_schema descriptor matching prompts.json requirements."""
+    unique_topics: list[str] = []
+    if allowed_topics:
+        for val in allowed_topics:
+            if val not in unique_topics:
+                unique_topics.append(val)
+
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "request_classification": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "error_code": {"type": "integer", "minimum": 0, "maximum": 3},
+            "evaluation_notes": {"type": "string"},
+        },
+        "required": ["request_classification", "confidence", "error_code", "evaluation_notes"],
+        "additionalProperties": False,
+    }
+    if unique_topics:
+        schema["properties"]["request_classification"]["enum"] = unique_topics
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "interaction_evaluation",
+            "schema": schema,
+        },
+    }
 
 
 def _parse_headers_setting(header_value):
@@ -1746,7 +1828,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
     # --- Structured evaluation follow-up (background, cheaper model) ---
     def _run_eval_and_log_bg(user_input, cleaned, citation_map, session_id, main_latency_ms, base_usage,
-                             eval_model, main_model, evaluation_system_prompt):
+                             eval_model, main_model, evaluation_system_prompt, evaluation_response_format):
         """Run evaluation with a cheaper model in background, then log interaction."""
         # Defaults in case eval fails
         e_in = e_out = e_total = e_reason = 0
@@ -1756,27 +1838,82 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         evaluation_notes = ""
 
         try:
-            structured = client.responses.create(
-                timeout=30,
-                model=eval_model,
-                input=[
+            request_kwargs = {
+                "timeout": 30,
+                "model": eval_model,
+                "input": [
                     {"role": "system", "content": evaluation_system_prompt},
                     {"role": "user", "content": f"Original user request: {user_input}"},
                     {"role": "assistant", "content": f"Assistant response: {cleaned}"},
-                    {"role": "user", "content": "Please evaluate this interaction and return the JSON evaluation."}
-                ]
-            )
-            e_in, e_out, e_total, e_reason = _get_usage_from_final(structured)
-            payload_text = _safe_output_text(structured) or ""
+                ],
+            }
+            if evaluation_response_format:
+                request_kwargs["response_format"] = evaluation_response_format
             try:
-                payload = json.loads(payload_text) if payload_text.strip() else {}
+                print("🧪 Evaluation system prompt:")
+                print(_humanize_debug_text(evaluation_system_prompt))
             except Exception:
-                payload = {}
-            confidence = float(payload.get("confidence", 0.0))
-            ec = payload.get("error_code")
-            error_code = f"E0{ec}" if ec is not None else None
-            request_classification = payload.get("request_classification", "other")
-            evaluation_notes = payload.get("evaluation_notes", "")
+                print(f"🧪 Evaluation system prompt (repr): {evaluation_system_prompt!r}")
+            print("🧪 Evaluation input messages:")
+            for msg in request_kwargs["input"]:
+                role = msg.get("role", "?")
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    content_text = _humanize_debug_text(content)
+                else:
+                    try:
+                        content_text = json.dumps(content, ensure_ascii=False, indent=2)
+                    except Exception:
+                        content_text = repr(content)
+                print(f"--- {role.upper()} ---\n{content_text}\n")
+            try:
+                structured = client.responses.create(**request_kwargs)
+            except TypeError as te:
+                if "response_format" in str(te):
+                    if PRINT_EVAL_SCHEMA_WARNING:
+                        print("⚠️ Eval model does not support response_format; retrying without schema constraint.")
+                    request_kwargs.pop("response_format", None)
+                    structured = client.responses.create(**request_kwargs)
+                else:
+                    raise
+            e_in, e_out, e_total, e_reason = _get_usage_from_final(structured)
+            payload = _extract_output_json(structured)
+            if not payload:
+                payload_text = _safe_output_text(structured) or ""
+                payload = _extract_first_json_object(payload_text)
+            else:
+                payload_text = ""
+            if payload:
+                try:
+                    print("🧪 Evaluation payload:\n" + json.dumps(payload, ensure_ascii=False, indent=2))
+                except Exception:
+                    print(f"🧪 Evaluation payload (repr): {payload!r}")
+            if not payload:
+                preview = payload_text[:160].strip().replace("\n", " ")
+                print(f"⚠️ Evaluation JSON missing/invalid. Raw preview: {preview}")
+            try:
+                confidence = float(payload.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                confidence = 0.0
+            ec_raw = payload.get("error_code")
+            ec_int = None
+            if isinstance(ec_raw, str):
+                trimmed = ec_raw.strip()
+                if trimmed.upper().startswith("E") and trimmed[1:].isdigit():
+                    trimmed = trimmed[1:]
+                if trimmed.isdigit():
+                    ec_int = int(trimmed)
+            elif isinstance(ec_raw, (int, float)):
+                ec_int = int(ec_raw)
+            if ec_int is not None:
+                ec_int = max(0, min(3, ec_int))
+            error_code = f"E0{ec_int}" if ec_int is not None else None
+            req_class = payload.get("request_classification", "other")
+            if not isinstance(req_class, str) or not req_class.strip():
+                req_class = "other"
+            request_classification = req_class.strip()
+            eval_notes = payload.get("evaluation_notes", "")
+            evaluation_notes = eval_notes if isinstance(eval_notes, str) else ""
         except Exception as e:
             print(f"⚠️ Evaluation in background failed: {e}")
 
@@ -1847,17 +1984,25 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     eval_model_val = st.secrets.get("EVAL_MODEL", "gpt-4o-mini")
     # Prepare evaluation system prompt once (also compute allowed topics here)
     try:
+        allowed_topics = get_allowed_request_classifications()
+    except Exception:
+        allowed_topics = ["other"]
+    try:
         eval_sys_prompt = EVALUATION_SYSTEM_TEMPLATE.format(
             citation_count=len(citation_map or {}),
-            allowed_topics=", ".join(get_allowed_request_classifications()),
+            allowed_topics=", ".join(allowed_topics),
         )
     except Exception:
         eval_sys_prompt = EVALUATION_SYSTEM_TEMPLATE
+    try:
+        eval_response_format = _build_eval_response_format(allowed_topics)
+    except Exception:
+        eval_response_format = _build_eval_response_format(None)
 
     _start_thread(
         _run_eval_and_log_bg,
         name="_run_eval_and_log_bg",
-        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage, eval_model_val, main_model_val, eval_sys_prompt),
+        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage, eval_model_val, main_model_val, eval_sys_prompt, eval_response_format),
     )
 
     # NOTE: Logging happens in the background after evaluation. The UI has already been updated above.

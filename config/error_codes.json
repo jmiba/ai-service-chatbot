@@ -1,6 +1,22 @@
 {
-  "E00": "Question",
-  "E01": "Comment or complaint",
-  "E02": "Suggestion(s)",
-  "E03": "Invective or harmful content"
+  "E00": {
+    "label": "Question",
+    "description": "Information-seeking or help-requesting tone; neutral/curious sentiment.",
+    "sentiment": "wants to know"
+  },
+  "E01": {
+    "label": "Comment or complaint",
+    "description": "User shares feedback, praise, or complaints without asking for action.",
+    "sentiment": "commenting/venting"
+  },
+  "E02": {
+    "label": "Suggestion(s)",
+    "description": "User proposes improvements or next steps; may be phrased as a question.",
+    "sentiment": "suggesting change"
+  },
+  "E03": {
+    "label": "Invective or harmful content",
+    "description": "Insults, threats, or hostile/abusive language toward anyone.",
+    "sentiment": "aggressive/hostile"
+  }
 }
