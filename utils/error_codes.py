@@ -82,7 +82,7 @@ def load_error_code_labels() -> Dict[str, str]:
 
 def human_error_label(code: str | None, *, labels: Dict[str, str] | None = None) -> str:
     labels = labels or load_error_code_labels()
-    default_label = labels.get("E00") or labels.get("0") or "Good answer"
+    default_label = labels.get("E00") or labels.get("0") or "Question"
     if not code:
         return default_label
 
@@ -136,4 +136,4 @@ def format_error_code_legend() -> str:
         return (1, key)
 
     parts = [f"{key}={label}" for key, label in sorted(canonical_labels.items(), key=sort_key)]
-    return "Error codes: " + ", ".join(parts)
+    return "request type codes: " + ", ".join(parts)

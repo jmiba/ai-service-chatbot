@@ -1,7 +1,7 @@
 {
   "E00": {
     "label": "Question",
-    "description": "Information-seeking or help-requesting tone; neutral/curious sentiment.",
+    "description": "Information-seeking or help-requesting tone. Esample: 'When does the reading room open?",
     "sentiment": "wants to know"
   },
   "E01": {
@@ -11,7 +11,7 @@
   },
   "E02": {
     "label": "Suggestion(s)",
-    "description": "User proposes improvements or next steps; may be phrased as a question.",
+    "description": "User proposes improvements or next steps; may be phrased as a question. Example: 'Could you not expand the opening hours?",
     "sentiment": "suggesting change"
   },
   "E03": {

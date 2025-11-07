@@ -1849,23 +1849,24 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             }
             if evaluation_response_format:
                 request_kwargs["response_format"] = evaluation_response_format
-            try:
-                print("🧪 Evaluation system prompt:")
-                print(_humanize_debug_text(evaluation_system_prompt))
-            except Exception:
-                print(f"🧪 Evaluation system prompt (repr): {evaluation_system_prompt!r}")
-            print("🧪 Evaluation input messages:")
-            for msg in request_kwargs["input"]:
-                role = msg.get("role", "?")
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    content_text = _humanize_debug_text(content)
-                else:
-                    try:
-                        content_text = json.dumps(content, ensure_ascii=False, indent=2)
-                    except Exception:
-                        content_text = repr(content)
-                print(f"--- {role.upper()} ---\n{content_text}\n")
+            # Debug prints disabled for now
+            # try:
+            #     print("🧪 Evaluation system prompt:")
+            #     print(_humanize_debug_text(evaluation_system_prompt))
+            # except Exception:
+            #     print(f"🧪 Evaluation system prompt (repr): {evaluation_system_prompt!r}")
+            # print("🧪 Evaluation input messages:")
+            # for msg in request_kwargs["input"]:
+            #     role = msg.get("role", "?")
+            #     content = msg.get("content", "")
+            #     if isinstance(content, str):
+            #         content_text = _humanize_debug_text(content)
+            #     else:
+            #         try:
+            #             content_text = json.dumps(content, ensure_ascii=False, indent=2)
+            #         except Exception:
+            #             content_text = repr(content)
+            #     print(f"--- {role.upper()} ---\n{content_text}\n")
             try:
                 structured = client.responses.create(**request_kwargs)
             except TypeError as te:
@@ -1883,11 +1884,11 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 payload = _extract_first_json_object(payload_text)
             else:
                 payload_text = ""
-            if payload:
-                try:
-                    print("🧪 Evaluation payload:\n" + json.dumps(payload, ensure_ascii=False, indent=2))
-                except Exception:
-                    print(f"🧪 Evaluation payload (repr): {payload!r}")
+            # if payload:
+            #     try:
+            #         print("🧪 Evaluation payload:\n" + json.dumps(payload, ensure_ascii=False, indent=2))
+            #     except Exception:
+            #         print(f"🧪 Evaluation payload (repr): {payload!r}")
             if not payload:
                 preview = payload_text[:160].strip().replace("\n", " ")
                 print(f"⚠️ Evaluation JSON missing/invalid. Raw preview: {preview}")
