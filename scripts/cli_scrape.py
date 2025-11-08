@@ -33,7 +33,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from scrape.maintenance import sync_vector_store, update_stale_documents
+from scrape.maintenance import sync_vector_store, update_stale_documents, purge_orphaned_vector_files
 
 try:
     from utils import write_vector_store_details, clear_vector_store_dirty, update_last_scrape_run
@@ -177,8 +177,8 @@ def main():
     parser.add_argument(
         "--budget",
         type=int,
-        default=100000,
-        help="Max URLs per run (crawl budget). Default: 30,000",
+        default=5000,
+        help="Max URLs per run (crawl budget). Default: 5,000",
     )
     parser.add_argument("--keep-query", type=str, default="", help="Comma-separated query keys to whitelist")
     parser.add_argument("--dry-run", action="store_true", help="Traverse without DB writes or LLM calls")
@@ -189,11 +189,12 @@ def main():
     parser.add_argument("--no-vectorize", dest="vectorize", action="store_false", help="Skip uploading to vector store after scraping")
     parser.add_argument(
         "--mode",
-        choices=["scrape", "vectorize", "both"],
-        default="both",
+        choices=["scrape", "vectorize", "all", "cleanup"],
+        default="all",
         help=(
             "Which parts of the pipeline to run: 'scrape' for crawling only, "
-            "'vectorize' for vector-store sync only, 'both' for the traditional full run."
+            "'vectorize' for vector-store sync only, 'cleanup' to purge orphaned vector files, "
+            "'all' for the traditional full run with automatic cleanup."
         ),
     )
     parser.set_defaults(vectorize=True)
@@ -212,8 +213,9 @@ def main():
         print(f"[ERROR] DB init failed: {e}")
         return 1
 
-    run_scrape = args.mode in {"scrape", "both"}
-    run_vectorize = args.mode in {"vectorize", "both"} and args.vectorize
+    run_scrape = args.mode in {"scrape", "all"}
+    run_vectorize = args.mode in {"vectorize", "all"} and args.vectorize
+    cleanup_only_mode = args.mode == "cleanup"
 
     # Load configs only when scraping
     run_configs = []
@@ -278,7 +280,7 @@ def main():
             total = len(run_configs)
             for idx, cfg in enumerate(run_configs, 1):
                 url = cfg["url"].strip()
-                depth = int(cfg.get("depth", 2))
+                depth = int(cfg.get("depth", 3))
                 recordset = (cfg.get("recordset") or f"recordset_{idx}").strip()
                 exclude_paths = cfg.get("exclude_paths") or []
                 include_lang_prefixes = cfg.get("include_lang_prefixes") or []
@@ -331,7 +333,12 @@ def main():
                     else:
                         print("[INFO] No stale documents detected.")
         else:
-            print("[INFO] Skipping scraping stage (--mode=vectorize).")
+            if cleanup_only_mode:
+                print("[INFO] Skipping scraping stage (--mode=cleanup).")
+            elif args.mode == "vectorize":
+                print("[INFO] Skipping scraping stage (--mode=vectorize).")
+            else:
+                print("[INFO] Skipping scraping stage (no configs requested).")
 
         if conn:
             try:
@@ -339,6 +346,8 @@ def main():
             except Exception:
                 pass
             conn = None
+
+        vectorize_success = False
 
         # After scraping, optionally sync to vector store (skip in dry-run)
         if run_vectorize:
@@ -371,12 +380,37 @@ def main():
                             print("[INFO] Vector store status and details snapshots updated.")
                         except Exception as status_exc:
                             print(f"[WARN] Could not update vector store snapshots: {status_exc}")
+                        vectorize_success = True
                     except Exception as e:
                         print(f"[ERROR] Vector store sync failed: {e}")
         elif args.mode == "scrape":
             print("[INFO] Vector store sync disabled via --mode=scrape.")
+        elif cleanup_only_mode:
+            print("[INFO] Skipping vector store sync (--mode=cleanup).")
         else:
             print("[INFO] Vector store sync disabled via --no-vectorize.")
+
+        should_cleanup = False
+        cleanup_reason = ""
+        if args.dry_run:
+            if cleanup_only_mode:
+                print("[INFO] Dry-run mode: skipping orphan cleanup (--mode=cleanup).")
+        else:
+            if cleanup_only_mode:
+                should_cleanup = True
+                cleanup_reason = "cleanup-only mode"
+            elif vectorize_success:
+                should_cleanup = True
+                cleanup_reason = "post-sync cleanup"
+
+        if should_cleanup:
+            print(f"[INFO] Starting vector store orphan cleanup ({cleanup_reason}).")
+            try:
+                cleanup_result = purge_orphaned_vector_files()
+                deleted = cleanup_result.get("deleted_count", 0) if cleanup_result else 0
+                print(f"[INFO] Orphan cleanup finished. Deleted {deleted} file(s).")
+            except Exception as exc:
+                print(f"[ERROR] Vector store cleanup failed: {exc}")
 
     finally:
         # Release lock

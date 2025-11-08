@@ -19,7 +19,7 @@ from utils.scraper_schedule import read_scraper_schedule, update_last_scrape_run
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run cli_scrape.py if the schedule is due.")
-    parser.add_argument("--mode", choices=["scrape", "vectorize", "both"], help="Override job mode.")
+    parser.add_argument("--mode", choices=["scrape", "vectorize", "all", "cleanup"], help="Override job mode.")
     parser.add_argument("--budget", type=int, help="Override crawl budget for scrape runs.")
     parser.add_argument("--keep-query", type=str, help="Override keep-query keys (comma separated).")
     parser.add_argument(
@@ -146,7 +146,7 @@ def main() -> int:
         )
         return 0
 
-    mode = args.mode or schedule.get("mode", "both")
+    mode = args.mode or schedule.get("mode", "all")
     crawl_budget = args.budget or schedule.get("crawl_budget")
     keep_query = args.keep_query if args.keep_query is not None else schedule.get("keep_query", "")
     dry_run = schedule.get("dry_run", False) if args.dry_run is None else args.dry_run

@@ -22,7 +22,7 @@ services:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
     entrypoint: ["python", "scripts/cli_scrape.py"]
-    command: ["--mode", "both"]
+    command: ["--mode", "all"]
     environment:
       - PYTHONUNBUFFERED=1
 

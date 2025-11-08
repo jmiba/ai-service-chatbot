@@ -1641,7 +1641,7 @@ def main():
                     st.session_state.url_configs[i]["depth"] = st.number_input(
                         f"Max scraping depth",
                         min_value=0,
-                        max_value=100,
+                        max_value=15,
                         value=config["depth"],
                         step=1,
                         key=f"depth_{config_id}",
@@ -1891,15 +1891,16 @@ def main():
             mode_label_map = {
                 "scrape": "Scrape only",
                 "vectorize": "Vector sync only",
-                "both": "Scrape + vector sync",
+                "all": "Scrape + vector sync + cleanup (default)",
+                "cleanup": "Vector cleanup (orphans only)",
             }
             inverse_mode_map = {v: k for k, v in mode_label_map.items()}
-            default_mode_label = mode_label_map.get(schedule_state.get("mode", "both"), "Scrape + vector sync")
+            default_mode_label = mode_label_map.get(schedule_state.get("mode", "all"), mode_label_map["all"])
             mode_options = list(mode_label_map.values())
             try:
                 default_mode_index = mode_options.index(default_mode_label)
             except ValueError:
-                default_mode_index = mode_options.index("Scrape + vector sync")
+                default_mode_index = mode_options.index("Scrape + vector sync + cleanup (default)")
             selected_mode_label = st.selectbox(
                 "Scheduled job mode",
                 options=mode_options,
@@ -1909,9 +1910,9 @@ def main():
             scheduled_budget = st.number_input(
                 "Crawl budget for scheduled run",
                 min_value=1000,
-                max_value=200000,
+                max_value=20000,
                 step=1000,
-                value=int(schedule_state.get("crawl_budget", 30000)),
+                value=int(schedule_state.get("crawl_budget", 5000)),
             )
 
             scheduled_keep_query = st.text_input(
@@ -1980,12 +1981,15 @@ def main():
             icon=":material/schedule:",
         )
 
-        if not st.session_state.url_configs:
-            st.warning("**No URLs configured yet!** Add at least one URL configuration above to start indexing.", icon=":material/warning:")
-            st.stop()
-
         with st.expander("Show manual indexing controls", expanded=False):
             st.markdown("**Indexing will:** Discover and crawl pages, process content with LLM, save to knowledge base, show real-time progress")
+
+            if not st.session_state.url_configs:
+                st.warning(
+                    "**No URL configurations found.** Add at least one entry above to run scraping jobs. "
+                    "Vector cleanup-only runs remain available.",
+                    icon=":material/warning:",
+                )
 
             st.markdown("### Crawler settings")
             colA, colB = st.columns(2)
@@ -1993,8 +1997,8 @@ def main():
                 max_urls_per_run = st.number_input(
                     "Max URLs per run (crawl budget)",
                     min_value=1000,
-                    max_value=200000,
-                    value=30000,
+                    max_value=20000,
+                    value=5000,
                     step=1000,
                 )
             with colB:
@@ -2019,9 +2023,9 @@ def main():
 
             job_mode = st.radio(
                 "Job mode",
-                options=["Scrape only", "Scrape + vector sync"],
+                options=["Scrape only", "Scrape + vector sync + cleanup", "Vector cleanup only"],
                 index=1 if not manual_dry_run else 0,
-                help="Choose whether to run vector store synchronization after scraping. Dry run forces 'Scrape only'.",
+                help="Choose whether to run vector store synchronization (with cleanup) after scraping, or just purge orphaned vector files.",
             )
             if manual_dry_run and job_mode != "Scrape only":
                 st.info("Dry run enabled — skipping vector store synchronization.", icon=":material/info:")
@@ -2063,7 +2067,10 @@ def main():
                         "Another indexing/vectorization job is active. Please retry after it finishes.",
                         icon=":material/pending_actions:",
                     )
-                elif not any(config.get('url', '').strip() for config in st.session_state.url_configs):
+                elif (
+                    job_mode != "Vector cleanup only"
+                    and not any(config.get('url', '').strip() for config in st.session_state.url_configs)
+                ):
                     st.error("No valid URLs found in configurations. Please add at least one URL.", icon=":material/error:")
                 else:
                     cli_args = ["--budget", str(max_urls_per_run)]
@@ -2072,7 +2079,12 @@ def main():
                     if manual_dry_run:
                         cli_args.append("--dry-run")
 
-                    cli_mode = "both" if job_mode == "Scrape + vector sync" and not manual_dry_run else "scrape"
+                    if job_mode == "Vector cleanup only":
+                        cli_mode = "cleanup"
+                    elif job_mode == "Scrape + vector sync + cleanup" and not manual_dry_run:
+                        cli_mode = "all"
+                    else:
+                        cli_mode = "scrape"
 
                     overlay = show_blocking_overlay()
                     rerun_needed = False

@@ -208,6 +208,41 @@ def build_filename_to_id_map_efficiently(vs_files):
     return _run_async_task(_build_map())
 
 
+def purge_orphaned_vector_files(force_refresh: bool = True) -> dict[str, int] | None:
+    """Delete vector store files that are no longer referenced in the database."""
+
+    vectorize = _get_vectorize_module()
+    VECTOR_STORE_ID = vectorize.VECTOR_STORE_ID
+    collect_vector_store_details = vectorize.collect_vector_store_details
+    delete_file_ids = vectorize.delete_file_ids
+
+    print("🔎 Inspecting vector store for orphaned files...")
+    details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=force_refresh)
+    true_orphan_ids = set(details.get("true_orphan_ids") or [])
+
+    if not true_orphan_ids:
+        print("✅ No orphaned vector files detected.")
+        return {"deleted_count": 0}
+
+    print(f"🧹 Deleting {len(true_orphan_ids)} orphaned vector files...")
+    delete_file_ids(VECTOR_STORE_ID, true_orphan_ids, label="orphan")
+
+    try:
+        status = vectorize.compute_vector_store_status(VECTOR_STORE_ID, force_refresh=True)
+        vectorize.write_vector_status(status)
+        refreshed_details = collect_vector_store_details(VECTOR_STORE_ID, force_refresh=True)
+        vectorize.write_vector_store_details(refreshed_details)
+        vectorize.clear_vector_store_dirty()
+        try:
+            vectorize._vs_files_cache["data"] = None  # ensure next read hits OpenAI
+        except Exception:
+            pass
+    except Exception as exc:  # pragma: no cover - just logging
+        print(f"[WARN] Could not refresh vector snapshots after cleanup: {exc}")
+
+    return {"deleted_count": len(true_orphan_ids)}
+
+
 def sync_vector_store():
     vectorize = _get_vectorize_module()
     VECTOR_STORE_ID = vectorize.VECTOR_STORE_ID

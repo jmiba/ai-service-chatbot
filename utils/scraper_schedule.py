@@ -14,8 +14,8 @@ DEFAULT_SCHEDULE: Dict[str, Any] = {
     "enabled": False,
     "interval_hours": 12.0,  # fallback when no run_times provided
     "run_times": ["00:00", "12:00"],
-    "mode": "both",
-    "crawl_budget": 30000,
+    "mode": "all",
+    "crawl_budget": 5000,
     "keep_query": "",
     "dry_run": False,
     "last_run_at": None,
@@ -68,7 +68,8 @@ def _normalize_schedule(data: Dict[str, Any] | None) -> Dict[str, Any]:
     result["interval_hours"] = max(0.5, min(interval_hours, 168.0))
 
     mode = str(result.get("mode", DEFAULT_SCHEDULE["mode"])).strip().lower()
-    if mode not in {"scrape", "vectorize", "both"}:
+    if mode not in {"scrape", "vectorize", "all", "cleanup"}:
+        mode = DEFAULT_SCHEDULE["mode"]
         mode = DEFAULT_SCHEDULE["mode"]
     result["mode"] = mode
 
@@ -76,7 +77,7 @@ def _normalize_schedule(data: Dict[str, Any] | None) -> Dict[str, Any]:
         crawl_budget = int(result.get("crawl_budget", DEFAULT_SCHEDULE["crawl_budget"]))
     except (TypeError, ValueError):
         crawl_budget = DEFAULT_SCHEDULE["crawl_budget"]
-    result["crawl_budget"] = max(1000, min(crawl_budget, 200000))
+    result["crawl_budget"] = max(1000, min(crawl_budget, 20000))
 
     keep_query = result.get("keep_query", "") or ""
     result["keep_query"] = str(keep_query)

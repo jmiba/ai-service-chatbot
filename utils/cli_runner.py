@@ -74,7 +74,7 @@ def launch_cli_job(
 
     script_path = _ensure_cli_script()
 
-    if mode not in {"scrape", "vectorize", "both"}:
+    if mode not in {"scrape", "vectorize", "all", "cleanup"}:
         raise CLIJobError(f"Unsupported mode '{mode}'.")
 
     python_exe = sys.executable

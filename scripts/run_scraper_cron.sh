@@ -13,7 +13,7 @@ log() {
 
 while true; do
   log "Starting scheduled scrape (interval ${INTERVAL_SECONDS}s)…"
-  if python scripts/cli_scrape.py --mode both; then
+  if python scripts/cli_scrape.py --mode all; then
     log "Scrape run finished successfully."
     touch "${HEARTBEAT_FILE}"
   else

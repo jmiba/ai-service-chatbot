@@ -128,7 +128,7 @@ streamlit run app.py
 We ship a `docker-compose.yaml` that runs two core services (plus an optional watchdog):
 
 - `chatbot`: the Streamlit UI (builds the local app and exposes `8501`)
-- `cli-runner`: an on-demand helper container for heavy scraping/vectorization runs; invoke it with `docker compose run --rm --profile cli cli-runner --mode vectorize` (or `both`) so the job happens outside the UI process while still sharing secrets/state
+- `cli-runner`: an on-demand helper container for heavy scraping/vectorization runs; invoke it with `docker compose run --rm --profile cli cli-runner --mode vectorize` (or `all`/`cleanup`) so the job happens outside the UI process while still sharing secrets/state
 - `autoheal`: optional watchdog that restarts unhealthy containers
 
 1. Build the image (Docker or Podman both work):
@@ -144,15 +144,16 @@ We ship a `docker-compose.yaml` that runs two core services (plus an optional wa
 
 3. Run a one-off scraping/vectorization job in its own container (keeps Streamlit responsive even with large vector stores):
    ```bash
-   docker compose run --rm --profile cli cli-runner --mode both        # scrape + vectorize
+   docker compose run --rm --profile cli cli-runner --mode all         # scrape + vectorize + orphan cleanup
    docker compose run --rm --profile cli cli-runner --mode vectorize   # vectorize only
    docker compose run --rm --profile cli cli-runner --mode scrape -- --budget 2000
+   docker compose run --rm --profile cli cli-runner --mode cleanup     # purge orphaned vector files only
    ```
    Arguments passed after `--` are forwarded to `scripts/cli_scrape.py`. The helper shares the same `.streamlit` and `state` mounts, so files such as `state/vector_store_details.json` and `last_vector_sync.txt` stay in sync with the UI container.
 
 ### Scheduling scraper/vectorizer runs outside the UI container
 
-Configure daily start times (e.g., `06:30`, `12:00`, `23:45`) plus fallback interval/mode/crawl-budget/dry-run values from **Admin → Scraping → Scheduled CLI runner**. The UI persists everything to `state/scraper_schedule.json`, which the helper script `scripts/run_cli_if_due.py` reads before deciding whether the next slot has arrived.
+Configure daily start times (e.g., `06:30`, `12:00`, `23:45`) plus fallback interval/mode/crawl-budget/dry-run values from **Admin → Scraping → Scheduled CLI runner**. Mode `all` runs scraping + vectorization followed by automatic orphan cleanup; `cleanup` runs just the purge. The UI persists everything to `state/scraper_schedule.json`, which the helper script `scripts/run_cli_if_due.py` reads before deciding whether the next slot has arrived.
 
 Trigger the helper with whichever scheduler matches your deployment:
 

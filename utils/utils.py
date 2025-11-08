@@ -204,30 +204,36 @@ ICON_PATH = (BASE_DIR / "assets" / "Key.png")
 BLOCK_UI_HTML = """
 <style>
 #global-block-ui-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(255, 255, 255, 0.65);
-    backdrop-filter: blur(2px);
-    z-index: 99999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: #1f2937;
-    pointer-events: all;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  color: #fff;
+  font-size: 1.1rem;
+  z-index: 9999;
 }
-[data-testid="stSidebar"],
-[data-testid="stSidebarCollapseButton"],
-[data-testid="stSidebarNav"],
-[data-testid="stHeader"] button,
-[data-testid="stToolbar"] button {
-    pointer-events: none !important;
-    filter: grayscale(55%);
-    opacity: 0.45;
+
+#global-block-ui-overlay .spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>
-<div id="global-block-ui-overlay">Working… please hold on.</div>
+<div id="global-block-ui-overlay">
+  <div class="spinner"></div>
+  <p>Working… Heavy API calls in progress—please hold on.</p>
+</div>
 """
 
 def load_css(file_path: str = "css/styles.css") -> None:
@@ -1032,7 +1038,7 @@ def initialize_default_url_configs():
                 {
                     "url": "https://www.europa-uni.de",
                     "recordset": "university_main",
-                    "depth": 2,
+                    "depth": 3,
                     "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
                     "include_lang_prefixes": ["/de/"]
                 }
