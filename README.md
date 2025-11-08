@@ -14,6 +14,10 @@ Try it: https://viadrina.streamlit.app
 
 (This demo is slowed by free-tier hosting and may take a while to respond.)
 
+## Architecture
+
+![Architecture](image-11.png)
+
 ## ✨ Highlights
 
 - **Multilingual chat assistant** with streaming Responses API output, status updates, and resilient error handling.
