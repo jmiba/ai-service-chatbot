@@ -51,6 +51,7 @@ from .vector_status import read_vector_status, write_vector_status
 from .vector_details import read_vector_store_details, write_vector_store_details
 from .vector_dirty import mark_vector_store_dirty, clear_vector_store_dirty, is_vector_store_dirty
 from .error_codes import load_error_code_labels, human_error_label, format_error_code_legend
+from .scraper_schedule import read_scraper_schedule, write_scraper_schedule, update_last_scrape_run
 
 # Now you can import from utils directly, e.g.:
 # from utils import get_connection, load_css

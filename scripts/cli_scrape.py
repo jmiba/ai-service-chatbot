@@ -36,12 +36,15 @@ if ROOT not in sys.path:
 from scrape.maintenance import sync_vector_store, update_stale_documents
 
 try:
-    from utils import write_vector_store_details, clear_vector_store_dirty
+    from utils import write_vector_store_details, clear_vector_store_dirty, update_last_scrape_run
 except ImportError:
     def write_vector_store_details(_data):
         return None
 
     def clear_vector_store_dirty():
+        return None
+
+    def update_last_scrape_run(*_args, **_kwargs):
         return None
 
 # Provide Streamlit secrets in headless mode
@@ -387,6 +390,10 @@ def main():
                 pass
 
     print("[INFO] cli_scrape completed")
+    try:
+        update_last_scrape_run()
+    except Exception as exc:  # pragma: no cover - best effort logging only
+        print(f"[WARN] Could not update schedule metadata: {exc}")
     return 0
 
 

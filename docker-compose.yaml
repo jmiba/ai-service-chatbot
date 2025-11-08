@@ -13,26 +13,18 @@ services:
       - autoheal=true
     # Healthcheck inherited from Dockerfile; override here if you need different timing.
 
-  scraper-cron:
+  cli-runner:
     image: chatbot:latest
-    container_name: chatbot-cron
-    depends_on:
-      - chatbot
-    restart: unless-stopped
+    container_name: chatbot-cli-runner
+    profiles:
+      - cli
     volumes:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
-    entrypoint: ["/app/scripts/run_scraper_cron.sh"]
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "python3 -c 'import os, sys, time; path = \"/app/state/last_scraper_ok\"; max_age = 780 * 60; now = time.time(); sys.exit(0) if os.path.exists(path) and (now - os.path.getmtime(path)) < max_age else sys.exit(1)'",
-        ]
-      interval: 5m
-      timeout: 10s
-      retries: 3
-      start_period: 10m
+    entrypoint: ["python", "scripts/cli_scrape.py"]
+    command: ["--mode", "both"]
+    environment:
+      - PYTHONUNBUFFERED=1
 
   autoheal:
     image: willfarrell/autoheal

@@ -121,10 +121,10 @@ streamlit run app.py
 
 ### Container Deploy (Docker or Podman)
 
-We ship a `docker-compose.yaml` that runs three services:
+We ship a `docker-compose.yaml` that runs two core services (plus an optional watchdog):
 
 - `chatbot`: the Streamlit UI (builds the local app and exposes `8501`)
-- `scraper-cron`: a sidecar that runs `scripts/run_scraper_cron.sh` every 12 hours so the knowledge base stays fresh without systemd timers
+- `cli-runner`: an on-demand helper container for heavy scraping/vectorization runs; invoke it with `docker compose run --rm --profile cli cli-runner --mode vectorize` (or `both`) so the job happens outside the UI process while still sharing secrets/state
 - `autoheal`: optional watchdog that restarts unhealthy containers
 
 1. Build the image (Docker or Podman both work):
@@ -137,9 +137,65 @@ We ship a `docker-compose.yaml` that runs three services:
    docker compose up --build -d      # podman-compose up --build -d
    # or, if you wrapped compose in systemd: systemctl restart chatbot
    ```
-   The cron sidecar shares the same `.streamlit` and `state` volumes as the UI, so it reuses secrets and job locks. It runs `/app/scripts/run_scraper_cron.sh`, which kicks off a scrape immediately on start, then sleeps 12 hours (override with `SCRAPER_INTERVAL_SECONDS`) before the next run.
 
-To run only the Streamlit UI (without the scheduled scraper), omit the `scraper-cron` service or run `docker compose up chatbot autoheal`.
+3. Run a one-off scraping/vectorization job in its own container (keeps Streamlit responsive even with large vector stores):
+   ```bash
+   docker compose run --rm --profile cli cli-runner --mode both        # scrape + vectorize
+   docker compose run --rm --profile cli cli-runner --mode vectorize   # vectorize only
+   docker compose run --rm --profile cli cli-runner --mode scrape -- --budget 2000
+   ```
+   Arguments passed after `--` are forwarded to `scripts/cli_scrape.py`. The helper shares the same `.streamlit` and `state` mounts, so files such as `state/vector_store_details.json` and `last_vector_sync.txt` stay in sync with the UI container.
+
+### Scheduling scraper/vectorizer runs outside the UI container
+
+Configure daily start times (e.g., `06:30`, `12:00`, `23:45`) plus fallback interval/mode/crawl-budget/dry-run values from **Admin → Scraping → Scheduled CLI runner**. The UI persists everything to `state/scraper_schedule.json`, which the helper script `scripts/run_cli_if_due.py` reads before deciding whether the next slot has arrived.
+
+Trigger the helper with whichever scheduler matches your deployment:
+
+1. **systemd timer (Docker Compose, recommended)**  
+   `/etc/systemd/system/cli-runner.service`:
+   ```
+   [Unit]
+   Description=AI Service CLI runner (Docker)
+   WorkingDirectory=/home/chatbot/app
+
+   [Service]
+   Type=oneshot
+   ExecStart=/usr/bin/docker compose run --rm --profile cli --entrypoint python cli-runner scripts/run_cli_if_due.py
+   ```
+   `/etc/systemd/system/cli-runner.timer`:
+   ```
+   [Unit]
+   Description=Trigger AI Service CLI runner every 15 minutes
+
+   [Timer]
+   OnBootSec=2min
+   OnUnitActiveSec=15min
+   Persistent=true
+
+   [Install]
+   WantedBy=timers.target
+   ```
+   Enable with `systemctl enable --now cli-runner.timer`. The helper exits immediately when the next configured HH:MM hasn’t arrived; when due, it launches `scripts/cli_scrape.py` inside the `cli-runner` container and updates `state/scraper_schedule.json`.
+
+2. **systemd timer (Podman Compose)**  
+   Same timer definition as above, but set `ExecStart=/usr/bin/podman-compose run --rm --profile cli --entrypoint python cli-runner scripts/run_cli_if_due.py`.
+
+3. **systemd timer (bare Python install)**  
+   Point the service to your virtual environment instead of Compose:
+   ```
+   ExecStart=/home/chatbot/app/.venv/bin/python /home/chatbot/app/scripts/run_cli_if_due.py
+   WorkingDirectory=/home/chatbot/app
+   ```
+   Make sure the service account can read `.streamlit/secrets.toml` and `state/`.
+
+4. **cron fallback** (evaluate every 15 minutes):
+   ```
+   */15 * * * * cd /home/chatbot/app && docker compose run --rm --profile cli --entrypoint python cli-runner scripts/run_cli_if_due.py >> /var/log/cli-runner.log 2>&1
+   ```
+   Replace the command with `podman-compose …` or `~/.venv/bin/python scripts/run_cli_if_due.py` if you aren’t using containers.
+
+All of these reuse the shared `.streamlit` and `state` volumes/directories, so the Streamlit UI immediately sees `state/vector_store_details.json`, `last_vector_sync.txt`, scheduler metadata, and dirty-flag markers written by the job.
 
 ## 🔌 DBIS MCP Integration
 

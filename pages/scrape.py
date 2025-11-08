@@ -2,7 +2,7 @@ import base64
 import fnmatch
 import math
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 from collections import defaultdict
 from bs4 import BeautifulSoup
@@ -32,6 +32,8 @@ from utils import (
     release_job_lock,
     render_log_output,
     mark_vector_store_dirty,
+    read_scraper_schedule,
+    write_scraper_schedule,
 )
 from pathlib import Path
 import uuid
@@ -1494,7 +1496,7 @@ def main():
 
         # Status Dashboard - Give users immediate overview of system state
         st.markdown("---")
-        st.markdown("#### System Status")
+        st.subheader("System Status")
         try:
             metrics = get_document_metrics()
         except Exception as exc:
@@ -1816,9 +1818,165 @@ def main():
 
 
         st.markdown("---")
+        if "scraper_schedule" not in st.session_state:
+            st.session_state["scraper_schedule"] = read_scraper_schedule()
+
+        st.header("Scheduled Re-Sraping")
+
+        def _parse_ts(value):
+            if not value:
+                return None
+            try:
+                parsed = datetime.fromisoformat(value)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+
+        def _format_run_times(times: list[str]) -> str:
+            return ", ".join(times)
+
+        def _parse_run_times_input(raw: str) -> list[str]:
+            normalized: list[str] = []
+            seen: set[str] = set()
+            for token in raw.split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                parts = token.split(":")
+                if len(parts) != 2:
+                    continue
+                try:
+                    hour = int(parts[0])
+                    minute = int(parts[1])
+                except ValueError:
+                    continue
+                if not (0 <= hour < 24 and 0 <= minute < 60):
+                    continue
+                value = f"{hour:02d}:{minute:02d}"
+                if value not in seen:
+                    seen.add(value)
+                    normalized.append(value)
+            return sorted(normalized)
+
+        schedule_state = st.session_state["scraper_schedule"]
+        last_run_dt = _parse_ts(schedule_state.get("last_run_at"))
+        next_run_dt = None
+        if last_run_dt:
+            next_run_dt = last_run_dt + timedelta(hours=schedule_state.get("interval_hours", 12))
+
+        with st.expander("Configure scheduled CLI runner", expanded=False):
+            st.caption(
+                "These settings are read by `scripts/run_cli_if_due.py`. Trigger it from your host cron or systemd "
+                "timer using the command below so heavy scraping/vectorization runs outside the UI container."
+            )
+
+            enabled = st.checkbox("Enable scheduled runs", value=bool(schedule_state.get("enabled", False)))
+            run_times_input = st.text_input(
+                "Daily start times (HH:MM, comma separated)",
+                value=_format_run_times(schedule_state.get("run_times", [])),
+                help="Exact times when the CLI runner should start (24h format). Example: 06:45, 12:00, 23:50.",
+            )
+            parsed_run_times = _parse_run_times_input(run_times_input)
+            interval_hours = st.number_input(
+                "Interval (hours)",
+                min_value=0.5,
+                max_value=168.0,
+                value=float(schedule_state.get("interval_hours", 12.0)),
+                step=0.5,
+                help="Fallback interval used only when no explicit start times are configured.",
+            )
+
+            mode_label_map = {
+                "scrape": "Scrape only",
+                "vectorize": "Vector sync only",
+                "both": "Scrape + vector sync",
+            }
+            inverse_mode_map = {v: k for k, v in mode_label_map.items()}
+            default_mode_label = mode_label_map.get(schedule_state.get("mode", "both"), "Scrape + vector sync")
+            mode_options = list(mode_label_map.values())
+            try:
+                default_mode_index = mode_options.index(default_mode_label)
+            except ValueError:
+                default_mode_index = mode_options.index("Scrape + vector sync")
+            selected_mode_label = st.selectbox(
+                "Scheduled job mode",
+                options=mode_options,
+                index=default_mode_index,
+            )
+
+            scheduled_budget = st.number_input(
+                "Crawl budget for scheduled run",
+                min_value=1000,
+                max_value=200000,
+                step=1000,
+                value=int(schedule_state.get("crawl_budget", 30000)),
+            )
+
+            scheduled_keep_query = st.text_input(
+                "Whitelist query keys (comma-separated)",
+                value=schedule_state.get("keep_query", ""),
+            )
+
+            scheduled_dry_run = st.checkbox(
+                "Dry run (skip DB writes/LLM)",
+                value=bool(schedule_state.get("dry_run", False)),
+            )
+
+            if last_run_dt:
+                st.info(
+                    f"Last scheduled run: {last_run_dt.isoformat(timespec='seconds')} | "
+                    + (f"Next due at {next_run_dt.isoformat(timespec='seconds')}" if next_run_dt else ""),
+                    icon=":material/history:",
+                )
+            else:
+                st.caption("Scheduler has not run yet. Use the cron command below to trigger it.")
+
+            if parsed_run_times:
+                st.caption(f"Configured daily times: {', '.join(parsed_run_times)}")
+            else:
+                st.caption(
+                    "No explicit times set. The helper falls back to the interval above, so it runs every "
+                    f"{interval_hours:g} hours when triggered."
+                )
+
+            previous_enabled = bool(schedule_state.get("enabled", False))
+
+            if st.button("Save scheduler settings", icon=":material/save:"):
+                updated_schedule = {
+                    "enabled": enabled,
+                    "interval_hours": interval_hours,
+                    "run_times": parsed_run_times,
+                    "mode": inverse_mode_map[selected_mode_label],
+                    "crawl_budget": scheduled_budget,
+                    "keep_query": scheduled_keep_query,
+                    "dry_run": scheduled_dry_run,
+                    "last_run_at": schedule_state.get("last_run_at"),
+                }
+
+                if enabled and not previous_enabled and not updated_schedule["last_run_at"]:
+                    updated_schedule["last_run_at"] = datetime.now(timezone.utc).isoformat()
+
+                schedule_state = write_scraper_schedule(updated_schedule)
+                st.session_state["scraper_schedule"] = schedule_state
+                st.success("Scheduler settings saved.", icon=":material/check_circle:")
+
+            st.markdown("**Cron/systemd command examples**")
+            st.code(
+                ".venv/bin/python scripts/run_cli_if_due.py  # bare-metal Python\n"
+                "docker compose run --rm --profile cli --entrypoint python cli-runner scripts/run_cli_if_due.py\n"
+                "podman compose run --rm --profile cli --entrypoint python cli-runner scripts/run_cli_if_due.py",
+                language="bash",
+            )
+            st.caption(
+                "Invoke the command above from your preferred scheduler. The helper script exits immediately when the "
+                "interval has not elapsed, and runs `cli_scrape.py` (in the selected mode) when due."
+            )
+
         st.markdown("## Manual Indexing (override)")
         st.info(
-            "A scheduled CLI job runs every 12 hours. Use the manual controls below only if you need an immediate run.",
+            "Use the manual controls below when you need to trigger an immediate run outside the configured schedule.",
             icon=":material/schedule:",
         )
 
