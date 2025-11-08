@@ -68,7 +68,7 @@ def _normalize_schedule(data: Dict[str, Any] | None) -> Dict[str, Any]:
     result["interval_hours"] = max(0.5, min(interval_hours, 168.0))
 
     mode = str(result.get("mode", DEFAULT_SCHEDULE["mode"])).strip().lower()
-    if mode not in {"scrape", "vectorize", "all", "cleanup"}:
+    if mode not in {"scrape", "vectorize", "sync", "all", "cleanup"}:
         mode = DEFAULT_SCHEDULE["mode"]
         mode = DEFAULT_SCHEDULE["mode"]
     result["mode"] = mode

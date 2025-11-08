@@ -1891,6 +1891,7 @@ def main():
             mode_label_map = {
                 "scrape": "Scrape only",
                 "vectorize": "Vector sync only",
+                "sync": "Scrape + vector sync",
                 "all": "Scrape + vector sync + cleanup (default)",
                 "cleanup": "Vector cleanup (orphans only)",
             }
@@ -2021,11 +2022,19 @@ def main():
             if "scrape_cli_last_return" not in st.session_state:
                 st.session_state["scrape_cli_last_return"] = None
 
+            job_mode_options = [
+                "Scrape only",
+                "Scrape + vector sync",
+                "Scrape + vector sync + cleanup",
+                "Vector cleanup only",
+            ]
+            default_job_mode = "Scrape + vector sync + cleanup"
+            default_index = job_mode_options.index(default_job_mode)
             job_mode = st.radio(
                 "Job mode",
-                options=["Scrape only", "Scrape + vector sync + cleanup", "Vector cleanup only"],
-                index=1 if not manual_dry_run else 0,
-                help="Choose whether to run vector store synchronization (with cleanup) after scraping, or just purge orphaned vector files.",
+                options=job_mode_options,
+                index=default_index if not manual_dry_run else 0,
+                help="Choose whether to run vector store synchronization (optionally with cleanup) after scraping, or just purge orphaned vector files.",
             )
             if manual_dry_run and job_mode != "Scrape only":
                 st.info("Dry run enabled — skipping vector store synchronization.", icon=":material/info:")
@@ -2083,6 +2092,8 @@ def main():
                         cli_mode = "cleanup"
                     elif job_mode == "Scrape + vector sync + cleanup" and not manual_dry_run:
                         cli_mode = "all"
+                    elif job_mode == "Scrape + vector sync" and not manual_dry_run:
+                        cli_mode = "sync"
                     else:
                         cli_mode = "scrape"
 

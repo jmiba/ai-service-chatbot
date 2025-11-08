@@ -189,12 +189,12 @@ def main():
     parser.add_argument("--no-vectorize", dest="vectorize", action="store_false", help="Skip uploading to vector store after scraping")
     parser.add_argument(
         "--mode",
-        choices=["scrape", "vectorize", "all", "cleanup"],
+        choices=["scrape", "vectorize", "sync", "all", "cleanup"],
         default="all",
         help=(
             "Which parts of the pipeline to run: 'scrape' for crawling only, "
-            "'vectorize' for vector-store sync only, 'cleanup' to purge orphaned vector files, "
-            "'all' for the traditional full run with automatic cleanup."
+            "'vectorize' for vector-store sync only, 'sync' for scrape+vectorize without cleanup, "
+            "'cleanup' to purge orphaned vector files, or 'all' for scrape+vectorize+cleanup."
         ),
     )
     parser.set_defaults(vectorize=True)
@@ -213,9 +213,10 @@ def main():
         print(f"[ERROR] DB init failed: {e}")
         return 1
 
-    run_scrape = args.mode in {"scrape", "all"}
-    run_vectorize = args.mode in {"vectorize", "all"} and args.vectorize
+    run_scrape = args.mode in {"scrape", "sync", "all"}
+    run_vectorize = args.mode in {"vectorize", "sync", "all"} and args.vectorize
     cleanup_only_mode = args.mode == "cleanup"
+    sync_mode = args.mode == "sync"
 
     # Load configs only when scraping
     run_configs = []
@@ -337,6 +338,8 @@ def main():
                 print("[INFO] Skipping scraping stage (--mode=cleanup).")
             elif args.mode == "vectorize":
                 print("[INFO] Skipping scraping stage (--mode=vectorize).")
+            elif sync_mode:
+                print("[WARN] Requested sync mode but no configs available; skipping scrape.")
             else:
                 print("[INFO] Skipping scraping stage (no configs requested).")
 
@@ -385,6 +388,8 @@ def main():
                         print(f"[ERROR] Vector store sync failed: {e}")
         elif args.mode == "scrape":
             print("[INFO] Vector store sync disabled via --mode=scrape.")
+        elif sync_mode:
+            print("[INFO] Vector store sync requested but skipped (sync mode without successful scrape).")
         elif cleanup_only_mode:
             print("[INFO] Skipping vector store sync (--mode=cleanup).")
         else:
@@ -399,7 +404,7 @@ def main():
             if cleanup_only_mode:
                 should_cleanup = True
                 cleanup_reason = "cleanup-only mode"
-            elif vectorize_success:
+            elif args.mode == "all" and vectorize_success:
                 should_cleanup = True
                 cleanup_reason = "post-sync cleanup"
 
