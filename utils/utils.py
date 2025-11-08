@@ -222,8 +222,18 @@ BLOCK_UI_HTML = """
   height: 48px;
   border: 4px solid rgba(255,255,255,0.3);
   border-top-color: #fff;
-  border-radius: 50%;
+  border-radius: 50% !important;
   animation: spin 1s linear infinite;
+}
+
+[data-testid="stSidebar"],
+[data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarNav"],
+[data-testid="stHeader"] button,
+[data-testid="stToolbar"] button {
+  pointer-events: none !important;
+  filter: grayscale(55%);
+  opacity: 0.45;
 }
 
 @keyframes spin {
