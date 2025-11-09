@@ -94,7 +94,7 @@ def _migration_5(conn: PGConnection) -> None:
                 session_id VARCHAR(36),
                 user_input TEXT NOT NULL,
                 assistant_response TEXT NOT NULL,
-                error_code VARCHAR(10),
+                request_type VARCHAR(10),
                 citation_count INTEGER DEFAULT 0,
                 citations JSONB,
                 confidence DECIMAL(3,2) DEFAULT 0.0,
@@ -111,9 +111,19 @@ def _migration_5(conn: PGConnection) -> None:
             """
         )
         # Backfill any missing columns for legacy deployments.
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'log_table' AND column_name = 'error_code'
+            """
+        )
+        if cur.fetchone():
+            cur.execute("ALTER TABLE log_table RENAME COLUMN error_code TO request_type")
+
         for column_def in (
             "session_id VARCHAR(36)",
-            "error_code VARCHAR(10)",
+            "request_type VARCHAR(10)",
             "citation_count INTEGER DEFAULT 0",
             "citations JSONB",
             "confidence DECIMAL(3,2) DEFAULT 0.0",

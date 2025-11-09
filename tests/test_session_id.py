@@ -9,7 +9,7 @@ from utils.utils import get_connection
 import psycopg2
 from datetime import datetime
 
-def test_log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, error_code=None, request_classification=None, evaluation_notes=None):
+def test_log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, request_type=None, request_classification=None, evaluation_notes=None):
     """Test version of log_interaction function"""
     print(f"🔍 Testing log_interaction with:")
     print(f"  - session_id: {session_id}")
@@ -20,9 +20,9 @@ def test_log_interaction(user_input, assistant_response, session_id=None, citati
         with get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO log_table (timestamp, session_id, user_input, assistant_response, error_code, citation_count, citations, confidence, request_classification, evaluation_notes)
+                    INSERT INTO log_table (timestamp, session_id, user_input, assistant_response, request_type, citation_count, citations, confidence, request_classification, evaluation_notes)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (datetime.now(), session_id, user_input, assistant_response, error_code, citation_count, citation_json, confidence, request_classification, evaluation_notes))
+                """, (datetime.now(), session_id, user_input, assistant_response, request_type, citation_count, citation_json, confidence, request_classification, evaluation_notes))
                 conn.commit()
                 print("✅ Successfully logged interaction")
     except psycopg2.Error as e:
@@ -63,7 +63,7 @@ if __name__ == "__main__":
         session_id=test_session_id,
         citation_count=1,
         confidence=0.9,
-        error_code="E00",
+        request_type="E00",
         request_classification="library_hours",
         evaluation_notes="Test evaluation"
     )

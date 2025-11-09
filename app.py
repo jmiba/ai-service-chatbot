@@ -114,7 +114,7 @@ from utils import (
     create_filter_settings_table,
     create_knowledge_base_table,
     get_document_status_counts,
-    format_error_code_legend,
+    format_request_type_legend,
 )
 
 # -------------------------------------
@@ -281,10 +281,10 @@ def _build_eval_response_format(allowed_topics: Sequence[str] | None = None) -> 
         "properties": {
             "request_classification": {"type": "string"},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            "error_code": {"type": "integer", "minimum": 0, "maximum": 3},
+            "request_type_code": {"type": "integer", "minimum": 0, "maximum": 3},
             "evaluation_notes": {"type": "string"},
         },
-        "required": ["request_classification", "confidence", "error_code", "evaluation_notes"],
+        "required": ["request_classification", "confidence", "request_type_code", "evaluation_notes"],
         "additionalProperties": False,
     }
     if unique_topics:
@@ -389,9 +389,9 @@ except RuntimeError as exc:  # pragma: no cover - requires misconfiguration
 if PROMPTS_LOAD_ERROR:
     st.stop()
 
-legend_text = format_error_code_legend() or "Error codes: 0=good answer, 1=need more information, 2=significant gaps, 3=user needs human assistance"
+legend_text = format_request_type_legend() or "Request type codes: 0=question, 1=comment, 2=suggestion, 3=invective"
 evaluation_template = PROMPT_CONFIG["evaluation"]["system"]
-PROMPT_CONFIG["evaluation"]["system"] = evaluation_template.replace("{error_code_legend}", legend_text)
+PROMPT_CONFIG["evaluation"]["system"] = evaluation_template.replace("{request_type_legend}", legend_text)
 
 DEFAULT_PROMPT = PROMPT_CONFIG["default_chat_system_prompt"]
 EVALUATION_SYSTEM_TEMPLATE = PROMPT_CONFIG["evaluation"]["system"]
@@ -432,7 +432,7 @@ def get_allowed_request_classifications():
         return ['library_hours','book_search','research_help','account_info','facility_info','policy_question','technical_support','other']
 
 
-def log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, error_code=None, request_classification=None, evaluation_notes=None,
+def log_interaction(user_input, assistant_response, session_id=None, citation_json=None, citation_count=0, confidence=0.0, request_type=None, request_classification=None, evaluation_notes=None,
                     model=None, usage_input_tokens=None, usage_output_tokens=None, usage_total_tokens=None, usage_reasoning_tokens=None, api_cost_usd=None, response_time_ms=None):
     # Debug: Print session_id to console for troubleshooting
     print(f"🔍 log_interaction called with session_id: {session_id} (type: {type(session_id)})")
@@ -441,7 +441,7 @@ def log_interaction(user_input, assistant_response, session_id=None, citation_js
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO log_table (
-                        timestamp, session_id, user_input, assistant_response, error_code,
+                        timestamp, session_id, user_input, assistant_response, request_type,
                         citation_count, citations, confidence, request_classification, evaluation_notes,
                         model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_reasoning_tokens, api_cost_usd,
                         response_time_ms
@@ -449,7 +449,7 @@ def log_interaction(user_input, assistant_response, session_id=None, citation_js
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    datetime.now(), session_id, user_input, assistant_response, error_code,
+                    datetime.now(), session_id, user_input, assistant_response, request_type,
                     citation_count, citation_json, confidence, request_classification, evaluation_notes,
                     model, usage_input_tokens, usage_output_tokens, usage_total_tokens, usage_reasoning_tokens, api_cost_usd,
                     response_time_ms
@@ -1833,7 +1833,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # Defaults in case eval fails
         e_in = e_out = e_total = e_reason = 0
         confidence = 0.0
-        error_code = None
+        request_type_code = None
         request_classification = "other"
         evaluation_notes = ""
 
@@ -1896,7 +1896,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 confidence = float(payload.get("confidence", 0.0))
             except (TypeError, ValueError):
                 confidence = 0.0
-            ec_raw = payload.get("error_code")
+            ec_raw = payload.get("request_type_code", payload.get("error_code"))
             ec_int = None
             if isinstance(ec_raw, str):
                 trimmed = ec_raw.strip()
@@ -1908,7 +1908,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 ec_int = int(ec_raw)
             if ec_int is not None:
                 ec_int = max(0, min(3, ec_int))
-            error_code = f"E0{ec_int}" if ec_int is not None else None
+            request_type_code = f"E0{ec_int}" if ec_int is not None else None
             req_class = payload.get("request_classification", "other")
             if not isinstance(req_class, str) or not req_class.strip():
                 req_class = "other"
@@ -1955,7 +1955,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 citation_json=json.dumps(citation_map, ensure_ascii=False) if citation_map else None,
                 citation_count=len(citation_map or {}),
                 confidence=confidence,
-                error_code=error_code,
+                request_type=request_type_code,
                 request_classification=request_classification,
                 evaluation_notes=evaluation_notes,
                 model=logged_model,

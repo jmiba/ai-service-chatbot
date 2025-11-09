@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any, Dict
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-ERROR_CONFIG_PATH = BASE_DIR / "config" / "error_codes.json"
+REQUEST_TYPE_CONFIG_PATH = BASE_DIR / "config" / "request_types.json"
 
-DEFAULT_ERROR_METADATA: Dict[str, Dict[str, str]] = {
+DEFAULT_REQUEST_TYPE_METADATA: Dict[str, Dict[str, str]] = {
     "E00": {
         "label": "Question",
         "description": "Information-seeking request (neutral/curious).",
@@ -42,10 +42,10 @@ def _normalize_code(code: str | int | None) -> str:
     return text
 
 
-def load_error_code_metadata() -> Dict[str, Dict[str, str]]:
-    metadata = {code: meta.copy() for code, meta in DEFAULT_ERROR_METADATA.items()}
+def load_request_type_metadata() -> Dict[str, Dict[str, str]]:
+    metadata = {code: meta.copy() for code, meta in DEFAULT_REQUEST_TYPE_METADATA.items()}
     try:
-        raw = ERROR_CONFIG_PATH.read_text(encoding="utf-8")
+        raw = REQUEST_TYPE_CONFIG_PATH.read_text(encoding="utf-8")
         data = json.loads(raw)
         if isinstance(data, dict):
             for key, value in data.items():
@@ -64,8 +64,8 @@ def load_error_code_metadata() -> Dict[str, Dict[str, str]]:
     return metadata
 
 
-def load_error_code_labels() -> Dict[str, str]:
-    metadata = load_error_code_metadata()
+def load_request_type_labels() -> Dict[str, str]:
+    metadata = load_request_type_metadata()
     labels: Dict[str, str] = {}
     for code, meta in metadata.items():
         label = meta.get("label") or meta.get("description") or code
@@ -80,8 +80,8 @@ def load_error_code_labels() -> Dict[str, str]:
     return labels
 
 
-def human_error_label(code: str | None, *, labels: Dict[str, str] | None = None) -> str:
-    labels = labels or load_error_code_labels()
+def human_request_type_label(code: str | None, *, labels: Dict[str, str] | None = None) -> str:
+    labels = labels or load_request_type_labels()
     default_label = labels.get("E00") or labels.get("0") or "Question"
     if not code:
         return default_label
@@ -110,8 +110,8 @@ def human_error_label(code: str | None, *, labels: Dict[str, str] | None = None)
     return normalized
 
 
-def format_error_code_legend() -> str:
-    metadata = load_error_code_metadata()
+def format_request_type_legend() -> str:
+    metadata = load_request_type_metadata()
     if not metadata:
         return ""
     canonical_labels: dict[str, str] = {}

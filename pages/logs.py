@@ -7,8 +7,8 @@ from utils import (
     get_connection,
     admin_authentication,
     render_sidebar,
-    load_error_code_labels,
-    human_error_label,
+    load_request_type_labels,
+    human_request_type_label,
 )
 import base64
 import pandas as pd
@@ -19,12 +19,12 @@ ICON_PATH = (BASE_DIR / "assets" / "search_activity.png")
 
 
 @st.cache_data(show_spinner=False)
-def _cached_error_labels() -> dict[str, str]:
-    return load_error_code_labels()
+def _cached_request_type_labels() -> dict[str, str]:
+    return load_request_type_labels()
 
 
-def resolve_error_label(code: str | None) -> str:
-    return human_error_label(code, labels=_cached_error_labels())
+def resolve_request_type_label(code: str | None) -> str:
+    return human_request_type_label(code, labels=_cached_request_type_labels())
 
 
 # Helfer: Datums-/Zeitformatierung
@@ -61,7 +61,7 @@ render_sidebar(authenticated)
 st.set_page_config(page_title="Logging & Analytics", layout="wide")
 
 # --- Read logs from DB ---
-def read_logs(limit=200, error_code=None, session_id=None, request_classification=None):
+def read_logs(limit=200, request_type=None, session_id=None, request_classification=None):
     conn = get_connection()
     cursor = conn.cursor(cursor_factory=DictCursor)
 
@@ -69,9 +69,9 @@ def read_logs(limit=200, error_code=None, session_id=None, request_classificatio
     clauses = []
     params = []
 
-    if error_code and error_code != "All":
-        clauses.append("error_code = %s")
-        params.append(error_code)
+    if request_type and request_type != "All":
+        clauses.append("request_type = %s")
+        params.append(request_type)
 
     if session_id and session_id != "All":
         clauses.append("session_id = %s")
@@ -115,7 +115,7 @@ def get_session_overview(limit=500):
             COUNT(*) AS interactions,
             MIN(timestamp) AS first_seen,
             MAX(timestamp) AS last_seen,
-            SUM(CASE WHEN error_code = 'E03' THEN 1 ELSE 0 END) AS errors
+            SUM(CASE WHEN request_type = 'E03' THEN 1 ELSE 0 END) AS errors
         FROM log_table
         WHERE session_id IS NOT NULL
         GROUP BY session_id
@@ -138,7 +138,7 @@ def render_log_details(entry: dict | None) -> None:
 
     timestamp = fmt_dt(entry.get("timestamp"))
     session_id = entry.get("session_id") or "(no session)"
-    error_code = entry.get("error_code") or "OK"
+    request_type_code = entry.get("request_type") or "OK"
     topic = entry.get("request_classification") or "(unclassified)"
     citations_count = entry.get("citation_count", 0)
     response_time = entry.get("response_time_ms")
@@ -147,7 +147,7 @@ def render_log_details(entry: dict | None) -> None:
     meta_lines = [
         f"**Timestamp:** {timestamp}",
         f"**Session:** `{session_id}`",
-        f"**Error code:** `{error_code}`",
+        f"**Request type:** `{request_type_code}`",
         f"**Topic:** `{topic}`",
         f"**Citations:** {citations_count}",
     ]
@@ -162,7 +162,7 @@ def render_log_details(entry: dict | None) -> None:
     st.info(user_text, icon=":material/face:")
 
     assistant_text = entry.get("assistant_response") or "(no response captured)"
-    code = entry.get("error_code")
+    code = entry.get("request_type")
     if code == "E03":
         st.error(assistant_text, icon=":material/robot_2:")
     elif code == "E02":
@@ -227,39 +227,41 @@ if authenticated:
     
     with tab1:
         st.header("View Interaction Logs")
-        # Admin-only content
-        filter_code = st.selectbox("Filter by code", options=["All", "E00", "E01", "E02", "E03"])
+        
+        with st.expander("Show filters", expanded=False):
+            # Admin-only content
+            filter_request_type = st.selectbox("Filter by request type", options=["All", "E00", "E01", "E02", "E03"])
 
-        # New: Filter by session_id and group view
-        session_rows = get_session_overview(limit=1000)
-        session_options = ["All"] + session_rows
-        def _format_session(o):
-            if o == "All":
-                return "All sessions"
+            # New: Filter by session_id and group view
+            session_rows = get_session_overview(limit=1000)
+            session_options = ["All"] + session_rows
+            def _format_session(o):
+                if o == "All":
+                    return "All sessions"
+                try:
+                    last = fmt_dt(o["last_seen"], "%Y-%m-%d %H:%M")
+                    return f"{o['session_id']} ({o['interactions']} msgs • last {last})"
+                except Exception:
+                    return str(o)
+            selected_session = st.selectbox("Filter by session", options=session_options, format_func=_format_session)
+            selected_session_id = None if selected_session == "All" else selected_session["session_id"]
+
+            # New: Filter by topic (request_classification)
             try:
-                last = fmt_dt(o["last_seen"], "%Y-%m-%d %H:%M")
-                return f"{o['session_id']} ({o['interactions']} msgs • last {last})"
+                conn_fc = get_connection()
+                cur_fc = conn_fc.cursor(cursor_factory=DictCursor)
+                cur_fc.execute("""
+                    SELECT DISTINCT COALESCE(request_classification, '(unclassified)') AS topic
+                    FROM log_table
+                    ORDER BY topic
+                """)
+                topic_rows = cur_fc.fetchall()
+                cur_fc.close(); conn_fc.close()
+                topic_options = ["All"] + [r["topic"] for r in topic_rows]
             except Exception:
-                return str(o)
-        selected_session = st.selectbox("Filter by session", options=session_options, format_func=_format_session)
-        selected_session_id = None if selected_session == "All" else selected_session["session_id"]
-
-        # New: Filter by topic (request_classification)
-        try:
-            conn_fc = get_connection()
-            cur_fc = conn_fc.cursor(cursor_factory=DictCursor)
-            cur_fc.execute("""
-                SELECT DISTINCT COALESCE(request_classification, '(unclassified)') AS topic
-                FROM log_table
-                ORDER BY topic
-            """)
-            topic_rows = cur_fc.fetchall()
-            cur_fc.close(); conn_fc.close()
-            topic_options = ["All"] + [r["topic"] for r in topic_rows]
-        except Exception:
-            topic_options = ["All"]
-        selected_topic = st.selectbox("Filter by topic", options=topic_options)
-        selected_topic_val = None if selected_topic == "All" else selected_topic
+                topic_options = ["All"]
+            selected_topic = st.selectbox("Filter by topic", options=topic_options)
+            selected_topic_val = None if selected_topic == "All" else selected_topic
 
         group_by_session = st.toggle(
             "Group by session",
@@ -269,7 +271,7 @@ if authenticated:
 
         logs = read_logs(
             limit=200,
-            error_code=filter_code,
+            request_type=filter_request_type,
             session_id=selected_session_id,
             request_classification=selected_topic_val,
         )
@@ -296,7 +298,7 @@ if authenticated:
                 n = len(entries_sorted)
                 first_seen = entries_sorted[0]["timestamp"] if n else None
                 last_seen = entries_sorted[-1]["timestamp"] if n else None
-                error_count = sum(1 for e in entries_sorted if (e.get("error_code") == "E03"))
+                error_count = sum(1 for e in entries_sorted if (e.get("request_type") == "E03"))
                 session_payloads.append(
                     {
                         "session_id": sid,
@@ -467,7 +469,7 @@ if authenticated:
 
                     for idx, entry in enumerate(selected_payload["entries"]):
                         st.markdown(
-                            f"**{fmt_dt(entry['timestamp'])}**, **Code:** `{entry.get('error_code') or 'OK'}`"
+                            f"**{fmt_dt(entry['timestamp'])}**, **Request type:** `{entry.get('request_type') or 'OK'}`"
                             f", **Citations:** {entry.get('citation_count', 0)}, **Topic:** "
                             f"`{entry.get('request_classification') or '(unclassified)'}`",
                             unsafe_allow_html=False,
@@ -531,7 +533,7 @@ if authenticated:
                     {
                         "Timestamp": fmt_dt(entry.get("timestamp")),
                         "Session": entry.get("session_id") or "(no session)",
-                        "Request type": entry.get("error_code") or "OK",
+                        "Request type": entry.get("request_type") or "OK",
                         "Topic": entry.get("request_classification") or "(unclassified)",
                         "Citations": entry.get("citation_count", 0),
                     }
@@ -575,7 +577,7 @@ if authenticated:
 
             if not selection_enabled and page_entries:
                 fallback_labels = {
-                    f"{fmt_dt(entry.get('timestamp'))} · {entry.get('error_code') or 'OK'} · "
+                    f"{fmt_dt(entry.get('timestamp'))} · {entry.get('request_type') or 'OK'} · "
                     f"{entry.get('request_classification') or '(unclassified)'}": start_idx + idx
                     for idx, entry in enumerate(page_entries)
                 }
@@ -729,7 +731,7 @@ if authenticated:
                 cur_err = conn_err.cursor(cursor_factory=DictCursor)
                 cur_err.execute(
                     """
-                    SELECT COALESCE(error_code, 'E00') AS code,
+                    SELECT COALESCE(request_type, 'E00') AS code,
                            COUNT(*)::int AS count
                     FROM log_table
                     GROUP BY code
@@ -739,7 +741,7 @@ if authenticated:
                 error_rows = cur_err.fetchall()
             except Exception as exc:
                 error_rows = []
-                st.warning(f"Could not load error code data: {exc}")
+                st.warning(f"Could not load request type data: {exc}")
             finally:
                 if cur_err:
                     try:
@@ -756,7 +758,7 @@ if authenticated:
                 records: list[dict[str, object]] = []
                 for row in error_rows:
                     if isinstance(row, dict):
-                        code_val = row.get("code") or row.get("error_code") or "E00"
+                        code_val = row.get("code") or row.get("request_type") or "E00"
                         count_val = row.get("count") or row.get("sum") or 0
                     else:
                         code_val = row[0] if len(row) > 0 else "E00"
@@ -766,7 +768,7 @@ if authenticated:
                     except Exception:
                         count_int = 0
                     code_str = str(code_val or "E00").upper()
-                    human_label = resolve_error_label(code_str)
+                    human_label = resolve_request_type_label(code_str)
                     records.append(
                         {
                             "code": code_str,
@@ -780,7 +782,7 @@ if authenticated:
                 df_errors = df_errors[df_errors["count"] > 0]
 
                 if df_errors.empty:
-                    st.info("No error data available yet.")
+                    st.info("No request type data available yet.")
                 else:
                     try:
                         import altair as alt
@@ -800,14 +802,14 @@ if authenticated:
                         )
                         st.altair_chart(pie_errors)
                     except Exception as exc:
-                        st.warning("Could not render error code chart; showing table instead.")
+                        st.warning("Could not render request type chart; showing table instead.")
                         try:
                             st.exception(exc)
                         except Exception:
                             pass
                         st.table(df_errors[["label", "count"]])
             else:
-                st.info("No error data available yet.")
+                st.info("No request type data available yet.")
 
         st.markdown("### Topics — Interactions and Sessions")
         try:
@@ -1021,10 +1023,3 @@ if authenticated:
             st.dataframe(table, width="stretch", hide_index=True)
 
         st.info("Costs are estimated from stored usage and pricing in config/pricing.json.")
-@st.cache_data(show_spinner=False)
-def cached_error_labels() -> dict[str, str]:
-    return load_error_code_labels()
-
-
-def resolve_error_label(code: str | None) -> str:
-    return human_error_label(code, labels=cached_error_labels())
