@@ -9,3 +9,4 @@ altair>=5.3
 lxml>=5.4
 httpx>=0.27
 fastmcp>=0.0.6
+inflect>=7.3

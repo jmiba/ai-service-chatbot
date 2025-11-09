@@ -34,6 +34,8 @@ from utils import (
     mark_vector_store_dirty,
     read_scraper_schedule,
     write_scraper_schedule,
+    normalize_tags_for_storage,
+    normalize_existing_document_tags,
 )
 from pathlib import Path
 import uuid
@@ -122,51 +124,6 @@ processed_pages_count = 0  # count of pages processed by LLM and saved to DB
 dry_run_llm_eligible_count = 0  # count of pages that would be LLM processed in dry run mode
 llm_analysis_results = []  # collect LLM analysis summaries for display in info box
 recordset_latest_urls = defaultdict(set)  # track URLs seen per recordset in the latest crawl
-
-TAG_SPLIT_PATTERN = re.compile(r"[;,]")
-
-
-def normalize_tags_for_storage(raw_tags) -> list[str]:
-    """
-    Convert incoming tag payloads (lists, JSON strings, comma/semicolon strings) into a
-    deduplicated, lowercase list without surrounding punctuation.
-    """
-    if raw_tags is None:
-        values: list[str] = []
-    elif isinstance(raw_tags, str):
-        stripped = raw_tags.strip()
-        if not stripped:
-            values = []
-        else:
-            parsed = None
-            try:
-                parsed = json.loads(stripped)
-            except json.JSONDecodeError:
-                parsed = None
-            if isinstance(parsed, list):
-                values = parsed
-            else:
-                values = TAG_SPLIT_PATTERN.split(stripped)
-    elif isinstance(raw_tags, (list, tuple, set)):
-        values = list(raw_tags)
-    else:
-        values = [raw_tags]
-
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for item in values:
-        if item is None:
-            continue
-        text = str(item)
-        text = text.replace("#", " ")
-        text = re.sub(r"\s+", " ", text)
-        cleaned = text.strip(" ,;").lower()
-        if not cleaned:
-            continue
-        if cleaned not in seen:
-            normalized.append(cleaned)
-            seen.add(cleaned)
-    return normalized
 
 def ensure_url_config_ids(configs: list[dict]) -> None:
     """Assign stable IDs so Streamlit widget keys stay aligned after reordering."""
@@ -2228,20 +2185,8 @@ def main():
         entries = sorted(get_kb_entries(), key=lambda entry: len(entry[1]))
 
         def _normalize_tags(raw) -> list[str]:
-            """Convert the stored tags column into a comparable list of strings."""
-            if raw is None:
-                return []
-            if isinstance(raw, (list, tuple, set)):
-                return [str(t).strip() for t in raw if str(t).strip()]
-            if isinstance(raw, str):
-                try:
-                    parsed = json.loads(raw)
-                    if isinstance(parsed, list):
-                        return [str(t).strip() for t in parsed if str(t).strip()]
-                except json.JSONDecodeError:
-                    pass
-                return [token.strip() for token in re.split(r"[;,]", raw) if token.strip()]
-            return []
+            """Mirror the shared normalization used for storage."""
+            return normalize_tags_for_storage(raw)
 
         recordsets = sorted(set(entry[9] for entry in entries))
         page_types = sorted(set(entry[11] for entry in entries))
@@ -2595,27 +2540,50 @@ def main():
         except Exception as e:
             st.error(f"Failed to load entries: {e}")
         
-        # --- Delete all entries button ---
-        st.markdown("### Delete Filtered Records")
-        ids_to_delete = [entry[0] for entry in filtered]
-        if not ids_to_delete:
-            st.info("No records match the current filters.")
-        else:
-            if st.button(
-                f"Delete {len(ids_to_delete)} filtered record(s)",
-                type="secondary",
-                icon=":material/delete_forever:",
-            ):
-                try:
-                    conn = get_connection()
-                    with conn:
-                        with conn.cursor() as cur:
-                            cur.execute("DELETE FROM documents WHERE id = ANY(%s)", (ids_to_delete,))
-                    st.success(f"Deleted {len(ids_to_delete)} record(s) matching the current filters.")
-                    mark_vector_store_dirty()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to delete filtered documents: {e}")
+        # ADMIN utilities
+        st.subheader("Knowledge Base Administration")
+        with st.expander("Admin utilities", expanded=False):
+            st.caption("Maintenance helpers for operators.")
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button(
+                    "Normalize all document tags",
+                    type="secondary",
+                    icon=":material/tag:",
+                    key="normalize_tags_button",
+                ):
+                    with st.spinner("Normalizing stored tags…"):
+                        try:
+                            result = normalize_existing_document_tags()
+                        except Exception as exc:
+                            st.error(f"Tag normalization failed: {exc}")
+                        else:
+                            st.success(
+                                f"Processed {result.get('processed', 0)} document(s); "
+                                f"updated {result.get('updated', 0)} row(s).",
+                                icon=":material/check_circle:",
+                            )
+            with col2:
+                # --- Delete all entries button ---
+                ids_to_delete = [entry[0] for entry in filtered]
+                if not ids_to_delete:
+                    st.info("No records match the current filters.")
+                else:
+                    if st.button(
+                        f"Delete {len(ids_to_delete)} filtered record(s)",
+                        type="secondary",
+                        icon=":material/delete_forever:",
+                    ):
+                        try:
+                            conn = get_connection()
+                            with conn:
+                                with conn.cursor() as cur:
+                                    cur.execute("DELETE FROM documents WHERE id = ANY(%s)", (ids_to_delete,))
+                            st.success(f"Deleted {len(ids_to_delete)} record(s) matching the current filters.")
+                            mark_vector_store_dirty()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to delete filtered documents: {e}")
 
 if authenticated:
     main()

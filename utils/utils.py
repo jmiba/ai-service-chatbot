@@ -9,6 +9,12 @@ from datetime import datetime
 import base64
 import re
 import html
+import unicodedata
+
+try:
+    import inflect
+except ImportError:  # pragma: no cover - optional dependency
+    inflect = None
 
 try:  # check if running inside Streamlit runtime
     from streamlit.runtime.runtime import Runtime
@@ -20,6 +26,8 @@ except Exception:  # pragma: no cover - runtime absent in certain contexts
 
 _SUP_REF_PATTERN = re.compile(r"<sup[^>]*>\s*\[(\d+)\]\s*</sup>")
 _ANCHOR_PATTERN = re.compile(r"<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
+_TAG_SPLIT_PATTERN = re.compile(r"[;,]")
+_INFLECT_ENGINE = inflect.engine() if inflect else None
 
 
 def _sanitize_html(content: str) -> str:
@@ -80,6 +88,120 @@ def _parse_sources(raw_sources: str) -> list[tuple[str, str]]:
                 buffer.append(stripped)
     _flush_buffer()
     return entries
+
+
+def normalize_tags_for_storage(raw_tags) -> list[str]:
+    """
+    Normalize tag payloads (lists, tuples, comma-separated strings, or JSON) into a
+    deduplicated, lowercase list suitable for persistence.
+    """
+    if raw_tags is None:
+        values: list[str] = []
+    elif isinstance(raw_tags, str):
+        stripped = raw_tags.strip()
+        if not stripped:
+            values = []
+        else:
+            parsed = None
+            try:
+                parsed = json.loads(stripped)
+            except (json.JSONDecodeError, TypeError):
+                parsed = None
+            if isinstance(parsed, list):
+                values = parsed
+            else:
+                values = _TAG_SPLIT_PATTERN.split(stripped)
+    elif isinstance(raw_tags, (list, tuple, set)):
+        values = list(raw_tags)
+    else:
+        values = [raw_tags]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+
+    for item in values:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if not text:
+            continue
+
+        # Normalize unicode accents and remove combining marks for consistent slugs
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+
+        # Replace common separators with spaces then collapse to hyphenated slug
+        text = text.replace("#", " ").replace("_", " ")
+        text = re.sub(r"[^\w\s-]", " ", text, flags=re.UNICODE)
+        text = re.sub(r"\s+", " ", text)
+        text = text.lower().strip()
+        slug = text.replace(" ", "-")
+        slug = re.sub(r"-{2,}", "-", slug).strip("-")
+        slug = _singularize_slug(slug)
+
+        if not slug:
+            continue
+        if slug not in seen:
+            normalized.append(slug)
+            seen.add(slug)
+
+    return normalized
+
+
+def _singularize_slug(slug: str) -> str:
+    """
+    Convert hyphenated tag slugs to singular form per token when possible.
+    """
+    if not slug or _INFLECT_ENGINE is None:
+        return slug
+
+    parts = []
+    for token in slug.split("-"):
+        token = token.strip()
+        if not token:
+            continue
+        singular = _INFLECT_ENGINE.singular_noun(token)
+        parts.append((singular if singular else token) or token)
+
+    return "-".join(parts) if parts else slug
+
+
+def normalize_existing_document_tags(batch_size: int = 500) -> dict[str, int]:
+    """
+    Normalize and deduplicate tags already stored in the documents table.
+
+    Returns a summary dict with totals and number of updated rows.
+    """
+    conn = get_connection()
+    total = 0
+    updated = 0
+    try:
+        with conn.cursor() as read_cur:
+            read_cur.execute("SELECT id, tags FROM documents ORDER BY id")
+            while True:
+                rows = read_cur.fetchmany(batch_size)
+                if not rows:
+                    break
+                with conn.cursor() as write_cur:
+                    for doc_id, raw_tags in rows:
+                        total += 1
+                        current = raw_tags or []
+                        if isinstance(current, tuple):
+                            current = list(current)
+                        normalized = normalize_tags_for_storage(current)
+                        if normalized != current:
+                            write_cur.execute(
+                                "UPDATE documents SET tags = %s WHERE id = %s",
+                                (normalized, doc_id),
+                            )
+                            updated += 1
+                conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"processed": total, "updated": updated}
 
 
 def build_chat_markdown(messages: list[dict]) -> str:

@@ -33,6 +33,8 @@ from .utils import (
     save_filter_settings,
     get_filter_settings,
     estimate_cost_usd,
+    normalize_tags_for_storage,
+    normalize_existing_document_tags,
     # Export request classification helpers
     create_request_classifications_table,
     get_request_classifications,
