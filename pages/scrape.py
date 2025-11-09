@@ -123,6 +123,51 @@ dry_run_llm_eligible_count = 0  # count of pages that would be LLM processed in 
 llm_analysis_results = []  # collect LLM analysis summaries for display in info box
 recordset_latest_urls = defaultdict(set)  # track URLs seen per recordset in the latest crawl
 
+TAG_SPLIT_PATTERN = re.compile(r"[;,]")
+
+
+def normalize_tags_for_storage(raw_tags) -> list[str]:
+    """
+    Convert incoming tag payloads (lists, JSON strings, comma/semicolon strings) into a
+    deduplicated, lowercase list without surrounding punctuation.
+    """
+    if raw_tags is None:
+        values: list[str] = []
+    elif isinstance(raw_tags, str):
+        stripped = raw_tags.strip()
+        if not stripped:
+            values = []
+        else:
+            parsed = None
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                values = parsed
+            else:
+                values = TAG_SPLIT_PATTERN.split(stripped)
+    elif isinstance(raw_tags, (list, tuple, set)):
+        values = list(raw_tags)
+    else:
+        values = [raw_tags]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        if item is None:
+            continue
+        text = str(item)
+        text = text.replace("#", " ")
+        text = re.sub(r"\s+", " ", text)
+        cleaned = text.strip(" ,;").lower()
+        if not cleaned:
+            continue
+        if cleaned not in seen:
+            normalized.append(cleaned)
+            seen.add(cleaned)
+    return normalized
+
 def ensure_url_config_ids(configs: list[dict]) -> None:
     """Assign stable IDs so Streamlit widget keys stay aligned after reordering."""
     for config in configs:
@@ -334,7 +379,7 @@ def render_kb_entry_details(entry: tuple):
                         for c in (new_title.strip() or "untitled")
                     ),
                 )[:64]
-                tags_list_new = [t.strip() for t in new_tags_input.split(",") if t.strip()]
+                tags_list_new = normalize_tags_for_storage(new_tags_input)
                 resync_needed = bool(
                     vector_file_id
                     and not new_no_upload
@@ -475,6 +520,7 @@ def get_existing_markdown(conn, url):
 def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, markdown_hash, recordset, page_type, no_upload, vector_file_id=None):
     # NOTE: 'url' is assumed to be the normalized URL.
     markdown_hash = compute_sha256(markdown_content)
+    tags = normalize_tags_for_storage(tags)
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO documents (
@@ -1426,7 +1472,7 @@ def main():
                                 tags_value = json.loads(tags_value)
                             except Exception:
                                 tags_value = [t.strip().strip("'\" ") for t in tags_value.strip("[]").split(",") if t.strip()]
-                        tags_list = tags_value if isinstance(tags_value, list) else []
+                        tags_list = normalize_tags_for_storage(tags_value if isinstance(tags_value, list) else tags_value)
                         language = llm_result.get("detected_language") or "unknown"
 
                         conn = None
