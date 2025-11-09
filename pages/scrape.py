@@ -1298,7 +1298,7 @@ def scrape(url,
             if next_url in visited_norm:
                 continue
 
-            scrape(next_url, depth + 1, max_depth, recordset, source_config_id,
+            scrape(next_url, depth + 1, max_depth, recordset, source_config_id,conn,
                    exclude_paths, include_lang_prefixes,
                    keep_query_keys=keep_query_keys,
                    max_urls_per_run=max_urls_per_run,
