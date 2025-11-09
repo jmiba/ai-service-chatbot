@@ -345,6 +345,8 @@ safe_title: "{safe_title or ''}"
 
     if not docs_to_upload:
         print("✅ No changes to sync.")
+        # Record the health check so the UI shows the latest run even if nothing changed.
+        write_last_vector_sync_timestamp(datetime.datetime.now())
         cur.close()
         conn.close()
         return
