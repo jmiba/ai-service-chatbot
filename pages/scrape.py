@@ -2180,8 +2180,26 @@ def main():
         # --- Show current knowledge base entries ---
         # Fetch entries for filters and display
         entries = sorted(get_kb_entries(), key=lambda entry: len(entry[1]))
+
+        def _normalize_tags(raw) -> list[str]:
+            """Convert the stored tags column into a comparable list of strings."""
+            if raw is None:
+                return []
+            if isinstance(raw, (list, tuple, set)):
+                return [str(t).strip() for t in raw if str(t).strip()]
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(t).strip() for t in parsed if str(t).strip()]
+                except json.JSONDecodeError:
+                    pass
+                return [token.strip() for token in re.split(r"[;,]", raw) if token.strip()]
+            return []
+
         recordsets = sorted(set(entry[9] for entry in entries))
         page_types = sorted(set(entry[11] for entry in entries))
+        all_tags = sorted({tag for entry in entries for tag in _normalize_tags(entry[7])})
 
     with tab1:
         st.header("Browse Knowledge Base")
@@ -2218,41 +2236,49 @@ def main():
         else:
             st.info("All pages are synchronized, no stale pages detected, and no excluded files need cleanup.", icon=":material/check_circle:")
 
-        selected_recordset = st.selectbox(
-            "Filter by recordset",
-            options=["All"] + recordsets,
-            index=0
-        )
-        selected_page_type = st.selectbox(
-            "Filter by page type",
-            options=["All"] + page_types,
-            index=0
-        )
-        selected_vector_status = st.selectbox(
-            "Filter by vectorization status",
-            options=["All", "Non-vectorized", "Vectorized (synced)"],
-            index=0,
-            help="Filter entries based on whether they have been vectorized and synced to the vector store"
-        )
-        # New: filter by exclusion from vector store (no_upload)
-        selected_exclusion_status = st.selectbox(
-            "Filter by vector store exclusion",
-            options=["All", "Excluded", "Included"],
-            index=0,
-            help="Filter entries that are excluded from vectorization"
-        )
-        selected_stale_status = st.selectbox(
-            "Filter by stale status",
-            options=["All", "Fresh", "Stale"],
-            index=0,
-            help="Filter entries based on whether they were missing in the latest crawl"
-        )
-        search_query = st.text_input(
-            "Search text",
-            value="",
-            placeholder="Filter by URL, title, or content…",
-            help="Case-insensitive search across URL, title, and markdown content",
-        )
+        with st.expander("Show filters", expanded=False):
+            selected_recordset = st.selectbox(
+                "Filter by recordset",
+                options=["All"] + recordsets,
+                index=0
+            )
+            selected_page_type = st.selectbox(
+                "Filter by page type",
+                options=["All"] + page_types,
+                index=0
+            )
+            selected_vector_status = st.selectbox(
+                "Filter by vectorization status",
+                options=["All", "Non-vectorized", "Vectorized (synced)"],
+                index=0,
+                help="Filter entries based on whether they have been vectorized and synced to the vector store"
+            )
+            # New: filter by exclusion from vector store (no_upload)
+            selected_exclusion_status = st.selectbox(
+                "Filter by vector store exclusion",
+                options=["All", "Excluded", "Included"],
+                index=0,
+                help="Filter entries that are excluded from vectorization"
+            )
+            selected_stale_status = st.selectbox(
+                "Filter by stale status",
+                options=["All", "Fresh", "Stale"],
+                index=0,
+                help="Filter entries based on whether they were missing in the latest crawl"
+            )
+            selected_tags = st.multiselect(
+                "Filter by tags",
+                options=all_tags,
+                default=[],
+                help="Show entries that share at least one of the selected tags",
+                placeholder="Select one or more tags" if all_tags else None,
+            )
+            search_query = st.text_input(
+                "Search text",
+                value="",
+                placeholder="Filter by URL, title, or content…",
+                help="Case-insensitive search across URL, title, and markdown content",
+            )
 
         filtered = entries
         if selected_recordset != "All":
@@ -2274,6 +2300,11 @@ def main():
                 filtered = [entry for entry in filtered if len(entry) > 13 and bool(entry[13])]
             else:
                 filtered = [entry for entry in filtered if len(entry) > 13 and not bool(entry[13])]
+        if selected_tags:
+            selected_set = set(selected_tags)
+            filtered = [
+                entry for entry in filtered if selected_set & set(_normalize_tags(entry[7]))
+            ]
         if search_query:
             needle = search_query.lower()
             def _matches(entry: tuple) -> bool:
@@ -2290,6 +2321,7 @@ def main():
             selected_vector_status,
             selected_exclusion_status,
             selected_stale_status,
+            tuple(sorted(selected_tags)),
             search_query,
         )
         if st.session_state.get("kb_filter_signature") != filter_signature:
