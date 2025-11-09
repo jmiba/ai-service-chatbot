@@ -18,6 +18,7 @@ from .utils import (
     load_css,
     compute_sha256,
     get_kb_entries,
+    get_kb_entry_by_id,
     save_url_configs,
     load_url_configs,
     initialize_default_url_configs,

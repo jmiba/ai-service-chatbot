@@ -14,6 +14,7 @@ from openai import OpenAI
 from utils import (
     get_connection,
     get_kb_entries,
+    get_kb_entry_by_id,
     create_knowledge_base_table,
     admin_authentication,
     render_sidebar,
@@ -196,12 +197,12 @@ def render_kb_entry_details(entry: tuple):
     else:
         summary_placeholder.markdown("**Summary:** (none)")
 
-    st.markdown("**Content preview**")
-    preview_placeholder = st.empty()
-    if markdown:
-        preview_placeholder.code(markdown, language="markdown")
-    else:
-        preview_placeholder.info("(no content)")
+    with st.expander("Markdown Preview", expanded=False):
+        preview_placeholder = st.empty()
+        if markdown:
+            preview_placeholder.code(markdown, language="markdown")
+        else:
+            preview_placeholder.info("(no content)")
 
     cols = st.columns([1, 1, 1])
     is_internal = recordset == "Internal documents"
@@ -1301,6 +1302,26 @@ def main():
     
     # Create tabs for different views
     tab1, tab_manual, tab2 = st.tabs(["Knowledge Base", "Manual Entry", "Indexing Tool"])
+
+    kb_entries_light: list[tuple] | None = None
+    kb_entries_full: list[tuple] | None = None
+
+    def load_entries(*, include_markdown: bool = False) -> list[tuple]:
+        """Fetch knowledge base rows, caching lightweight and full variants."""
+        nonlocal kb_entries_light, kb_entries_full
+        cache = kb_entries_full if include_markdown else kb_entries_light
+        if cache is not None:
+            return cache
+
+        data = sorted(
+            get_kb_entries(include_markdown=include_markdown),
+            key=lambda entry: len(entry[1] or ""),
+        )
+        if include_markdown:
+            kb_entries_full = data
+        else:
+            kb_entries_light = data
+        return data
     
     with tab_manual:
         st.header("Add Knowledge Base Entry Manually")
@@ -1546,6 +1567,10 @@ def main():
 
         # Create a placeholder for status messages
         message_placeholder = st.empty()
+        entries_light_for_configs = load_entries(include_markdown=False)
+        recordsets_all = sorted(
+            {entry[9] for entry in entries_light_for_configs if entry[9]}
+        )
 
 
         # Render each URL config with improved layout
@@ -1652,10 +1677,7 @@ def main():
                     )
 
                 # Recordset selection
-                entries = sorted(get_kb_entries(), key=lambda entry: len(entry[1]))
-                recordsets = sorted(set(entry[9] for entry in entries))
-                
-                recordset_options = [r for r in recordsets if r]
+                recordset_options = list(recordsets_all)
                 recordset_options.append("Create a new one...")
                 
                 selected_recordset = st.selectbox(
@@ -2182,7 +2204,7 @@ def main():
 
         # --- Show current knowledge base entries ---
         # Fetch entries for filters and display
-        entries = sorted(get_kb_entries(), key=lambda entry: len(entry[1]))
+        entries = load_entries(include_markdown=False)
 
         def _normalize_tags(raw) -> list[str]:
             """Mirror the shared normalization used for storage."""
@@ -2267,6 +2289,9 @@ def main():
                 help="Case-insensitive search across URL, title, and markdown content",
             )
 
+        search_query_clean = search_query.strip()
+        entries = load_entries(include_markdown=bool(search_query_clean))
+
         filtered = entries
         if selected_recordset != "All":
             filtered = [entry for entry in filtered if entry[9] == selected_recordset]
@@ -2287,8 +2312,8 @@ def main():
                 filtered = [entry for entry in filtered if len(entry) > 13 and bool(entry[13])]
             else:
                 filtered = [entry for entry in filtered if len(entry) > 13 and not bool(entry[13])]
-        if search_query:
-            needle = search_query.lower()
+        if search_query_clean:
+            needle = search_query_clean.lower()
             def _matches(entry: tuple) -> bool:
                 url = (entry[1] or "").lower()
                 title = (entry[2] or "").lower()
@@ -2349,7 +2374,7 @@ def main():
             selected_exclusion_status,
             selected_stale_status,
             tuple(sorted(selected_tags)),
-            search_query,
+            search_query_clean,
         )
         if st.session_state.get("kb_filter_signature") != filter_signature:
             st.session_state["kb_filter_signature"] = filter_signature
@@ -2569,6 +2594,10 @@ def main():
                             None,
                         )
                         if selected_entry:
+                            if selected_entry[8] is None:
+                                refreshed_entry = get_kb_entry_by_id(selected_entry[0], include_markdown=True)
+                                if refreshed_entry:
+                                    selected_entry = refreshed_entry
                             render_kb_entry_details(selected_entry)
                 else:
                     st.info("No entries available on this page.")

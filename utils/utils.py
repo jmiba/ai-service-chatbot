@@ -492,32 +492,84 @@ def create_knowledge_base_table():
     
     
 # Function to get knowledge base entries
-def get_kb_entries(limit=None):
+def get_kb_entries(limit=None, *, include_markdown: bool = True):
     """
     Retrieve knowledge base entries from the 'documents' table.
     If limit is None, retrieve all entries.
+
+    When include_markdown is False the heavy markdown_content column is replaced
+    with NULL so large payloads aren't transferred unless needed.
     """
     conn = get_connection()
     cursor = conn.cursor()
+    markdown_column = "markdown_content" if include_markdown else "NULL::text AS markdown_content"
+    base_query = f"""
+        SELECT
+            id,
+            url,
+            title,
+            safe_title,
+            crawl_date,
+            lang,
+            summary,
+            tags,
+            {markdown_column},
+            recordset,
+            vector_file_id,
+            page_type,
+            no_upload,
+            is_stale
+        FROM documents
+        ORDER BY updated_at DESC
+    """
     try:
         if limit is not None:
-            cursor.execute("""
-                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type, no_upload, is_stale
-                FROM documents
-                ORDER BY updated_at DESC
-                LIMIT %s
-            """, (limit,))
+            cursor.execute(f"{base_query} LIMIT %s", (limit,))
         else:
-            cursor.execute("""
-                SELECT id, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, recordset, vector_file_id, page_type, no_upload, is_stale
-                FROM documents
-                ORDER BY updated_at DESC
-            """)
+            cursor.execute(base_query)
         rows = cursor.fetchall()
         return rows
     except Exception as e:
         print(f"[DB ERROR] Failed to fetch KB entries: {e}")
         return []
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_kb_entry_by_id(entry_id: int, *, include_markdown: bool = True):
+    """Fetch a single knowledge base entry with the same tuple layout as get_kb_entries."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    markdown_column = "markdown_content" if include_markdown else "NULL::text AS markdown_content"
+    try:
+        cursor.execute(
+            f"""
+            SELECT
+                id,
+                url,
+                title,
+                safe_title,
+                crawl_date,
+                lang,
+                summary,
+                tags,
+                {markdown_column},
+                recordset,
+                vector_file_id,
+                page_type,
+                no_upload,
+                is_stale
+            FROM documents
+            WHERE id = %s
+            LIMIT 1
+            """,
+            (entry_id,),
+        )
+        return cursor.fetchone()
+    except Exception as exc:
+        print(f"[DB ERROR] Failed to fetch KB entry {entry_id}: {exc}")
+        return None
     finally:
         cursor.close()
         conn.close()
