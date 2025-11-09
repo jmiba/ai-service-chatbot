@@ -2190,7 +2190,8 @@ def main():
 
         recordsets = sorted(set(entry[9] for entry in entries))
         page_types = sorted(set(entry[11] for entry in entries))
-        all_tags = sorted({tag for entry in entries for tag in _normalize_tags(entry[7])})
+        st.session_state.setdefault("kb_tag_filter", [])
+        filters_should_expand = bool(st.session_state.get("kb_tag_filter"))
 
     with tab1:
         st.header("Browse Knowledge Base")
@@ -2227,7 +2228,7 @@ def main():
         else:
             st.info("All pages are synchronized, no stale pages detected, and no excluded files need cleanup.", icon=":material/check_circle:")
 
-        with st.expander("Show filters", expanded=False):
+        with st.expander("Show filters", expanded=filters_should_expand):
             selected_recordset = st.selectbox(
                 "Filter by recordset",
                 options=["All"] + recordsets,
@@ -2257,13 +2258,8 @@ def main():
                 index=0,
                 help="Filter entries based on whether they were missing in the latest crawl"
             )
-            selected_tags = st.multiselect(
-                "Filter by tags",
-                options=all_tags,
-                default=[],
-                help="Show entries that share at least one of the selected tags",
-                placeholder="Select one or more tags" if all_tags else None,
-            )
+            tag_filter_placeholder = st.container()
+
             search_query = st.text_input(
                 "Search text",
                 value="",
@@ -2291,11 +2287,6 @@ def main():
                 filtered = [entry for entry in filtered if len(entry) > 13 and bool(entry[13])]
             else:
                 filtered = [entry for entry in filtered if len(entry) > 13 and not bool(entry[13])]
-        if selected_tags:
-            selected_set = set(selected_tags)
-            filtered = [
-                entry for entry in filtered if selected_set & set(_normalize_tags(entry[7]))
-            ]
         if search_query:
             needle = search_query.lower()
             def _matches(entry: tuple) -> bool:
@@ -2305,6 +2296,51 @@ def main():
                 return needle in url or needle in title or needle in content
 
             filtered = [entry for entry in filtered if _matches(entry)]
+
+        filtered_before_tags = filtered
+
+        def _collect_tags(entry_list: list[tuple]) -> set[str]:
+            tag_pool: set[str] = set()
+            for entry in entry_list:
+                tag_pool.update(_normalize_tags(entry[7]))
+            return tag_pool
+
+        current_tag_selection = st.session_state.get("kb_tag_filter", [])
+
+        if filtered_before_tags:
+            if current_tag_selection:
+                selected_set = set(current_tag_selection)
+                compatible_entries = [
+                    entry
+                    for entry in filtered_before_tags
+                    if selected_set <= set(_normalize_tags(entry[7]))
+                ]
+                available_tag_options = sorted(
+                    set(current_tag_selection) | _collect_tags(compatible_entries)
+                )
+            else:
+                available_tag_options = sorted(_collect_tags(filtered_before_tags))
+        else:
+            available_tag_options = sorted(set(current_tag_selection))
+
+        with tag_filter_placeholder:
+            selected_tags = st.multiselect(
+                "Filter by tags",
+                options=available_tag_options,
+                default=current_tag_selection,
+                key="kb_tag_filter",
+                help="Show entries that contain all selected tags (AND filter).",
+                placeholder="Select one or more tags" if available_tag_options else "No tags available",
+                disabled=not available_tag_options,
+            )
+
+        if selected_tags:
+            selected_set = set(selected_tags)
+            filtered = [
+                entry for entry in filtered_before_tags if selected_set <= set(_normalize_tags(entry[7]))
+            ]
+        else:
+            filtered = filtered_before_tags
 
         filter_signature = (
             selected_recordset,
