@@ -475,7 +475,23 @@ def get_existing_markdown(conn, url):
             return result[0]
         return None
 
-def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary, tags, markdown_content, markdown_hash, recordset, page_type, no_upload, vector_file_id=None):
+def save_document_to_db(
+    conn,
+    url,
+    title,
+    safe_title,
+    crawl_date,
+    lang,
+    summary,
+    tags,
+    markdown_content,
+    markdown_hash,
+    recordset,
+    page_type,
+    no_upload,
+    vector_file_id=None,
+    source_config_id=None,
+):
     # NOTE: 'url' is assumed to be the normalized URL.
     markdown_hash = compute_sha256(markdown_content)
     tags = normalize_tags_for_storage(tags)
@@ -484,12 +500,12 @@ def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary,
             INSERT INTO documents (
                 url, title, safe_title, crawl_date, lang, summary, tags,
                 markdown_content, markdown_hash, recordset, vector_file_id, old_file_id,
-                updated_at, page_type, no_upload, is_stale
+                updated_at, page_type, no_upload, is_stale, source_config_id
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
-                NOW(), %s, %s, FALSE
+                NOW(), %s, %s, FALSE, %s
             )
             ON CONFLICT (url) DO UPDATE SET
                 title = EXCLUDED.title,
@@ -506,11 +522,12 @@ def save_document_to_db(conn, url, title, safe_title, crawl_date, lang, summary,
                 updated_at = NOW(),
                 page_type = EXCLUDED.page_type,
                 no_upload = documents.no_upload,
-                is_stale = FALSE
+                is_stale = FALSE,
+                source_config_id = EXCLUDED.source_config_id
         """, (
             url, title, safe_title, crawl_date, lang, summary, tags,
             markdown_content, markdown_hash, recordset, vector_file_id, None,
-            page_type, no_upload
+            page_type, no_upload, source_config_id
         ))
         conn.commit()
 
@@ -879,6 +896,7 @@ def scrape(url,
            depth,
            max_depth,
            recordset,
+           source_config_id: int | None = None,
            conn=None,
            exclude_paths=None,
            include_lang_prefixes=None,
@@ -1173,7 +1191,22 @@ def scrape(url,
 
                 if conn:
                     # IMPORTANT: we save by the normalized URL
-                    save_document_to_db(conn, norm_url, title, safe_title, crawl_date, lang, summary, tags, markdown, current_hash, recordset, page_type, no_upload=False)
+                    save_document_to_db(
+                        conn,
+                        norm_url,
+                        title,
+                        safe_title,
+                        crawl_date,
+                        lang,
+                        summary,
+                        tags,
+                        markdown,
+                        current_hash,
+                        recordset,
+                        page_type,
+                        no_upload=False,
+                        source_config_id=source_config_id,
+                    )
                     if log_callback:
                         log_callback(f"{'  ' * depth}💾 Saved {norm_url} to database with recordset '{recordset}'")
                     
@@ -1265,7 +1298,7 @@ def scrape(url,
             if next_url in visited_norm:
                 continue
 
-            scrape(next_url, depth + 1, max_depth, recordset, conn,
+            scrape(next_url, depth + 1, max_depth, recordset, source_config_id,
                    exclude_paths, include_lang_prefixes,
                    keep_query_keys=keep_query_keys,
                    max_urls_per_run=max_urls_per_run,
@@ -1470,6 +1503,7 @@ def main():
                                 "Internal documents",
                                 manual_page_type,
                                 manual_no_upload,
+                                source_config_id=None,
                             )
                         except Exception as exc:
                             st.session_state["manual_form_submitting"] = False
@@ -1565,12 +1599,21 @@ def main():
         st.markdown("---")
         st.subheader("URL Configurations")
 
+        recordset_counts = defaultdict(list)
+        for cfg in st.session_state.url_configs:
+            rs_name = (cfg.get("recordset") or "").strip()
+            if rs_name:
+                recordset_counts[rs_name].append(cfg.get("url") or "No URL")
+        duplicate_recordsets = {name: urls for name, urls in recordset_counts.items() if len(urls) > 1}
+        if duplicate_recordsets:
+            dup_list = ", ".join(f"'{name}' ({len(urls)} configs)" for name, urls in duplicate_recordsets.items())
+            st.warning(
+                f"Recordset names must be unique per configuration. Resolve duplicates: {dup_list}.",
+                icon=":material/error:",
+            )
+
         # Create a placeholder for status messages
         message_placeholder = st.empty()
-        entries_light_for_configs = load_entries(include_markdown=False)
-        recordsets_all = sorted(
-            {entry[9] for entry in entries_light_for_configs if entry[9]}
-        )
 
 
         # Render each URL config with improved layout
@@ -1676,28 +1719,12 @@ def main():
                         help="How many levels deep to follow links"
                     )
 
-                # Recordset selection
-                recordset_options = list(recordsets_all)
-                recordset_options.append("Create a new one...")
-                
-                selected_recordset = st.selectbox(
-                    f"Available recordsets",
-                    options=recordset_options,
-                    index=recordset_options.index(config["recordset"]) if config["recordset"] in recordset_options else (len(recordset_options)-1 if config["recordset"] and config["recordset"] not in recordset_options else 0),
-                    key=f"recordset_select_{config_id}",
-                    help="Choose an existing recordset or create a new one to group your scraped content"
+                st.session_state.url_configs[i]["recordset"] = st.text_input(
+                    f"Recordset name",
+                    value=config.get("recordset") or "",
+                    key=f"recordset_name_{config_id}",
+                    help="Recordsets group the documents produced by this configuration. Provide a unique name per configuration."
                 )
-
-                if selected_recordset == "Create a new one...":
-                    custom_recordset = st.text_input(
-                        f"New recordset name",
-                        value=config["recordset"] if config["recordset"] not in recordset_options else "",
-                        key=f"recordset_custom_{config_id}",
-                        placeholder="Enter a descriptive name for this content group"
-                    )
-                    st.session_state.url_configs[i]["recordset"] = custom_recordset
-                else:
-                    st.session_state.url_configs[i]["recordset"] = selected_recordset
 
                 # Path filters with better layout
                 col1, col2 = st.columns(2)
@@ -1792,6 +1819,7 @@ def main():
                     
                     config = template_configs[quick_template]
                     st.session_state.url_configs.append({
+                        "id": None,
                         "url": quick_url,
                         "recordset": f"Quick_{quick_template}_{len(st.session_state.url_configs)+1}",
                         "depth": config["depth"],

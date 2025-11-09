@@ -1145,104 +1145,206 @@ def hide_blocking_overlay(placeholder) -> None:
         pass
 
 # URL Configuration Management Functions
+def _normalize_path_list(values):
+    if not values:
+        return []
+    return [value.strip() for value in values if value and value.strip()]
+
+
 def save_url_configs(url_configs):
-    """Save URL configurations to the database, replacing existing ones."""
+    """Upsert URL configurations while keeping per-recordset ownership stable."""
     conn = get_connection()
-    cursor = conn.cursor()
-    
     try:
-        # Clear existing configurations
-        cursor.execute("DELETE FROM url_configs")
-        
-        # Insert new configurations
-        for config in url_configs:
-            if config["url"].strip():  # Only save non-empty URLs
-                cursor.execute("""
-                    INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (
-                    config["url"],
-                    config["recordset"],
-                    config["depth"],
-                    config["exclude_paths"],
-                    config["include_lang_prefixes"]
-                ))
-        
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
+        with conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT id, recordset FROM url_configs")
+                existing_records = {row[0]: (row[1] or "").strip() for row in cursor.fetchall()}
+
+                normalized_configs = []
+                for idx, config in enumerate(url_configs):
+                    url = (config.get("url") or "").strip()
+                    if not url:
+                        continue  # ignore empty slots
+
+                    recordset = (config.get("recordset") or "").strip()
+                    if not recordset:
+                        raise ValueError("Each URL configuration must have a recordset name.")
+
+                    depth = int(config.get("depth") or 0)
+                    exclude_paths = _normalize_path_list(config.get("exclude_paths"))
+                    include_lang_prefixes = _normalize_path_list(config.get("include_lang_prefixes"))
+
+                    normalized_configs.append(
+                        {
+                            "ref": config,
+                            "url": url,
+                            "recordset": recordset,
+                            "depth": depth,
+                            "exclude_paths": exclude_paths,
+                            "include_lang_prefixes": include_lang_prefixes,
+                        }
+                    )
+
+                recordset_seen = {}
+                for entry in normalized_configs:
+                    cfg_id = entry["ref"].get("id")
+                    recordset = entry["recordset"]
+                    if recordset in recordset_seen and recordset_seen[recordset] != cfg_id:
+                        raise ValueError(
+                            f"Recordset '{recordset}' is already used by another configuration. "
+                            "Please choose a unique name per configuration."
+                        )
+                    recordset_seen[recordset] = cfg_id
+
+                kept_ids: set[int] = set()
+                for sort_order, entry in enumerate(normalized_configs):
+                    cfg = entry["ref"]
+                    cfg_id = cfg.get("id")
+                    params = (
+                        entry["url"],
+                        entry["recordset"],
+                        entry["depth"],
+                        entry["exclude_paths"],
+                        entry["include_lang_prefixes"],
+                        sort_order,
+                    )
+
+                    if cfg_id:
+                        previous_recordset = existing_records.get(cfg_id)
+                        cursor.execute(
+                            """
+                            UPDATE url_configs
+                            SET url = %s,
+                                recordset = %s,
+                                depth = %s,
+                                exclude_paths = %s,
+                                include_lang_prefixes = %s,
+                                sort_order = %s,
+                                updated_at = NOW()
+                            WHERE id = %s
+                            """,
+                            (*params, cfg_id),
+                        )
+                        kept_ids.add(cfg_id)
+                        if previous_recordset is not None and previous_recordset != entry["recordset"]:
+                            cursor.execute(
+                                """
+                                UPDATE documents
+                                SET recordset = %s
+                                WHERE source_config_id = %s
+                                """,
+                                (entry["recordset"], cfg_id),
+                            )
+                    else:
+                        cursor.execute(
+                            """
+                            INSERT INTO url_configs (
+                                url, recordset, depth, exclude_paths, include_lang_prefixes, sort_order
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            RETURNING id
+                            """,
+                            params,
+                        )
+                        new_id = cursor.fetchone()[0]
+                        cfg["id"] = new_id
+                        kept_ids.add(new_id)
+
+                ids_to_delete = set(existing_records.keys()) - kept_ids
+                if ids_to_delete:
+                    for cfg_id in ids_to_delete:
+                        cursor.execute(
+                            """
+                            UPDATE documents
+                            SET is_stale = TRUE, updated_at = NOW()
+                            WHERE source_config_id = %s
+                            """,
+                            (cfg_id,),
+                        )
+                    cursor.execute(
+                        "DELETE FROM url_configs WHERE id = ANY(%s)",
+                        (list(ids_to_delete),),
+                    )
     finally:
-        cursor.close()
         conn.close()
+
 
 def load_url_configs():
     """Load URL configurations from the database."""
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     try:
-        cursor.execute("""
-            SELECT url, recordset, depth, exclude_paths, include_lang_prefixes
+        cursor.execute(
+            """
+            SELECT id, url, recordset, depth, exclude_paths, include_lang_prefixes
             FROM url_configs
-            ORDER BY id
-        """)
-        
+            ORDER BY sort_order, id
+            """
+        )
+
         configs = []
         for row in cursor.fetchall():
-            url, recordset, depth, exclude_paths, include_lang_prefixes = row
-            configs.append({
-                "url": url,
-                "recordset": recordset,
-                "depth": depth,
-                "exclude_paths": exclude_paths or [],
-                "include_lang_prefixes": include_lang_prefixes or []
-            })
-        
+            cfg_id, url, recordset, depth, exclude_paths, include_lang_prefixes = row
+            configs.append(
+                {
+                    "id": cfg_id,
+                    "url": url,
+                    "recordset": recordset,
+                    "depth": depth,
+                    "exclude_paths": exclude_paths or [],
+                    "include_lang_prefixes": include_lang_prefixes or [],
+                }
+            )
+
         return configs
-    except Exception as e:
-        # If table doesn't exist or other error, return empty list
+    except Exception:
         return []
     finally:
         cursor.close()
         conn.close()
 
+
 def initialize_default_url_configs():
     """Initialize default URL configurations if none exist."""
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute("SELECT COUNT(*) FROM url_configs")
         count = cursor.fetchone()[0]
-        
+
         if count == 0:
-            # Add some default configurations
             default_configs = [
                 {
                     "url": "https://www.europa-uni.de",
                     "recordset": "university_main",
                     "depth": 3,
                     "exclude_paths": ["/en/", "/pl/", "/_ablage-alte-www/", "/site-euv/", "/site-zwe-ikm/"],
-                    "include_lang_prefixes": ["/de/"]
+                    "include_lang_prefixes": ["/de/"],
                 }
             ]
-            
-            for config in default_configs:
-                cursor.execute("""
-                    INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (
-                    config["url"],
-                    config["recordset"],
-                    config["depth"],
-                    config["exclude_paths"],
-                    config["include_lang_prefixes"]
-                ))
-            
+
+            for sort_order, config in enumerate(default_configs):
+                cursor.execute(
+                    """
+                    INSERT INTO url_configs (
+                        url, recordset, depth, exclude_paths, include_lang_prefixes, sort_order
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        config["url"],
+                        config["recordset"],
+                        config["depth"],
+                        config["exclude_paths"],
+                        config["include_lang_prefixes"],
+                        sort_order,
+                    ),
+                )
+
             conn.commit()
     except Exception:
-        # Ignore errors during initialization
         pass
     finally:
         cursor.close()

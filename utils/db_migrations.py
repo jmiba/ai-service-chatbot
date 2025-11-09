@@ -295,6 +295,72 @@ def _migration_10(conn: PGConnection) -> None:
         )
 
 
+def _migration_11(conn: PGConnection) -> None:
+    """Drop legacy scraper defaults so empty arrays stay empty."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            ALTER TABLE url_configs
+            ALTER COLUMN exclude_paths SET DEFAULT ARRAY[]::TEXT[],
+            ALTER COLUMN include_lang_prefixes SET DEFAULT ARRAY[]::TEXT[]
+            """
+        )
+        cur.execute(
+            """
+            UPDATE url_configs
+            SET exclude_paths = ARRAY[]::TEXT[]
+            WHERE exclude_paths IS NULL
+            """
+        )
+        cur.execute(
+            """
+            UPDATE url_configs
+            SET include_lang_prefixes = ARRAY[]::TEXT[]
+            WHERE include_lang_prefixes IS NULL
+            """
+        )
+
+
+def _migration_12(conn: PGConnection) -> None:
+    """Track scraper ownership per document and preserve config ordering."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            ALTER TABLE documents
+            ADD COLUMN IF NOT EXISTS source_config_id INTEGER REFERENCES url_configs(id) ON DELETE SET NULL
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_documents_source_config_id
+            ON documents(source_config_id)
+            """
+        )
+        cur.execute(
+            """
+            ALTER TABLE url_configs
+            ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0
+            """
+        )
+        cur.execute(
+            """
+            UPDATE url_configs
+            SET sort_order = id
+            WHERE sort_order = 0
+            """
+        )
+        cur.execute(
+            """
+            UPDATE documents AS d
+            SET source_config_id = uc.id
+            FROM url_configs AS uc
+            WHERE d.source_config_id IS NULL
+              AND COALESCE(d.recordset, '') <> ''
+              AND d.recordset = uc.recordset
+            """
+        )
+
+
 MIGRATIONS: Dict[int, MigrationFunc] = {
     1: _migration_1,
     2: _migration_2,
@@ -306,6 +372,8 @@ MIGRATIONS: Dict[int, MigrationFunc] = {
     8: _migration_8,
     9: _migration_9,
     10: _migration_10,
+    11: _migration_11,
+    12: _migration_12,
 }
 
 

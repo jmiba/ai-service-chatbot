@@ -265,9 +265,6 @@ def main():
         # Prepare connection if not dry-run
         conn = None if args.dry_run else get_connection()
 
-        # Reset scraper globals for a clean run
-        reset_scraper_state()
-
         # Logging callbacks
         def log_cb(msg, level="INFO"):
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -280,11 +277,19 @@ def main():
         if run_scrape:
             total = len(run_configs)
             for idx, cfg in enumerate(run_configs, 1):
+                # Reset scraper globals before each configuration so filters/visited sets stay isolated
+                reset_scraper_state()
+
                 url = cfg["url"].strip()
                 depth = int(cfg.get("depth", 3))
                 recordset = (cfg.get("recordset") or f"recordset_{idx}").strip()
+                config_id = cfg.get("id")
                 exclude_paths = cfg.get("exclude_paths") or []
                 include_lang_prefixes = cfg.get("include_lang_prefixes") or []
+
+                if config_id is None:
+                    print(f"[WARN] Config {idx} ({recordset}) has no database ID; skipping to avoid orphaned documents.")
+                    continue
 
                 print(f"[INFO] Config {idx}/{total}: url={url} recordset={recordset} depth={depth}")
 
@@ -294,6 +299,7 @@ def main():
                         depth=0,
                         max_depth=depth,
                         recordset=recordset,
+                        source_config_id=config_id,
                         conn=conn,
                         exclude_paths=exclude_paths,
                         include_lang_prefixes=include_lang_prefixes,
