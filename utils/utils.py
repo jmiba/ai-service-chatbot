@@ -338,7 +338,7 @@ BLOCK_UI_HTML = """
   gap: 1rem;
   color: #fff;
   font-size: 1.1rem;
-  z-index: 9999;
+  z-index: 999999;
 }
 
 #global-block-ui-overlay .spinner {
