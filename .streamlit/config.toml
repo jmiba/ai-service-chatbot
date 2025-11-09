@@ -13,4 +13,3 @@ gatherUsageStats = false
 
 [ui]
 hideTopBar = true
-toolbarMode = "minimal"
