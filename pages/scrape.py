@@ -2,8 +2,8 @@ import base64
 import fnmatch
 import math
 import re
+import time as _time
 from datetime import datetime, timezone, timedelta, time
-import time
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 from collections import defaultdict
 from bs4 import BeautifulSoup
@@ -2078,8 +2078,8 @@ def main():
                 last_local = last_run_dt.astimezone(selected_timezone)
                 next_local = next_run_dt.astimezone(selected_timezone) if next_run_dt else None
                 st.info(
-                    f"Last scheduled run: {last_local.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
-                    + (f"Next due at {next_local.strftime('%Y-%m-%d %H:%M:%S %Z')}" if next_local else ""),
+                    f"Last scheduled run: {last_local.strftime('%Y-%m-%d, **%H:%M:%S** %Z')} | "
+                    + (f"Next due at {next_local.strftime('%Y-%m-%d, **%H:%M:%S** %Z')}" if next_local else ""),
                     icon=":material/history:",
                 )
             else:
@@ -2116,7 +2116,7 @@ def main():
                 schedule_state = write_scraper_schedule(updated_schedule)
                 st.session_state["scraper_schedule"] = schedule_state
                 st.success("Scheduler settings saved.", icon=":material/check_circle:")
-                time.sleep(2)
+                _time.sleep(2)
                 rerun_app()
 
             st.markdown("**Cron/systemd command examples**")
