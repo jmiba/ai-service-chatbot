@@ -6,9 +6,11 @@ import datetime as _dt
 import json
 from pathlib import Path
 from typing import Any, Dict
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 SCHEDULE_PATH = BASE_DIR / "state" / "scraper_schedule.json"
+DEFAULT_TIMEZONE = "Europe/Berlin"
 
 DEFAULT_SCHEDULE: Dict[str, Any] = {
     "enabled": False,
@@ -19,6 +21,7 @@ DEFAULT_SCHEDULE: Dict[str, Any] = {
     "keep_query": "",
     "dry_run": False,
     "last_run_at": None,
+    "timezone": DEFAULT_TIMEZONE,
 }
 
 
@@ -93,6 +96,13 @@ def _normalize_schedule(data: Dict[str, Any] | None) -> Dict[str, Any]:
             result["last_run_at"] = None
     elif last_run_raw is not None:
         result["last_run_at"] = None
+
+    tz_raw = str(result.get("timezone", DEFAULT_TIMEZONE) or "").strip()
+    try:
+        ZoneInfo(tz_raw)
+    except Exception:
+        tz_raw = DEFAULT_TIMEZONE
+    result["timezone"] = tz_raw
 
     return result
 

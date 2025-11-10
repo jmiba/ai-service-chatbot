@@ -8,6 +8,7 @@ import datetime as dt
 import subprocess
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,10 +76,18 @@ def _format_timedelta(delta: dt.timedelta) -> str:
     return " ".join(parts)
 
 
-def _parse_run_times(values: list[str] | None) -> list[dt.time]:
+def _coerce_timezone(name: str | None) -> ZoneInfo:
+    try:
+        return ZoneInfo((name or "").strip() or "UTC")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _parse_run_times(values: list[str] | None, tz: ZoneInfo | None = None) -> list[dt.time]:
     result: list[dt.time] = []
     if not values:
         return result
+    tz = tz or ZoneInfo("UTC")
     for item in values:
         if not item:
             continue
@@ -87,19 +96,25 @@ def _parse_run_times(values: list[str] | None) -> list[dt.time]:
         except ValueError:
             continue
         if 0 <= hour < 24 and 0 <= minute < 60:
-            result.append(dt.time(hour=hour, minute=minute, tzinfo=dt.timezone.utc))
+            result.append(dt.time(hour=hour, minute=minute, tzinfo=tz))
     return sorted(result)
 
 
-def _next_slot_after(last_run: dt.datetime | None, run_times: list[dt.time], now: dt.datetime) -> dt.datetime | None:
+def _next_slot_after(
+    last_run: dt.datetime | None,
+    run_times: list[dt.time],
+    now: dt.datetime,
+    tz: ZoneInfo,
+) -> dt.datetime | None:
     """Return the next scheduled datetime strictly after `reference`."""
 
     if not run_times:
         return None
 
     reference = last_run or now
-    start_date = (reference - dt.timedelta(days=1)).date()
-    end_date = reference.date() + dt.timedelta(days=3)
+    reference_local = reference.astimezone(tz)
+    start_date = (reference_local - dt.timedelta(days=1)).date()
+    end_date = reference_local.date() + dt.timedelta(days=3)
 
     candidates: list[dt.datetime] = []
     current = start_date
@@ -127,11 +142,12 @@ def main() -> int:
 
     now = dt.datetime.now(dt.timezone.utc)
     last_run = _iso_to_dt(schedule.get("last_run_at"))
-    run_times = _parse_run_times(schedule.get("run_times"))
+    run_tz = _coerce_timezone(schedule.get("timezone"))
+    run_times = _parse_run_times(schedule.get("run_times"), tz=run_tz)
 
     next_slot = None
     if run_times:
-        next_slot = _next_slot_after(last_run, run_times, now)
+        next_slot = _next_slot_after(last_run, run_times, now, run_tz)
         due = bool(next_slot and now >= next_slot)
     else:
         interval_hours = float(schedule.get("interval_hours", 12.0))

@@ -2,7 +2,7 @@ import base64
 import fnmatch
 import math
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 from collections import defaultdict
 from bs4 import BeautifulSoup
@@ -11,6 +11,7 @@ from markdownify import markdownify as md
 import streamlit as st
 import json
 from openai import OpenAI
+from zoneinfo import ZoneInfo
 from utils import (
     get_connection,
     get_kb_entries,
@@ -1887,9 +1888,6 @@ def main():
                 parsed = parsed.replace(tzinfo=timezone.utc)
             return parsed
 
-        def _format_run_times(times: list[str]) -> str:
-            return ", ".join(times)
-
         def _parse_run_times_input(raw: str) -> list[str]:
             normalized: list[str] = []
             seen: set[str] = set()
@@ -1913,6 +1911,50 @@ def main():
                     normalized.append(value)
             return sorted(normalized)
 
+        def _resolve_timezone(name: str | None) -> ZoneInfo:
+            try:
+                return ZoneInfo((name or "UTC").strip() or "UTC")
+            except Exception:
+                return ZoneInfo("UTC")
+
+        def _run_times_utc_to_local(times_utc: list[str], tz: ZoneInfo) -> list[str]:
+            if not times_utc:
+                return []
+            today = datetime.now(tz).date()
+            converted: list[str] = []
+            seen: set[str] = set()
+            for token in times_utc:
+                try:
+                    hour, minute = (int(part) for part in token.split(":", 1))
+                except ValueError:
+                    continue
+                utc_dt = datetime.combine(today, time(hour=hour, minute=minute, tzinfo=timezone.utc))
+                local_dt = utc_dt.astimezone(tz)
+                value = local_dt.strftime("%H:%M")
+                if value not in seen:
+                    seen.add(value)
+                    converted.append(value)
+            return sorted(converted)
+
+        def _run_times_local_to_utc(times_local: list[str], tz: ZoneInfo) -> list[str]:
+            if not times_local:
+                return []
+            today = datetime.now(tz).date()
+            converted: list[str] = []
+            seen: set[str] = set()
+            for token in times_local:
+                try:
+                    hour, minute = (int(part) for part in token.split(":", 1))
+                except ValueError:
+                    continue
+                local_dt = datetime.combine(today, time(hour=hour, minute=minute, tzinfo=tz))
+                utc_dt = local_dt.astimezone(timezone.utc)
+                value = utc_dt.strftime("%H:%M")
+                if value not in seen:
+                    seen.add(value)
+                    converted.append(value)
+            return sorted(converted)
+
         schedule_state = st.session_state["scraper_schedule"]
         last_run_dt = _parse_ts(schedule_state.get("last_run_at"))
         next_run_dt = None
@@ -1925,11 +1967,22 @@ def main():
                 "timer using the command below so heavy scraping/vectorization runs outside the UI container."
             )
 
+            timezone_name = schedule_state.get("timezone", "UTC") or "UTC"
+            schedule_tz = _resolve_timezone(timezone_name)
+            local_run_times = _run_times_utc_to_local(schedule_state.get("run_times", []), schedule_tz)
+
             enabled = st.checkbox("Enable scheduled runs", value=bool(schedule_state.get("enabled", False)))
+            timezone_input = st.text_input(
+                "Schedule time zone (IANA name)",
+                value=timezone_name,
+                help="Daily times below are interpreted in this time zone (e.g., Europe/Berlin for CET/CEST).",
+            )
+            selected_timezone_name = timezone_input.strip() or "UTC"
+            selected_timezone = _resolve_timezone(selected_timezone_name)
             run_times_input = st.text_input(
                 "Daily start times (HH:MM, comma separated)",
-                value=_format_run_times(schedule_state.get("run_times", [])),
-                help="Exact times when the CLI runner should start (24h format). Example: 06:45, 12:00, 23:50.",
+                value=", ".join(local_run_times),
+                help="Exact times when the CLI runner should start (24h format) in the selected time zone.",
             )
             parsed_run_times = _parse_run_times_input(run_times_input)
             interval_hours = st.number_input(
@@ -1980,16 +2033,20 @@ def main():
             )
 
             if last_run_dt:
+                last_local = last_run_dt.astimezone(selected_timezone)
+                next_local = next_run_dt.astimezone(selected_timezone) if next_run_dt else None
                 st.info(
-                    f"Last scheduled run: {last_run_dt.isoformat(timespec='seconds')} | "
-                    + (f"Next due at {next_run_dt.isoformat(timespec='seconds')}" if next_run_dt else ""),
+                    f"Last scheduled run: {last_local.strftime('%Y-%m-%d %H:%M:%S %Z')} | "
+                    + (f"Next due at {next_local.strftime('%Y-%m-%d %H:%M:%S %Z')}" if next_local else ""),
                     icon=":material/history:",
                 )
             else:
                 st.caption("Scheduler has not run yet. Use the cron command below to trigger it.")
 
             if parsed_run_times:
-                st.caption(f"Configured daily times: {', '.join(parsed_run_times)}")
+                st.caption(
+                    f"Configured daily times (local {selected_timezone.key}): {', '.join(parsed_run_times)}"
+                )
             else:
                 st.caption(
                     "No explicit times set. The helper falls back to the interval above, so it runs every "
@@ -2002,12 +2059,13 @@ def main():
                 updated_schedule = {
                     "enabled": enabled,
                     "interval_hours": interval_hours,
-                    "run_times": parsed_run_times,
+                    "run_times": _run_times_local_to_utc(parsed_run_times, selected_timezone),
                     "mode": inverse_mode_map[selected_mode_label],
                     "crawl_budget": scheduled_budget,
                     "keep_query": scheduled_keep_query,
                     "dry_run": scheduled_dry_run,
                     "last_run_at": schedule_state.get("last_run_at"),
+                    "timezone": selected_timezone_name,
                 }
 
                 if enabled and not previous_enabled and not updated_schedule["last_run_at"]:
@@ -2020,8 +2078,8 @@ def main():
             st.markdown("**Cron/systemd command examples**")
             st.code(
                 ".venv/bin/python scripts/run_cli_if_due.py  # bare-metal Python\n"
-                "docker compose run --rm --profile cli --entrypoint python cli-runner scripts/run_cli_if_due.py\n"
-                "podman compose run --rm --profile cli --entrypoint python cli-runner scripts/run_cli_if_due.py",
+                "docker compose run --rm --entrypoint python cli-runner scripts/run_cli_if_due.py\n"
+                "podman ccompose run --rm --entrypoint python cli-runner scripts/run_cli_if_due.py",
                 language="bash",
             )
             st.caption(
