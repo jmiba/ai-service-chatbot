@@ -1287,12 +1287,34 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                         content = content[:max_len].rstrip() + " …"
                 if content:
                     conversation.append({"role": "assistant", "content": content})
-        
+
         # Add current user input
         conversation.append({"role": "user", "content": user_input})
         return conversation
 
+    def build_evaluation_history():
+        """Return recent conversation as plain text for evaluation context."""
+        lines: list[str] = []
+        recent_messages = st.session_state.messages[-10:] if st.session_state.messages else []
+        for msg in recent_messages:
+            role = msg.get("role")
+            if role == "user":
+                text = (msg.get("content") or "").strip()
+                if not text:
+                    continue
+                lines.append(f"User: {text}")
+            elif role == "assistant":
+                content = msg.get("raw_text", msg.get("rendered", msg.get("content", ""))) or ""
+                content = re.sub(r'<[^>]+>', '', content)
+                content = re.split(r"\n+references\b", content, flags=re.IGNORECASE | re.DOTALL)[0]
+                content = re.sub(r"\[\d+\]", "", content)
+                content = content.strip()
+                if content:
+                    lines.append(f"Assistant: {content}")
+        return "\n".join(lines[-8:])
+
     conversation_input = build_conversation_context()
+    evaluation_history = build_evaluation_history()
 
     # Safe inits to avoid "referenced before assignment"
     buf = ""
@@ -1828,7 +1850,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
     # --- Structured evaluation follow-up (background, cheaper model) ---
     def _run_eval_and_log_bg(user_input, cleaned, citation_map, session_id, main_latency_ms, base_usage,
-                             eval_model, main_model, evaluation_system_prompt, evaluation_response_format):
+                             eval_model, main_model, evaluation_system_prompt, evaluation_response_format, conversation_history):
         """Run evaluation with a cheaper model in background, then log interaction."""
         # Defaults in case eval fails
         e_in = e_out = e_total = e_reason = 0
@@ -1843,6 +1865,10 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 "model": eval_model,
                 "input": [
                     {"role": "system", "content": evaluation_system_prompt},
+                    *(
+                        [{"role": "system", "content": f"Recent conversation before the latest exchange:\n{conversation_history}"}]
+                        if conversation_history else []
+                    ),
                     {"role": "user", "content": f"Original user request: {user_input}"},
                     {"role": "assistant", "content": f"Assistant response: {cleaned}"},
                 ],
@@ -2003,7 +2029,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     _start_thread(
         _run_eval_and_log_bg,
         name="_run_eval_and_log_bg",
-        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage, eval_model_val, main_model_val, eval_sys_prompt, eval_response_format),
+        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage, eval_model_val, main_model_val, eval_sys_prompt, eval_response_format, evaluation_history),
     )
 
     # NOTE: Logging happens in the background after evaluation. The UI has already been updated above.
