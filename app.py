@@ -991,10 +991,10 @@ def human_event_label(event):
         return f"Tool use {short.replace('_', ' ')}"
     if et.startswith("response.output_text"):
         if et.endswith("start"):
-            return "Generating answer…"
+            return "Generating response…"
         if et.endswith("complete"):
-            return "Answer generation finished"
-        return "Generating answer…"
+            return "Response generation finished"
+        return "Generating response…"
     return None
 
 # ---------- Helpers to robustly read final.output (dicts or objects) ----------
@@ -1514,6 +1514,10 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             # If no event arrived, ensure spinner is closed
             try:
                 spinner_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
+            try:
+                status_placeholder.empty()
             except Exception:
                 pass
 
