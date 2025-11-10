@@ -3,6 +3,7 @@ import fnmatch
 import math
 import re
 from datetime import datetime, timezone, timedelta, time
+import time
 from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 from collections import defaultdict
 from bs4 import BeautifulSoup
@@ -1911,6 +1912,20 @@ def main():
                     normalized.append(value)
             return sorted(normalized)
 
+        def _parse_run_times_utc(values: list[str] | None) -> list[time]:
+            result: list[time] = []
+            if not values:
+                return result
+            for token in values:
+                try:
+                    hour, minute = (int(part) for part in token.split(":", 1))
+                except ValueError:
+                    continue
+                if not (0 <= hour < 24 and 0 <= minute < 60):
+                    continue
+                result.append(time(hour=hour, minute=minute, tzinfo=timezone.utc))
+            return sorted(result)
+
         def _resolve_timezone(name: str | None) -> ZoneInfo:
             try:
                 return ZoneInfo((name or "UTC").strip() or "UTC")
@@ -1955,11 +1970,38 @@ def main():
                     converted.append(value)
             return sorted(converted)
 
+        def _next_run_time(last_run: datetime | None, run_times: list[time], now: datetime) -> datetime | None:
+            if not run_times:
+                return None
+            reference = last_run or now
+            if reference.tzinfo is None:
+                reference = reference.replace(tzinfo=timezone.utc)
+            start_date = (reference - timedelta(days=1)).date()
+            end_date = reference.date() + timedelta(days=3)
+            candidates: list[datetime] = []
+            current = start_date
+            while current <= end_date:
+                for rt in run_times:
+                    candidates.append(datetime.combine(current, rt))
+                current += timedelta(days=1)
+            candidates.sort()
+            for slot in candidates:
+                if slot > reference:
+                    return slot
+            future_date = end_date + timedelta(days=1)
+            return datetime.combine(future_date, run_times[0])
+
         schedule_state = st.session_state["scraper_schedule"]
         last_run_dt = _parse_ts(schedule_state.get("last_run_at"))
+        now_utc = datetime.now(timezone.utc)
+        run_times_utc = _parse_run_times_utc(schedule_state.get("run_times", []))
         next_run_dt = None
-        if last_run_dt:
+        if run_times_utc:
+            next_run_dt = _next_run_time(last_run_dt, run_times_utc, now_utc)
+        elif last_run_dt:
             next_run_dt = last_run_dt + timedelta(hours=schedule_state.get("interval_hours", 12))
+        else:
+            next_run_dt = now_utc + timedelta(hours=schedule_state.get("interval_hours", 12))
 
         with st.expander("Configure scheduled CLI runner", expanded=False):
             st.caption(
@@ -2074,6 +2116,8 @@ def main():
                 schedule_state = write_scraper_schedule(updated_schedule)
                 st.session_state["scraper_schedule"] = schedule_state
                 st.success("Scheduler settings saved.", icon=":material/check_circle:")
+                time.sleep(2)
+                rerun_app()
 
             st.markdown("**Cron/systemd command examples**")
             st.code(
