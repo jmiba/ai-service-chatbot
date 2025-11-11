@@ -22,6 +22,7 @@ DEFAULT_SCHEDULE: Dict[str, Any] = {
     "dry_run": False,
     "last_run_at": None,
     "timezone": DEFAULT_TIMEZONE,
+    "run_times_are_utc": False,
 }
 
 
@@ -87,6 +88,7 @@ def _normalize_schedule(data: Dict[str, Any] | None) -> Dict[str, Any]:
 
     result["dry_run"] = bool(result.get("dry_run", False))
     result["run_times"] = _normalize_times(result.get("run_times"))
+    result["run_times_are_utc"] = bool(result.get("run_times_are_utc", False))
 
     last_run_raw = result.get("last_run_at")
     if isinstance(last_run_raw, str):
@@ -118,7 +120,12 @@ def read_scraper_schedule() -> Dict[str, Any]:
     except json.JSONDecodeError:
         return DEFAULT_SCHEDULE.copy()
 
-    return _normalize_schedule(data)
+    had_flag = isinstance(data, dict) and "run_times_are_utc" in data
+    normalized = _normalize_schedule(data)
+    if not had_flag:
+        # Legacy schedules stored run_times in UTC, so mark them accordingly
+        normalized["run_times_are_utc"] = True
+    return normalized
 
 
 def write_scraper_schedule(data: Dict[str, Any]) -> Dict[str, Any]:

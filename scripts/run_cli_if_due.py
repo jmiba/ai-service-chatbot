@@ -83,6 +83,32 @@ def _coerce_timezone(name: str | None) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+def _convert_time_strings(
+    values: list[str],
+    source_tz: dt.tzinfo,
+    target_tz: dt.tzinfo,
+) -> list[str]:
+    if not values:
+        return []
+    today = dt.datetime.now(target_tz).date()
+    converted: list[str] = []
+    seen: set[str] = set()
+    for token in values:
+        if not token:
+            continue
+        try:
+            hour, minute = (int(part) for part in token.split(":", 1))
+        except ValueError:
+            continue
+        source_dt = dt.datetime.combine(today, dt.time(hour=hour, minute=minute, tzinfo=source_tz))
+        target_dt = source_dt.astimezone(target_tz)
+        value = target_dt.strftime("%H:%M")
+        if value not in seen:
+            seen.add(value)
+            converted.append(value)
+    return sorted(converted)
+
+
 def _parse_run_times(values: list[str] | None, tz: ZoneInfo | None = None) -> list[dt.time]:
     result: list[dt.time] = []
     if not values:
@@ -143,7 +169,12 @@ def main() -> int:
     now = dt.datetime.now(dt.timezone.utc)
     last_run = _iso_to_dt(schedule.get("last_run_at"))
     run_tz = _coerce_timezone(schedule.get("timezone"))
-    run_times = _parse_run_times(schedule.get("run_times"), tz=run_tz)
+    raw_run_times = schedule.get("run_times")
+    if schedule.get("run_times_are_utc", False):
+        run_times_local = _convert_time_strings(raw_run_times or [], dt.timezone.utc, run_tz)
+    else:
+        run_times_local = raw_run_times
+    run_times = _parse_run_times(run_times_local, tz=run_tz)
 
     next_slot = None
     if run_times:

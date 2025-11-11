@@ -1992,9 +1992,17 @@ def main():
             return datetime.combine(future_date, run_times[0])
 
         schedule_state = st.session_state["scraper_schedule"]
+        timezone_name = schedule_state.get("timezone", "UTC") or "UTC"
+        schedule_tz = _resolve_timezone(timezone_name)
+        stored_run_times = schedule_state.get("run_times", [])
+        if schedule_state.get("run_times_are_utc", False):
+            local_run_times = _run_times_utc_to_local(stored_run_times, schedule_tz)
+        else:
+            local_run_times = stored_run_times
+
         last_run_dt = _parse_ts(schedule_state.get("last_run_at"))
         now_utc = datetime.now(timezone.utc)
-        run_times_utc = _parse_run_times_utc(schedule_state.get("run_times", []))
+        run_times_utc = _parse_run_times_utc(_run_times_local_to_utc(local_run_times, schedule_tz))
         next_run_dt = None
         if run_times_utc:
             next_run_dt = _next_run_time(last_run_dt, run_times_utc, now_utc)
@@ -2008,10 +2016,6 @@ def main():
                 "These settings are read by `scripts/run_cli_if_due.py`. Trigger it from your host cron or systemd "
                 "timer using the command below so heavy scraping/vectorization runs outside the UI container."
             )
-
-            timezone_name = schedule_state.get("timezone", "UTC") or "UTC"
-            schedule_tz = _resolve_timezone(timezone_name)
-            local_run_times = _run_times_utc_to_local(schedule_state.get("run_times", []), schedule_tz)
 
             enabled = st.checkbox("Enable scheduled runs", value=bool(schedule_state.get("enabled", False)))
             timezone_input = st.text_input(
@@ -2101,7 +2105,8 @@ def main():
                 updated_schedule = {
                     "enabled": enabled,
                     "interval_hours": interval_hours,
-                    "run_times": _run_times_local_to_utc(parsed_run_times, selected_timezone),
+                    "run_times": parsed_run_times,
+                    "run_times_are_utc": False,
                     "mode": inverse_mode_map[selected_mode_label],
                     "crawl_budget": scheduled_budget,
                     "keep_query": scheduled_keep_query,
