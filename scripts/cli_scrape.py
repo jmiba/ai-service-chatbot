@@ -162,6 +162,7 @@ from utils import (
 
 from scrape import core as scraper_mod
 from scrape.core import reset_scraper_state, scrape, verify_url_deleted, set_run_logger
+from scrape.state import CrawlerState
 
 def main():
     parser = argparse.ArgumentParser(description="Run scheduled scraping of configured URLs")
@@ -275,6 +276,7 @@ def main():
 
         # Global dedupe per run: reset state once before processing all configs
         reset_scraper_state()
+        run_state = CrawlerState()
 
         if run_scrape:
             total = len(run_configs)
@@ -307,6 +309,8 @@ def main():
                         dry_run=args.dry_run,
                         progress_callback=prog_cb,
                         log_callback=log_cb,
+                        state=run_state,
+                        headers=scraper_mod.HEADERS,
                     )
                 except Exception as e:
                     print(f"[ERROR] Error scraping {url}: {e}")
@@ -321,7 +325,7 @@ def main():
                         conn,
                         dry_run=args.dry_run,
                         log_callback=log_cb,
-                        recordset_latest_urls=scraper_mod.recordset_latest_urls,
+                        recordset_latest_urls=run_state.recordset_latest_urls,
                         verify_url_deleted=verify_url_deleted,
                     )
                 except Exception as e:

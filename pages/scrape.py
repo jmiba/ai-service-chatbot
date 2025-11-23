@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from scrape.core import BASE_DIR
+from scrape.config import load_summarize_prompts
 from utils import (
     get_connection,
     get_kb_entries,

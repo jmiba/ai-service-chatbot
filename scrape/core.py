@@ -16,51 +16,9 @@ from markdownify import markdownify as md
 from openai import OpenAI
 
 from utils import compute_sha256, get_connection, normalize_tags_for_storage
-
-BASE_DIR = Path(__file__).resolve().parent.parent
-PROMPT_CONFIG_PATH = BASE_DIR / ".streamlit" / "prompts.json"
-
-
-def load_summarize_prompts() -> tuple[str, str]:
-    """Load LLM prompts from config, raising actionable errors when misconfigured."""
-
-    try:
-        raw_config = PROMPT_CONFIG_PATH.read_text(encoding="utf-8")
-    except FileNotFoundError as exc:  # pragma: no cover - requires misconfiguration
-        message = (
-            f"Prompt configuration not found at {PROMPT_CONFIG_PATH}. "
-            "Create the file and provide a 'summarize_and_tag' entry with 'system' and 'user' prompts."
-        )
-        st.error(message)
-        raise RuntimeError(message) from exc
-
-    try:
-        data = json.loads(raw_config)
-    except json.JSONDecodeError as exc:  # pragma: no cover - requires misconfiguration
-        message = f"Prompt configuration {PROMPT_CONFIG_PATH} is not valid JSON: {exc}."
-        st.error(message)
-        raise RuntimeError(message) from exc
-
-    if not isinstance(data, dict):  # pragma: no cover - requires misconfiguration
-        message = f"Prompt configuration {PROMPT_CONFIG_PATH} must contain a top-level JSON object."
-        st.error(message)
-        raise RuntimeError(message)
-
-    prompts = data.get("summarize_and_tag")
-    if not isinstance(prompts, dict):  # pragma: no cover - requires misconfiguration
-        message = "Prompt configuration is missing the 'summarize_and_tag' object."
-        st.error(message)
-        raise RuntimeError(message)
-
-    system_prompt = prompts.get("system")
-    user_prompt = prompts.get("user")
-    if not system_prompt or not user_prompt:  # pragma: no cover - requires misconfiguration
-        message = "Prompt configuration must define both 'system' and 'user' keys under 'summarize_and_tag'."
-        st.error(message)
-        raise RuntimeError(message)
-
-    return system_prompt, user_prompt
-
+from scrape.state import CrawlerState
+from scrape.settings import build_headers, ScrapeSettings
+from scrape.config import load_summarize_prompts
 
 PROMPT_LOAD_ERROR = None
 try:
@@ -71,45 +29,25 @@ except RuntimeError as exc:  # pragma: no cover - requires misconfiguration
     SUMMARIZE_USER_TEMPLATE = ""
 
 try:
-    admin_email = st.secrets.get("ADMIN_EMAIL")
+    _admin_email = st.secrets.get("ADMIN_EMAIL")
 except Exception:
-    admin_email = None
+    _admin_email = None
 
-if admin_email:
-    HEADERS = {
-        "User-Agent": (
-            f"Mozilla/5.0 (compatible; Viadrina-Indexer/1.0; +mailto:{admin_email})"
-        )
-    }
-else:
-    HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Viadrina-Indexer/1.0)"}
-    try:
-        st.warning("Set ADMIN_EMAIL in secrets.toml to advertise a contact address in the crawler header.")
-    except Exception:
-        pass
+# Default headers (can be overridden per-call)
+HEADERS = build_headers(_admin_email)
 
-# Global crawl state (shared between UI and CLI)
-visited_raw: set[str] = set()   # legacy tracking of the exact strings encountered (optional)
-visited_norm: set[str] = set()  # authoritative dedupe on normalized URLs
-frontier_seen: list[str] = []   # for Dry Run reporting in the UI
-base_path: str | None = None    # base path to restrict scraping to
-processed_pages_count: int = 0  # count of pages processed by LLM and saved to DB
-dry_run_llm_eligible_count: int = 0  # count of pages that would be LLM processed in dry run mode
-llm_analysis_results: list[dict] = []  # collect LLM analysis summaries for display in info box
-recordset_latest_urls: defaultdict[str, set[str]] = defaultdict(set)  # track URLs seen per recordset in the latest crawl
+# Default crawl state (legacy module-level access preserved for collections)
+_default_state = CrawlerState()
+visited_raw = _default_state.visited_raw
+visited_norm = _default_state.visited_norm
+frontier_seen = _default_state.frontier_seen
+recordset_latest_urls = _default_state.recordset_latest_urls
 
 
-def reset_scraper_state():
-    """Reset globals so UI and CLI runs start fresh."""
-    global base_path, processed_pages_count, dry_run_llm_eligible_count
-    visited_raw.clear()
-    visited_norm.clear()
-    frontier_seen.clear()
-    base_path = None
-    processed_pages_count = 0
-    dry_run_llm_eligible_count = 0
-    llm_analysis_results.clear()
-    recordset_latest_urls.clear()
+def reset_scraper_state(state: CrawlerState | None = None):
+    """Reset crawl state; defaults to the module-level state for backward compatibility."""
+    target = state or _default_state
+    target.reset()
 
 _run_log_fp = None
 _run_log_path: Path | None = None
@@ -703,6 +641,9 @@ def scrape(
     dry_run: bool = False,
     progress_callback: Callable | None = None,
     log_callback: Callable | None = None,
+    *,
+    state: CrawlerState | None = None,
+    headers: dict | None = None,
 ):
     """
     Crawl starting at `url` using a queue-based BFS, with global per-run dedupe.
@@ -711,7 +652,8 @@ def scrape(
 
     If dry_run=True: no LLM calls and no DB writes; collects 'frontier_seen' for UI display.
     """
-    global recordset_latest_urls, processed_pages_count, dry_run_llm_eligible_count, base_path
+    state = state or _default_state
+    headers = headers or HEADERS
 
     keep_query_keys = keep_query_keys or None
     recordset_key = (recordset or "").strip()
@@ -739,14 +681,14 @@ def scrape(
         if d > max_depth:
             return
         norm_candidate = normalize_url(target_url, "", keep_query=keep_query_keys)
-        if norm_candidate in visited_norm:
+        if norm_candidate in state.visited_norm:
             _log_event("skip_visited", normalized_url=norm_candidate, depth=d, recordset=recordset_key)
             return
-        if len(visited_norm) >= max_urls_per_run:
+        if len(state.visited_norm) >= max_urls_per_run:
             _log_event("skip_budget", normalized_url=norm_candidate, depth=d, recordset=recordset_key, max_urls=max_urls_per_run)
             return
-        visited_norm.add(norm_candidate)
-        frontier_seen.append(norm_candidate)
+        state.visited_norm.add(norm_candidate)
+        state.frontier_seen.append(norm_candidate)
         queue.append((norm_candidate, d, base_path_for_seed))
         _log_event("enqueue", normalized_url=norm_candidate, depth=d, recordset=recordset_key, base_path=base_path_for_seed)
 
@@ -754,20 +696,20 @@ def scrape(
 
     while queue:
         norm_url, current_depth, current_base_path = queue.popleft()
-        base_path = current_base_path  # maintain legacy global for UI display
+        state.base_path = current_base_path  # maintain legacy global for UI display
         visited_raw.add(norm_url)
         _log_event("dequeue", normalized_url=norm_url, depth=current_depth, recordset=recordset_key)
 
         if current_depth > max_depth:
             _log_event("skip_depth", normalized_url=norm_url, depth=current_depth, recordset=recordset_key)
             continue
-        if len(visited_norm) > max_urls_per_run:
+        if len(state.visited_norm) > max_urls_per_run:
             _log_event("skip_budget", normalized_url=norm_url, depth=current_depth, recordset=recordset_key, max_urls=max_urls_per_run)
             continue
 
         # HEAD pre-check (advisory)
         try:
-            head = requests.head(norm_url, headers=HEADERS, allow_redirects=True, timeout=10)
+            head = requests.head(norm_url, headers=headers, allow_redirects=True, timeout=10)
             ctype = head.headers.get("Content-Type", "")
             looks_like_file = re.search(
                 r"\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z|tar(?:\.gz)?|tgz|gz|bz2|xz|"
@@ -787,7 +729,7 @@ def scrape(
 
         # GET the page
         try:
-            response = requests.get(norm_url, headers=HEADERS, timeout=15)
+            response = requests.get(norm_url, headers=headers, timeout=15)
         except requests.RequestException as e:
             if log_callback:
                 log_callback(f"{'  ' * current_depth}❌ Error fetching {norm_url}: {e}")
@@ -819,14 +761,14 @@ def scrape(
         effective_url = response.url
         effective_norm = normalize_url(effective_url, "", keep_query=keep_query_keys)
         if effective_norm != norm_url:
-            if effective_norm in visited_norm:
+            if effective_norm in state.visited_norm:
                 if log_callback:
                     log_callback(f"{'  ' * current_depth}↩️ Redirect target already visited: {effective_norm}")
                 _log_event("skip_redirect_seen", normalized_url=effective_norm, from_url=norm_url, depth=current_depth)
                 continue
-            visited_norm.discard(norm_url)
-            visited_norm.add(effective_norm)
-            frontier_seen.append(effective_norm)
+            state.visited_norm.discard(norm_url)
+            state.visited_norm.add(effective_norm)
+            state.frontier_seen.append(effective_norm)
             norm_url = effective_norm
 
         # Encoding handling
@@ -852,17 +794,17 @@ def scrape(
         if canon:
             canon_norm = normalize_url(canon, "", keep_query=keep_query_keys)
             if canon_norm != norm_url:
-                if canon_norm in visited_norm:
+                if canon_norm in state.visited_norm:
                     if log_callback:
                         log_callback(f"{'  ' * current_depth}🔗 Canonical already visited: {canon_norm}")
                     _log_event("skip_canonical_seen", normalized_url=canon_norm, from_url=norm_url, depth=current_depth)
                     continue
-                visited_norm.discard(norm_url)
-                visited_norm.add(canon_norm)
-                frontier_seen.append(canon_norm)
+                state.visited_norm.discard(norm_url)
+                state.visited_norm.add(canon_norm)
+                state.frontier_seen.append(canon_norm)
                 norm_url = canon_norm
 
-        recordset_latest_urls[recordset_key].add(norm_url)
+        state.recordset_latest_urls[recordset_key].add(norm_url)
 
         # Content extraction
         main = extract_main_content(soup, current_depth)
@@ -918,13 +860,13 @@ def scrape(
             skip_summary_and_db = (existing_hash == current_hash) if existing_hash is not None else False
 
             if dry_run and not skip_summary_and_db:
-                dry_run_llm_eligible_count += 1
+                state.dry_run_llm_eligible_count += 1
                 if log_callback:
                     if existing_hash is None:
                         log_callback(f"{'  ' * current_depth}🤖 [DRY RUN] NEW page - would process with LLM: {norm_url}")
                     else:
                         log_callback(f"{'  ' * current_depth}🤖 [DRY RUN] CHANGED page - would process with LLM: {norm_url}")
-                    log_callback(f"{'  ' * current_depth}📊 Pages that would be LLM processed so far: {dry_run_llm_eligible_count}")
+                    log_callback(f"{'  ' * current_depth}📊 Pages that would be LLM processed so far: {state.dry_run_llm_eligible_count}")
                 _progress()
             elif dry_run and skip_summary_and_db:
                 if log_callback:
@@ -953,7 +895,7 @@ def scrape(
                         except Exception:
                             tags = [t.strip().strip("'\" ") for t in tags.strip("[]").split(",")]
 
-                    llm_analysis_results.append(
+                    state.llm_analysis_results.append(
                         {
                             'url': norm_url,
                             'title': title,
@@ -987,7 +929,7 @@ def scrape(
                         )
                         if log_callback:
                             log_callback(f"{'  ' * current_depth}💾 Saved {norm_url} to database with recordset '{recordset}'")
-                        processed_pages_count += 1
+                        state.processed_pages_count += 1
                         _progress()
                 except Exception as e:
                     if log_callback:
