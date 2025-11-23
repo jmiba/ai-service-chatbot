@@ -2,7 +2,7 @@
 """
 Standalone CLI scraper runner for cron/systemd.
 - Loads URL configs from DB (utils.load_url_configs)
-- Reuses pages.scrape.scrape() to crawl and write to DB
+- Reuses scrape.core.scrape() to crawl and write to DB
 - Logs to stdout
 - After scraping, optionally uploads new/updated docs to the vector store
 
@@ -130,15 +130,6 @@ for _fn_name in ("error", "warning", "info", "success"):
     except Exception:
         pass
 
-# Monkey-patch UI-only utilities before importing pages.scrape
-# This avoids Streamlit UI calls during module import
-try:
-    import utils as utils_pkg
-    utils_pkg.admin_authentication = lambda *a, **k: False  # prevent main() from running
-    utils_pkg.render_sidebar = lambda *a, **k: None
-except Exception as e:
-    print(f"[WARN] Could not monkey-patch utils UI helpers: {e}")
-
 # Now import DB helpers and scraper
 from utils import (
     get_connection,
@@ -147,30 +138,8 @@ from utils import (
     write_vector_status,
 )
 
-scraper_mod = None
-try:
-    import pages.scrape as scraper_mod  # module (to access globals)
-    from pages.scrape import scrape  # function
-except Exception as e:
-    print(f"[ERROR] Failed to import scraper: {e}")
-    sys.exit(1)
-
-
-def reset_scraper_state():
-    # Mimic the UI reset before a run
-    try:
-        scraper_mod.visited_raw.clear()
-        scraper_mod.visited_norm.clear()
-        scraper_mod.frontier_seen.clear()
-        scraper_mod.base_path = None
-        scraper_mod.processed_pages_count = 0
-        scraper_mod.dry_run_llm_eligible_count = 0
-        scraper_mod.llm_analysis_results = []
-        if hasattr(scraper_mod, "recordset_latest_urls"):
-            scraper_mod.recordset_latest_urls.clear()
-    except Exception as e:
-        print(f"[WARN] Could not reset scraper state: {e}")
-
+from scrape import core as scraper_mod
+from scrape.core import reset_scraper_state, scrape, verify_url_deleted
 
 def main():
     parser = argparse.ArgumentParser(description="Run scheduled scraping of configured URLs")
@@ -322,8 +291,8 @@ def main():
                         conn,
                         dry_run=args.dry_run,
                         log_callback=log_cb,
-                        recordset_latest_urls=getattr(scraper_mod, "recordset_latest_urls", {}),
-                        verify_url_deleted=scraper_mod.verify_url_deleted,
+                        recordset_latest_urls=scraper_mod.recordset_latest_urls,
+                        verify_url_deleted=verify_url_deleted,
                     )
                 except Exception as e:
                     print(f"[WARN] Failed to compute stale documents: {e}")
