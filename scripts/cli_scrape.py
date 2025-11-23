@@ -25,6 +25,7 @@ import sys
 import argparse
 import time
 import json
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,22 +34,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from scrape.maintenance import sync_vector_store, update_stale_documents, purge_orphaned_vector_files
-
-try:
-    from utils import write_vector_store_details, clear_vector_store_dirty, update_last_scrape_run
-except ImportError:
-    def write_vector_store_details(_data):
-        return None
-
-    def clear_vector_store_dirty():
-        return None
-
-    def update_last_scrape_run(*_args, **_kwargs):
-        return None
-
-# Provide Streamlit secrets in headless mode
+# Provide Streamlit secrets early, before importing utils/scraper
 import streamlit as st
+
 
 def _ensure_streamlit_secrets():
     # Option 1: JSON via env
@@ -67,11 +55,31 @@ def _ensure_streamlit_secrets():
     ]
     for p in candidates:
         if p.exists():
+            # Try Streamlit's loader; if empty, fall back to manual parse
             try:
-                _ = st.secrets  # triggers load
-                return
+                existing = st.secrets  # triggers load
+                loaded = False
+                try:
+                    loaded = bool(existing) and len(existing) > 0
+                except Exception:
+                    loaded = False
+                if loaded:
+                    return
             except Exception:
                 pass
+
+            try:
+                data = tomllib.loads(p.read_text(encoding="utf-8"))
+                secrets_obj = getattr(st, "secrets", None)
+                if secrets_obj is not None and hasattr(secrets_obj, "_secrets"):
+                    secrets_obj._secrets = data  # populate underlying store
+                else:
+                    st.secrets = data  # fallback mapping
+                return
+            except Exception as e:
+                print(f"[WARN] Failed to load secrets from {p}: {e}")
+                continue
+
 
 _ensure_streamlit_secrets()
 
@@ -130,7 +138,21 @@ for _fn_name in ("error", "warning", "info", "success"):
     except Exception:
         pass
 
-# Now import DB helpers and scraper
+# Now import the rest (after secrets are in place)
+from scrape.maintenance import sync_vector_store, update_stale_documents, purge_orphaned_vector_files
+
+try:
+    from utils import write_vector_store_details, clear_vector_store_dirty, update_last_scrape_run
+except ImportError:
+    def write_vector_store_details(_data):
+        return None
+
+    def clear_vector_store_dirty():
+        return None
+
+    def update_last_scrape_run(*_args, **_kwargs):
+        return None
+
 from utils import (
     get_connection,
     create_knowledge_base_table,
@@ -139,7 +161,7 @@ from utils import (
 )
 
 from scrape import core as scraper_mod
-from scrape.core import reset_scraper_state, scrape, verify_url_deleted
+from scrape.core import reset_scraper_state, scrape, verify_url_deleted, set_run_logger
 
 def main():
     parser = argparse.ArgumentParser(description="Run scheduled scraping of configured URLs")
@@ -234,6 +256,14 @@ def main():
         # Prepare connection if not dry-run
         conn = None if args.dry_run else get_connection()
 
+        # Configure per-run JSONL log (overwrite each run)
+        log_path = Path(ROOT) / "logs" / "scrape-run.jsonl"
+        try:
+            set_run_logger(log_path, overwrite=True)
+            print(f"[INFO] Writing scrape log to {log_path}")
+        except Exception as e:
+            print(f"[WARN] Could not initialize scrape log {log_path}: {e}")
+
         # Logging callbacks
         def log_cb(msg, level="INFO"):
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -243,12 +273,12 @@ def main():
             # no-op; could add rate-based prints
             pass
 
+        # Global dedupe per run: reset state once before processing all configs
+        reset_scraper_state()
+
         if run_scrape:
             total = len(run_configs)
             for idx, cfg in enumerate(run_configs, 1):
-                # Reset scraper globals before each configuration so filters/visited sets stay isolated
-                reset_scraper_state()
-
                 url = cfg["url"].strip()
                 depth = int(cfg.get("depth", 3))
                 recordset = (cfg.get("recordset") or f"recordset_{idx}").strip()
@@ -393,6 +423,10 @@ def main():
                 print(f"[ERROR] Vector store cleanup failed: {exc}")
 
     finally:
+        try:
+            set_run_logger(None)
+        except Exception:
+            pass
         # Release lock
         if lock_conn:
             try:

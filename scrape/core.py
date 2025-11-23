@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
-from datetime import datetime
+from collections import defaultdict, deque
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 import fnmatch
@@ -70,7 +70,11 @@ except RuntimeError as exc:  # pragma: no cover - requires misconfiguration
     SUMMARIZE_SYSTEM_PROMPT = ""
     SUMMARIZE_USER_TEMPLATE = ""
 
-admin_email = st.secrets.get("ADMIN_EMAIL")
+try:
+    admin_email = st.secrets.get("ADMIN_EMAIL")
+except Exception:
+    admin_email = None
+
 if admin_email:
     HEADERS = {
         "User-Agent": (
@@ -79,7 +83,10 @@ if admin_email:
     }
 else:
     HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Viadrina-Indexer/1.0)"}
-    st.warning("Set ADMIN_EMAIL in secrets.toml to advertise a contact address in the crawler header.")
+    try:
+        st.warning("Set ADMIN_EMAIL in secrets.toml to advertise a contact address in the crawler header.")
+    except Exception:
+        pass
 
 # Global crawl state (shared between UI and CLI)
 visited_raw: set[str] = set()   # legacy tracking of the exact strings encountered (optional)
@@ -103,6 +110,44 @@ def reset_scraper_state():
     dry_run_llm_eligible_count = 0
     llm_analysis_results.clear()
     recordset_latest_urls.clear()
+
+_run_log_fp = None
+_run_log_path: Path | None = None
+
+
+def set_run_logger(path: str | Path | None, *, overwrite: bool = True):
+    """Configure JSONL logger for a run. Pass None to disable."""
+    global _run_log_fp, _run_log_path
+    if _run_log_fp and not _run_log_fp.closed:
+        try:
+            _run_log_fp.close()
+        except Exception:
+            pass
+    _run_log_fp = None
+    _run_log_path = None
+
+    if path is None:
+        return
+
+    log_path = Path(path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "w" if overwrite else "a"
+    _run_log_fp = log_path.open(mode, encoding="utf-8")
+    _run_log_path = log_path
+
+
+def _log_event(event: str, **fields):
+    """Write a single JSONL log entry if a run logger is configured."""
+    if _run_log_fp is None:
+        return
+    record = {"timestamp": datetime.now(timezone.utc).isoformat(), "event": event}
+    record.update({k: v for k, v in fields.items() if v is not None})
+    try:
+        _run_log_fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        _run_log_fp.flush()
+    except Exception:
+        # Logging should never break the crawl.
+        pass
 
 
 # URL normalization utilities
@@ -151,6 +196,21 @@ def normalize_url(base_url: str, href: str, keep_query: set[str] | None = None) 
     query = normalize_query(p.query, keep=keep_query)
     # never keep fragment — it’s purely client-side
     return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def compute_base_path(norm_url: str) -> str:
+    """Derive a crawl base path from a normalized URL."""
+    parsed = urlparse(norm_url)
+    path_parts = parsed.path.rstrip('/').split('/')
+    if path_parts and path_parts[-1] and '.' in path_parts[-1]:
+        base = '/'.join(path_parts[:-1])
+    else:
+        base = '/'.join(path_parts)
+    if base in ("", "/"):
+        return "/"
+    if not base.endswith("/"):
+        base += "/"
+    return base
 
 
 def get_canonical_url(soup: BeautifulSoup, fetched_url: str) -> str | None:
@@ -645,375 +705,332 @@ def scrape(
     log_callback: Callable | None = None,
 ):
     """
-    Recursively scrape a URL, process its content, and save it to the database.
+    Crawl starting at `url` using a queue-based BFS, with global per-run dedupe.
     Normalizes URLs (drops fragments, strips default ports, lowercases host, removes unwanted query params),
-    dedupes by normalized URL, respects canonical, and guards against non-HTML + runaway crawls.
+    respects canonical URLs, enforces path filters, and guards against non-HTML + runaway crawls.
 
     If dry_run=True: no LLM calls and no DB writes; collects 'frontier_seen' for UI display.
     """
-    global recordset_latest_urls, base_path, processed_pages_count, dry_run_llm_eligible_count
+    global recordset_latest_urls, processed_pages_count, dry_run_llm_eligible_count, base_path
 
-    # Normalize the start URL immediately (drop fragments, normalize query, etc.)
-    norm_url = normalize_url(url, "", keep_query=keep_query_keys)
-    if log_callback:
-        log_callback(f"{'  ' * depth}🔍 Original URL: {url}")
-        log_callback(f"{'  ' * depth}🔗 Normalized URL: {norm_url}")
-
-    # Set base path for path-restricted scraping (only on first call, depth 0)
-    if depth == 0:
-        parsed_start = urlparse(norm_url)
-        # Extract directory path (remove filename if present)
-        path_parts = parsed_start.path.rstrip('/').split('/')
-        if path_parts[-1] and '.' in path_parts[-1]:  # Remove filename
-            base_path = '/'.join(path_parts[:-1])
-        else:
-            base_path = '/'.join(path_parts)
-
-        # For root domains, allow the entire site
-        if base_path == '' or base_path == '/':
-            base_path = '/'  # Allow entire site for root domains
-        elif not base_path.endswith('/'):
-            base_path += '/'
-
-        if log_callback:
-            log_callback(f"{'  ' * depth}📁 Set base path for session: {base_path}")
-            if base_path == '/':
-                log_callback(f"{'  ' * depth}🌐 Root domain detected - will crawl entire site")
-
-    # Stop recursion if max depth, already visited, or crawl budget exceeded
-    if depth > max_depth:
-        if log_callback:
-            log_callback(f"{'  ' * depth}⏹️ Skipping - depth {depth} > max_depth {max_depth}")
-        return
-    if len(visited_norm) >= max_urls_per_run:
-        if log_callback:
-            log_callback(f"{'  ' * depth}📊 Skipping - crawl budget exceeded: {len(visited_norm)} >= {max_urls_per_run}")
-        return
-    if norm_url in visited_norm:
-        if log_callback:
-            log_callback(f"{'  ' * depth}♻️ Skipping - URL already visited: {norm_url}")
-        return
-
-    if log_callback:
-        log_callback(f"{'  ' * depth}✅ URL passed all checks, proceeding with scraping")
-
-    # Track visited (raw for diagnostics; normalized updated later if redirects change path)
-    visited_raw.add(url)
-    visited_norm.add(norm_url)
-    frontier_seen.append(norm_url)
-
+    keep_query_keys = keep_query_keys or None
+    recordset_key = (recordset or "").strip()
     normalized_exclude_paths = [prefix for prefix in (normalize_path_prefix(p) for p in (exclude_paths or [])) if prefix]
     normalized_include_prefixes = [prefix for prefix in (normalize_path_prefix(p) for p in (include_lang_prefixes or [])) if prefix]
 
-    # HEAD pre-check (advisory)
-    try:
-        head = requests.head(norm_url, headers=HEADERS, allow_redirects=True, timeout=10)
-        ctype = head.headers.get("Content-Type", "")
-        # Only trust HEAD to skip when URL clearly looks like a file (by extension)
-        looks_like_file = re.search(
-            r"\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z|tar(?:\.gz)?|tgz|gz|bz2|xz|"
-            r"jpg|jpeg|png|gif|svg|webp|tiff?|bmp|ico|heic|"
-            r"mp4|webm|mov|mkv|avi|mp3|m4a|wav|ogg|flac|"
-            r"exe|dmg|pkg|iso|apk|woff2?|ttf)$",
-            urlparse(norm_url).path,
-            re.I,
-        )
-        if looks_like_file and ctype and ("text/html" not in ctype and "application/xhtml+xml" not in ctype):
-            if log_callback:
-                log_callback(f"{'  ' * depth}🚫 Skipping non-HTML (HEAD suggests file): {norm_url} ({ctype})")
-            return
-    except requests.RequestException:
-        # No HEAD? Just proceed.
-        pass
+    start_norm = normalize_url(url, "", keep_query=keep_query_keys)
+    start_base_path = compute_base_path(start_norm)
 
-    # GET the page
-    try:
-        response = requests.get(norm_url, headers=HEADERS, timeout=15)
-
-        # Check HTTP status code - skip 404s and other error pages
-        if response.status_code == 404:
-            if log_callback:
-                log_callback(f"{'  ' * depth}🚫 Skipping 404 Not Found: {norm_url}")
-            return
-        elif response.status_code >= 400:
-            if log_callback:
-                log_callback(f"{'  ' * depth}❌ HTTP {response.status_code} error for {norm_url}")
-            return
-        elif response.status_code >= 300:
-            if log_callback:
-                log_callback(f"{'  ' * depth}🔄 HTTP {response.status_code} redirect for {norm_url} (following redirect)")
-            # Note: requests follows redirects by default, so this is just for logging
-
-    except requests.RequestException as e:
+    def _log(msg: str, level: str = "INFO"):
         if log_callback:
-            log_callback(f"{'  ' * depth}❌ Error fetching {norm_url}: {e}")
-        return
+            log_callback(msg)
+        _log_event(level.lower(), normalized_url=start_norm, recordset=recordset_key, msg=msg)
 
-    # Final content-type check
-    ctype = response.headers.get("Content-Type", "")
-    if "text/html" not in ctype and "application/xhtml+xml" not in ctype:
-        if log_callback:
-            log_callback(f"{'  ' * depth}🚫 Skipping non-HTML: {norm_url} ({ctype})")
-        return
+    def _progress():
+        if progress_callback:
+            try:
+                progress_callback()
+            except Exception:
+                pass
 
-    effective_url = response.url
-    effective_norm = normalize_url(effective_url, "", keep_query=keep_query_keys)
-    if effective_norm != norm_url:
-        if effective_norm in visited_norm:
+    queue = deque()
+
+    def enqueue(target_url: str, d: int, base_path_for_seed: str):
+        if d > max_depth:
+            return
+        norm_candidate = normalize_url(target_url, "", keep_query=keep_query_keys)
+        if norm_candidate in visited_norm:
+            _log_event("skip_visited", normalized_url=norm_candidate, depth=d, recordset=recordset_key)
+            return
+        if len(visited_norm) >= max_urls_per_run:
+            _log_event("skip_budget", normalized_url=norm_candidate, depth=d, recordset=recordset_key, max_urls=max_urls_per_run)
+            return
+        visited_norm.add(norm_candidate)
+        frontier_seen.append(norm_candidate)
+        queue.append((norm_candidate, d, base_path_for_seed))
+        _log_event("enqueue", normalized_url=norm_candidate, depth=d, recordset=recordset_key, base_path=base_path_for_seed)
+
+    enqueue(start_norm, 0, start_base_path)
+
+    while queue:
+        norm_url, current_depth, current_base_path = queue.popleft()
+        base_path = current_base_path  # maintain legacy global for UI display
+        visited_raw.add(norm_url)
+        _log_event("dequeue", normalized_url=norm_url, depth=current_depth, recordset=recordset_key)
+
+        if current_depth > max_depth:
+            _log_event("skip_depth", normalized_url=norm_url, depth=current_depth, recordset=recordset_key)
+            continue
+        if len(visited_norm) > max_urls_per_run:
+            _log_event("skip_budget", normalized_url=norm_url, depth=current_depth, recordset=recordset_key, max_urls=max_urls_per_run)
+            continue
+
+        # HEAD pre-check (advisory)
+        try:
+            head = requests.head(norm_url, headers=HEADERS, allow_redirects=True, timeout=10)
+            ctype = head.headers.get("Content-Type", "")
+            looks_like_file = re.search(
+                r"\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z|tar(?:\.gz)?|tgz|gz|bz2|xz|"
+                r"jpg|jpeg|png|gif|svg|webp|tiff?|bmp|ico|heic|"
+                r"mp4|webm|mov|mkv|avi|mp3|m4a|wav|ogg|flac|"
+                r"exe|dmg|pkg|iso|apk|woff2?|ttf)$",
+                urlparse(norm_url).path,
+                re.I,
+            )
+            if looks_like_file and ctype and ("text/html" not in ctype and "application/xhtml+xml" not in ctype):
+                _log_event("skip_non_html_head", normalized_url=norm_url, depth=current_depth, content_type=ctype)
+                if log_callback:
+                    log_callback(f"{'  ' * current_depth}🚫 Skipping non-HTML (HEAD suggests file): {norm_url} ({ctype})")
+                continue
+        except requests.RequestException:
+            pass
+
+        # GET the page
+        try:
+            response = requests.get(norm_url, headers=HEADERS, timeout=15)
+        except requests.RequestException as e:
             if log_callback:
-                log_callback(f"{'  ' * depth}↩️ Redirect target already visited: {effective_norm}")
+                log_callback(f"{'  ' * current_depth}❌ Error fetching {norm_url}: {e}")
+            _log_event("fetch_error", normalized_url=norm_url, depth=current_depth, error=str(e)[:200])
+            continue
+
+        status = response.status_code
+        if status == 404:
+            if log_callback:
+                log_callback(f"{'  ' * current_depth}🚫 Skipping 404 Not Found: {norm_url}")
+            _log_event("skip_http", normalized_url=norm_url, depth=current_depth, status=status)
+            continue
+        if status >= 400:
+            if log_callback:
+                log_callback(f"{'  ' * current_depth}❌ HTTP {status} error for {norm_url}")
+            _log_event("skip_http", normalized_url=norm_url, depth=current_depth, status=status)
+            continue
+        if status >= 300 and log_callback:
+            log_callback(f"{'  ' * current_depth}🔄 HTTP {status} redirect for {norm_url} (following redirect)")
+
+        # Final content-type check
+        ctype = response.headers.get("Content-Type", "")
+        if "text/html" not in ctype and "application/xhtml+xml" not in ctype:
+            if log_callback:
+                log_callback(f"{'  ' * current_depth}🚫 Skipping non-HTML: {norm_url} ({ctype})")
+            _log_event("skip_non_html", normalized_url=norm_url, depth=current_depth, content_type=ctype)
+            continue
+
+        effective_url = response.url
+        effective_norm = normalize_url(effective_url, "", keep_query=keep_query_keys)
+        if effective_norm != norm_url:
+            if effective_norm in visited_norm:
+                if log_callback:
+                    log_callback(f"{'  ' * current_depth}↩️ Redirect target already visited: {effective_norm}")
+                _log_event("skip_redirect_seen", normalized_url=effective_norm, from_url=norm_url, depth=current_depth)
+                continue
             visited_norm.discard(norm_url)
-            if frontier_seen:
-                frontier_seen[-1] = effective_norm
-            return
-        visited_norm.discard(norm_url)
-        norm_url = effective_norm
-        visited_norm.add(norm_url)
-        if frontier_seen:
-            frontier_seen[-1] = norm_url
+            visited_norm.add(effective_norm)
+            frontier_seen.append(effective_norm)
+            norm_url = effective_norm
 
-    # Encoding handling
-    declared_encoding = None
-    try:
-        soup_temp = BeautifulSoup(response.content, 'html.parser')
-        meta = soup_temp.find('meta', attrs={'charset': True}) or soup_temp.find('meta', attrs={'http-equiv': 'Content-Type'})
-        if meta:
-            content = meta.get('charset') or meta.get('content', '')
-            if 'charset=' in content:
-                declared_encoding = content.split('charset=')[-1]
-    except Exception as e:
+        # Encoding handling
+        declared_encoding = None
+        try:
+            soup_temp = BeautifulSoup(response.content, 'html.parser')
+            meta = soup_temp.find('meta', attrs={'charset': True}) or soup_temp.find('meta', attrs={'http-equiv': 'Content-Type'})
+            if meta:
+                content = meta.get('charset') or meta.get('content', '')
+                if 'charset=' in content:
+                    declared_encoding = content.split('charset=')[-1]
+        except Exception as e:
+            if log_callback:
+                log_callback(f"{'  ' * current_depth}⚠️ Encoding detection failed: {e}")
+
+        response.encoding = declared_encoding or response.apparent_encoding
+        soup = BeautifulSoup(response.text, 'html.parser')
         if log_callback:
-            log_callback(f"{'  ' * depth}⚠️ Encoding detection failed: {e}")
+            log_callback(f"{'  ' * current_depth}🕷️ Scraping: {norm_url}")
 
-    response.encoding = declared_encoding or response.apparent_encoding
-    soup = BeautifulSoup(response.text, 'html.parser')
-    if log_callback:
-        log_callback(f"{'  ' * depth}🕷️ Scraping: {norm_url}")
+        # Respect canonical if present
+        canon = get_canonical_url(soup, norm_url)
+        if canon:
+            canon_norm = normalize_url(canon, "", keep_query=keep_query_keys)
+            if canon_norm != norm_url:
+                if canon_norm in visited_norm:
+                    if log_callback:
+                        log_callback(f"{'  ' * current_depth}🔗 Canonical already visited: {canon_norm}")
+                    _log_event("skip_canonical_seen", normalized_url=canon_norm, from_url=norm_url, depth=current_depth)
+                    continue
+                visited_norm.discard(norm_url)
+                visited_norm.add(canon_norm)
+                frontier_seen.append(canon_norm)
+                norm_url = canon_norm
 
-    # Respect canonical if present
-    canon = get_canonical_url(soup, norm_url)
-    if canon:
-        canon_norm = normalize_url(canon, "", keep_query=keep_query_keys)
-        if canon_norm != norm_url:
-            if canon_norm in visited_norm:
+        recordset_latest_urls[recordset_key].add(norm_url)
+
+        # Content extraction
+        main = extract_main_content(soup, current_depth)
+        if main:
+            title = soup.title.string.strip().lower() if soup.title and soup.title.string else ""
+            if title and any(pattern in title for pattern in ["404", "not found", "nicht gefunden", "error", "fehler"]):
                 if log_callback:
-                    log_callback(f"{'  ' * depth}🔗 Canonical already visited: {canon_norm}")
-                return
-            norm_url = canon_norm
-            visited_norm.add(norm_url)
-            frontier_seen.append(norm_url)
+                    log_callback(f"{'  ' * current_depth}🚫 Skipping error page (title indicates 404): {norm_url}")
+                _log_event("skip_error_title", normalized_url=norm_url, depth=current_depth)
+                continue
 
-    recordset_key = (recordset or "").strip()
-    recordset_latest_urls[recordset_key].add(norm_url)
-
-    # Content extraction
-    main = extract_main_content(soup, depth)
-    if main:
-        # Check page title for 404 indicators
-        title = soup.title.string.strip().lower() if soup.title and soup.title.string else ""
-        if title and any(pattern in title for pattern in ["404", "not found", "nicht gefunden", "error", "fehler"]):
-            if log_callback:
-                log_callback(f"{'  ' * depth}🚫 Skipping error page (title indicates 404): {norm_url}")
-            return
-
-        main_text = main.get_text(separator=' ', strip=True).lower()
-        if is_page_not_found(main_text):
-            if log_callback:
-                log_callback(f"{'  ' * depth}🚫 Skipping 'Page not found' at {norm_url}")
-            return
-
-        markdown = md(str(main), heading_style="ATX")
-        markdown = normalize_text(markdown)
-        if is_empty_markdown(markdown):
-            if log_callback:
-                log_callback(f"{'  ' * depth}📄 Skipping {norm_url}: no meaningful content after extraction.")
-            return
-
-        # DB churn prevention - check even in dry run to get accurate "new/changed" count
-        current_hash = compute_sha256(markdown)
-
-        if dry_run:
-            # For dry run, create a temporary connection to check existing hashes
-            try:
-                temp_conn = get_connection()
-                existing_hash = get_existing_markdown_hash(temp_conn, norm_url)
-                duplicate_content_url = check_content_hash_exists(temp_conn, current_hash)
-                temp_conn.close()
-            except Exception as e:
+            main_text = main.get_text(separator=' ', strip=True).lower()
+            if is_page_not_found(main_text):
                 if log_callback:
-                    log_callback(f"{'  ' * depth}⚠️ Could not check existing hash in dry run: {e}")
-                existing_hash = None
-                duplicate_content_url = None
-        else:
-            existing_hash = get_existing_markdown_hash(conn, norm_url) if conn else None
-            duplicate_content_url = check_content_hash_exists(conn, current_hash) if conn else None
+                    log_callback(f"{'  ' * current_depth}🚫 Skipping 'Page not found' at {norm_url}")
+                _log_event("skip_404_body", normalized_url=norm_url, depth=current_depth)
+                continue
 
-        # Skip if this exact content already exists anywhere in the database
-        if duplicate_content_url and duplicate_content_url != norm_url:
-            if log_callback:
-                if dry_run:
-                    log_callback(f"{'  ' * depth}🔄 [DRY RUN] DUPLICATE content - would skip (same as {duplicate_content_url}): {norm_url}")
-                else:
-                    log_callback(f"{'  ' * depth}🔄 DUPLICATE content - skipping (same as {duplicate_content_url}): {norm_url}")
-            return
+            markdown = md(str(main), heading_style="ATX")
+            markdown = normalize_text(markdown)
+            if is_empty_markdown(markdown):
+                if log_callback:
+                    log_callback(f"{'  ' * current_depth}📄 Skipping {norm_url}: no meaningful content after extraction.")
+                _log_event("skip_empty", normalized_url=norm_url, depth=current_depth)
+                continue
 
-        skip_summary_and_db = (existing_hash == current_hash) if existing_hash is not None else False
+            current_hash = compute_sha256(markdown)
 
-        # In dry run mode, count pages that would be LLM processed (new or changed content)
-        if dry_run and not skip_summary_and_db:
-            dry_run_llm_eligible_count += 1
-            if log_callback:
-                if existing_hash is None:
-                    log_callback(f"{'  ' * depth}🤖 [DRY RUN] NEW page - would process with LLM: {norm_url}")
-                else:
-                    log_callback(f"{'  ' * depth}🤖 [DRY RUN] CHANGED page - would process with LLM: {norm_url}")
-                log_callback(f"{'  ' * depth}📊 Pages that would be LLM processed so far: {dry_run_llm_eligible_count}")
-
-            # Update UI progress to show real-time dry run metrics
-            if progress_callback:
+            if dry_run:
                 try:
-                    progress_callback()
-                except Exception:
-                    pass  # Don't let UI errors break scraping
-        elif dry_run and skip_summary_and_db:
-            if log_callback:
-                log_callback(f"{'  ' * depth}⏭️ [DRY RUN] UNCHANGED page - would skip LLM: {norm_url}")
+                    temp_conn = get_connection()
+                    existing_hash = get_existing_markdown_hash(temp_conn, norm_url)
+                    duplicate_content_url = check_content_hash_exists(temp_conn, current_hash)
+                    temp_conn.close()
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"{'  ' * current_depth}⚠️ Could not check existing hash in dry run: {e}")
+                    existing_hash = None
+                    duplicate_content_url = None
+            else:
+                existing_hash = get_existing_markdown_hash(conn, norm_url) if conn else None
+                duplicate_content_url = check_content_hash_exists(conn, current_hash) if conn else None
 
-        if not (skip_summary_and_db or dry_run):
-            try:
+            if duplicate_content_url and duplicate_content_url != norm_url:
                 if log_callback:
-                    log_callback(f"{'  ' * depth}🤖 Processing with LLM: {norm_url}")
-                llm_output = summarize_and_tag_tooluse(markdown, log_callback, depth)
-                if llm_output is None:
-                    if log_callback:
-                        log_callback(f"{'  ' * depth}❌ Failed to get LLM output for {norm_url}, skipping save")
-                    return
+                    if dry_run:
+                        log_callback(f"{'  ' * current_depth}🔄 [DRY RUN] DUPLICATE content - would skip (same as {duplicate_content_url}): {norm_url}")
+                    else:
+                        log_callback(f"{'  ' * current_depth}🔄 DUPLICATE content - skipping (same as {duplicate_content_url}): {norm_url}")
+                _log_event("skip_duplicate", normalized_url=norm_url, duplicate_of=duplicate_content_url, depth=current_depth)
+                continue
 
-                summary = llm_output.get("summary", "No summary available")
-                lang_from_html = get_html_lang(soup)
-                lang = (lang_from_html.lower() if lang_from_html else llm_output.get("detected_language", "unknown"))
-                tags = llm_output.get("tags", [])
-                page_type = "links" if is_link_page(markdown) else "text"
+            skip_summary_and_db = (existing_hash == current_hash) if existing_hash is not None else False
 
-                if isinstance(tags, str):
-                    try:
-                        tags = json.loads(tags)
-                    except Exception:
-                        tags = [t.strip().strip("'\" ") for t in tags.strip("[]").split(",")]
-
-                # Display LLM output in the log
+            if dry_run and not skip_summary_and_db:
+                dry_run_llm_eligible_count += 1
                 if log_callback:
-                    log_callback(f"{'  ' * depth}✨ LLM Analysis Complete:")
-                    log_callback(f"{'  ' * (depth+1)}📝 Summary: {summary[:100]}{'...' if len(summary) > 100 else ''}")
-                    log_callback(f"{'  ' * (depth+1)}🌍 Language: {lang}")
-                    log_callback(f"{'  ' * (depth+1)}🏷️ Tags: {', '.join(tags[:5])}{'...' if len(tags) > 5 else ''}")
-                    log_callback(f"{'  ' * (depth+1)}📄 Type: {page_type}")
+                    if existing_hash is None:
+                        log_callback(f"{'  ' * current_depth}🤖 [DRY RUN] NEW page - would process with LLM: {norm_url}")
+                    else:
+                        log_callback(f"{'  ' * current_depth}🤖 [DRY RUN] CHANGED page - would process with LLM: {norm_url}")
+                    log_callback(f"{'  ' * current_depth}📊 Pages that would be LLM processed so far: {dry_run_llm_eligible_count}")
+                _progress()
+            elif dry_run and skip_summary_and_db:
+                if log_callback:
+                    log_callback(f"{'  ' * current_depth}⏭️ [DRY RUN] UNCHANGED page - would skip LLM: {norm_url}")
 
-                # Collect LLM results for info box display
-                llm_analysis_results.append(
-                    {
-                        'url': norm_url,
-                        'title': title,
-                        'summary': summary,
-                        'language': lang,
-                        'tags': tags,
-                        'page_type': page_type,
-                    }
-                )
-
-                title = soup.title.string.strip() if soup.title else 'Untitled'
-                safe_title = re.sub(r'_+', '_', "".join(c if c.isalnum() else "_" for c in (title or "untitled")))[:64]
-                crawl_date = datetime.now().strftime("%Y-%m-%d")
-
-                if conn:
-                    # IMPORTANT: we save by the normalized URL
-                    save_document_to_db(
-                        conn,
-                        norm_url,
-                        title,
-                        safe_title,
-                        crawl_date,
-                        lang,
-                        summary,
-                        tags,
-                        markdown,
-                        current_hash,
-                        recordset,
-                        page_type,
-                        no_upload=False,
-                        source_config_id=source_config_id,
-                    )
+            if not (skip_summary_and_db or dry_run):
+                try:
                     if log_callback:
-                        log_callback(f"{'  ' * depth}💾 Saved {norm_url} to database with recordset '{recordset}'")
+                        log_callback(f"{'  ' * current_depth}🤖 Processing with LLM: {norm_url}")
+                    llm_output = summarize_and_tag_tooluse(markdown, log_callback, current_depth)
+                    if llm_output is None:
+                        if log_callback:
+                            log_callback(f"{'  ' * current_depth}❌ Failed to get LLM output for {norm_url}, skipping save")
+                        _log_event("llm_failed", normalized_url=norm_url, depth=current_depth)
+                        continue
 
-                    # Increment counter for successfully processed pages
-                    processed_pages_count += 1
-                    if log_callback:
-                        log_callback(f"{'  ' * depth}📊 Pages processed by LLM so far: {processed_pages_count}")
+                    summary = llm_output.get("summary", "No summary available")
+                    lang_from_html = get_html_lang(soup)
+                    lang = (lang_from_html.lower() if lang_from_html else llm_output.get("detected_language", "unknown"))
+                    tags = llm_output.get("tags", [])
+                    page_type = "links" if is_link_page(markdown) else "text"
 
-                    # Update UI progress if callback provided
-                    if progress_callback:
+                    if isinstance(tags, str):
                         try:
-                            progress_callback()
+                            tags = json.loads(tags)
                         except Exception:
-                            pass  # Don't let UI errors break scraping
-            except Exception as e:
-                if log_callback:
-                    log_callback(f"❌ LLM ERROR for {norm_url}: {e}")
-                st.error(f"Failed to summarize or save {norm_url}: {e}")
-                return
+                            tags = [t.strip().strip("'\" ") for t in tags.strip("[]").split(",")]
 
-    # Link discovery (dedup + filters)
-    if soup is not None:
+                    llm_analysis_results.append(
+                        {
+                            'url': norm_url,
+                            'title': title,
+                            'summary': summary,
+                            'language': lang,
+                            'tags': tags,
+                            'page_type': page_type,
+                        }
+                    )
+
+                    title_full = soup.title.string.strip() if soup.title else 'Untitled'
+                    safe_title = re.sub(r'_+', '_', "".join(c if c.isalnum() else "_" for c in (title_full or "untitled")))[:64]
+                    crawl_date = datetime.now().strftime("%Y-%m-%d")
+
+                    if conn:
+                        save_document_to_db(
+                            conn,
+                            norm_url,
+                            title_full,
+                            safe_title,
+                            crawl_date,
+                            lang,
+                            summary,
+                            tags,
+                            markdown,
+                            current_hash,
+                            recordset,
+                            page_type,
+                            no_upload=False,
+                            source_config_id=source_config_id,
+                        )
+                        if log_callback:
+                            log_callback(f"{'  ' * current_depth}💾 Saved {norm_url} to database with recordset '{recordset}'")
+                        processed_pages_count += 1
+                        _progress()
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"❌ LLM ERROR for {norm_url}: {e}")
+                    st.error(f"Failed to summarize or save {norm_url}: {e}")
+                    _log_event("llm_exception", normalized_url=norm_url, depth=current_depth, error=str(e)[:200])
+                    continue
+
+        # Link discovery (dedup + filters)
         base_host = urlparse(norm_url).netloc
-        links_found = []
-        links_processed = 0
-
+        links_found = 0
         link_base_url = effective_url
         for a in soup.find_all('a', href=True):
             href = a['href'].strip()
-            links_found.append(href)
-
-            # Skip same-page anchors like '#section'
             if href.startswith("#"):
                 continue
 
-            # Normalize (drops fragments, unwanted queries)
             next_url = normalize_url(link_base_url, href, keep_query=keep_query_keys)
             if not next_url:
                 continue
 
-            links_processed += 1
+            links_found += 1
 
-            # Stay on-site
             if urlparse(next_url).netloc != base_host:
-                if log_callback and depth <= 1:  # Only log for shallow depths to avoid spam
-                    log_callback(f"{'  ' * (depth+1)}🌐 Skipping external link: {next_url}")
+                if log_callback and current_depth <= 1:
+                    log_callback(f"{'  ' * (current_depth+1)}🌐 Skipping external link: {next_url}")
                 continue
 
-            # Include/exclude path filters
             parsed_link = urlparse(next_url)
             normalized_path = '/' + parsed_link.path.lstrip('/')
             if normalized_path != '/' and normalized_path.endswith('/'):
                 normalized_path = normalized_path.rstrip('/')
 
             if normalized_exclude_paths and any(path_matches_prefix(normalized_path, excl) for excl in normalized_exclude_paths):
-                if log_callback and depth <= 1:
-                    log_callback(f"{'  ' * (depth+1)}❌ Excluded by path filter: {next_url}")
                 continue
             if normalized_include_prefixes and not any(path_matches_prefix(normalized_path, prefix) for prefix in normalized_include_prefixes):
-                if log_callback and depth <= 1:
-                    log_callback(f"{'  ' * (depth+1)}🚫 Not in allowed language prefix: {next_url}")
                 continue
 
-            # Restrict to base path only (stay within the starting URL's path)
-            # For root domains (base_path = '/'), allow all paths on the same domain
-            if base_path and base_path != '/' and not normalized_path.startswith(base_path):
+            if current_base_path and current_base_path != '/' and not normalized_path.startswith(current_base_path):
                 if log_callback:
-                    log_callback(f"{'  ' * (depth+1)}🚫 Skipping {next_url} - outside base path {base_path}")
+                    log_callback(f"{'  ' * (current_depth+1)}🚫 Skipping {next_url} - outside base path {current_base_path}")
                 continue
 
-            # Skip non-HTML resources by extension
             if re.search(
                 r"\.(pdf|docx?|xlsx?|pptx?|odt|ods|odp|rtf|txt|csv|zip|rar|7z|tar(?:\.gz)?|tgz|gz|bz2|xz|"
                 r"jpg|jpeg|png|gif|svg|webp|tiff?|bmp|ico|heic|"
@@ -1024,31 +1041,11 @@ def scrape(
             ):
                 continue
 
-            # Avoid common query-driven loopers unless whitelisted
             if parsed_link.query and keep_query_keys is None:
                 if re.search(r'(page|p|sort|month|year|q|search)=', parsed_link.query, re.I):
                     continue
 
-            # Dedup frontier
-            if next_url in visited_norm:
-                continue
+            enqueue(next_url, current_depth + 1, current_base_path)
 
-            scrape(
-                next_url,
-                depth + 1,
-                max_depth,
-                recordset,
-                source_config_id,
-                conn,
-                exclude_paths,
-                include_lang_prefixes,
-                keep_query_keys=keep_query_keys,
-                max_urls_per_run=max_urls_per_run,
-                dry_run=dry_run,
-                progress_callback=progress_callback,
-                log_callback=log_callback,
-            )
-
-        # Log link discovery summary
         if log_callback:
-            log_callback(f"{'  ' * depth}🔗 Link discovery: Found {len(links_found)} total links, processed {links_processed} valid links")
+            log_callback(f"{'  ' * current_depth}🔗 Link discovery: processed {links_found} candidate links")
