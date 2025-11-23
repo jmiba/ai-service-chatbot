@@ -1057,6 +1057,9 @@ def human_event_label(event):
             phase_label = t("status_tool_use_failed")
         if not phase_label:
             phase_label = t("status_tool_use_progress")
+        # If translation is missing (returns the key), fall back to progress label
+        if "status_tool_use_" in phase_label:
+            phase_label = t("status_tool_use_progress")
         return f"{t('status_tool_use_prefix')} {phase_label}".strip()
     if et.startswith("response.output_text"):
         if et.endswith("start"):

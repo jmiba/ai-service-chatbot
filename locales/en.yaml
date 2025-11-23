@@ -1,0 +1,81 @@
+language_label: "Language"
+chatbot_title: "Viadrina Library Assistant"
+chat_input_placeholder: "Ask me library-related questions in any language ..."
+references: "References"
+vector_store_missing: "Missing VECTOR_STORE_ID in Streamlit secrets. Please add it to run File Search."
+dbis_mcp_disabled_base: "⚠️ DBIS MCP is disabled for this session:"
+dbis_mcp_reason_unauthorized: "server responded with 401/403 (check DBIS_MCP_AUTHORIZATION/DBIS_MCP_HEADERS)."
+dbis_mcp_reason_server_error: "server error ({status_code})."
+dbis_mcp_reason_unreachable: "server is unreachable."
+dbis_tools_temporarily_disabled: "⚠️ DBIS tools are temporarily disabled because the MCP server could not be reached. The chat will continue without DBIS access."
+dbis_tools_auth_hint: "(Server responded with 401 Unauthorized—check MCP credentials.)"
+thinking: "Thinking…"
+rate_limited: "We’re being rate-limited right now. Please try again in a moment."
+connection_error: "❌ OpenAI connection error: {error}"
+response_missing: "I couldn’t generate a response this time."
+api_key_required_title: "🔑 **OpenAI API Key Required**"
+api_key_required_body: |
+  Please add your OpenAI API key to Streamlit Cloud settings:
+
+  1. **Go to your app settings** in Streamlit Cloud
+  2. **Add this secret**:
+     ```
+     OPENAI_API_KEY = "your-openai-api-key-here"
+     ```
+  3. **Get an API key** from [OpenAI Platform](https://platform.openai.com/api-keys)
+  4. **Redeploy the app**
+
+  The app cannot function without an OpenAI API key.
+db_config_title: "🔧 **Database Configuration Needed**"
+db_config_body: |
+  To enable full functionality, please configure a PostgreSQL database:
+
+  1. **Create a cloud PostgreSQL database**
+     Free Cloud PostgreSQL Options:
+     - [Neon.tech](https://neon.tech) - 500MB free, serverless PostgreSQL
+     - [Supabase](https://supabase.com) - 500MB free, includes real-time features
+     - [ElephantSQL](https://elephantsql.com) - 20MB free "Tiny Turtle" plan
+     - [Railway](https://railway.app) - PostgreSQL with free tier
+  2. **Add database secrets** in Streamlit Cloud settings:
+     ```
+     [postgres]
+     host = "your-postgres-host"
+     port = "5432"
+     database = "your-database-name"
+     user = "your-username"
+     password = "your-password"
+     ```
+  3. **Redeploy the app**
+
+  The chat functionality will work without database, but logging and admin features will be disabled.
+db_init_failed: "Database initialization failed: {error}"
+db_limited_warning: "The app may have limited functionality without database access."
+db_default_prompt_warning: "Using default prompt due to database connection issues. Error: {error}"
+status_web_searching: "Searching the web…"
+status_web_done: "Web search completed…"
+status_kb_searching: "Searching my knowledge base…"
+status_kb_done: "Knowledge base search completed…"
+status_generating: "Generating response…"
+status_generated: "Response generation finished"
+status_tool_use: "Tool use {name}"
+status_tool_use_prefix: "Tool use"
+status_tool_use_start: "starting"
+status_tool_use_progress: "in progress"
+status_tool_use_done: "completed"
+status_tool_use_failed: "failed"
+status_starting: "Starting…"
+sidebar_chat: "Chat Assistant"
+sidebar_save_chat: "Save chat"
+sidebar_save_chat_help: "Download the current conversation as Markdown."
+sidebar_new_chat: "New chat"
+sidebar_new_chat_help: "Start a fresh session"
+sidebar_debug: "Debug"
+sidebar_debug_help: "Shows final.model_dump() for the next assistant reply."
+sidebar_authenticated: "Authenticated as admin."
+sidebar_logs: "Logs & Analytics"
+sidebar_scrape: "Content Indexing"
+sidebar_vector: "Vector Store"
+sidebar_settings: "Settings"
+sidebar_logout: "Logout"
+sidebar_admin_login: "Admin Login"
+sidebar_source: "Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)"

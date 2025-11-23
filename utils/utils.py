@@ -3,6 +3,7 @@ import streamlit as st
 import hashlib
 from pathlib import Path
 import json
+import yaml
 from functools import lru_cache
 import uuid
 from datetime import datetime
@@ -28,6 +29,43 @@ _SUP_REF_PATTERN = re.compile(r"<sup[^>]*>\s*\[(\d+)\]\s*</sup>")
 _ANCHOR_PATTERN = re.compile(r"<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
 _TAG_SPLIT_PATTERN = re.compile(r"[;,]")
 _INFLECT_ENGINE = inflect.engine() if inflect else None
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+LOCALES_DIR = BASE_DIR / "locales"
+SUPPORTED_LANGUAGES = {"en", "de", "pl"}
+DEFAULT_LANGUAGE = "de"
+
+@lru_cache(maxsize=1)
+def _load_translations() -> dict[str, dict[str, str]]:
+    translations: dict[str, dict[str, str]] = {}
+    for code in SUPPORTED_LANGUAGES:
+        try:
+            with (LOCALES_DIR / f"{code}.yaml").open("r", encoding="utf-8") as f:
+                translations[code] = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            translations[code] = {}
+    return translations
+
+def _get_lang() -> str:
+    param_lang = st.query_params.get("lang")
+    if isinstance(param_lang, list):
+        param_lang = param_lang[0]
+    session_lang = st.session_state.get("lang")
+    lang = param_lang if param_lang in SUPPORTED_LANGUAGES else session_lang or DEFAULT_LANGUAGE
+    if lang not in SUPPORTED_LANGUAGES:
+        lang = DEFAULT_LANGUAGE
+    return lang
+
+def t_sidebar(key: str, **kwargs) -> str:
+    lang = _get_lang()
+    translations = _load_translations()
+    text = translations.get(lang, {}).get(key) or translations.get(DEFAULT_LANGUAGE, {}).get(key, key)
+    if kwargs:
+        try:
+            text = text.format(**kwargs)
+        except Exception:
+            pass
+    return text
 
 
 def _sanitize_html(content: str) -> str:
@@ -297,13 +335,13 @@ def render_save_chat_button(slot, messages: list[dict] | None = None) -> None:
         filename = f"chat-{str(session_id)[:8]}.md"
 
     slot.download_button(
-        "Save chat",
+        t_sidebar("sidebar_save_chat"),
         data=transcript_md,
         file_name=filename,
         mime="text/markdown",
         key="sidebar_save_chat_button",
         disabled=not bool(messages),
-        help="Download the current conversation as Markdown.",
+        help=t_sidebar("sidebar_save_chat_help"),
         icon=":material/save_alt:",
     )
 
@@ -996,13 +1034,13 @@ def render_sidebar(
         Tuple containing debug state and optional save-chat slot
     """
     load_css()
-    st.sidebar.page_link("app.py", label="Chat Assistant", icon=":material/chat_bubble:")
+    st.sidebar.page_link("app.py", label=t_sidebar("sidebar_chat"), icon=":material/chat_bubble:")
 
     save_chat_slot = st.sidebar.empty()
     if show_save_chat and save_chat_slot is not None:
         with save_chat_slot.container():
             st.download_button(
-                "Save chat",
+                t_sidebar("sidebar_save_chat"),
                 data="",
                 file_name="chat-transcript.md",
                 mime="text/markdown",
@@ -1017,9 +1055,9 @@ def render_sidebar(
 
     if show_new_chat:
         if st.sidebar.button(
-            "New chat",
+            t_sidebar("sidebar_new_chat"),
             type="secondary",
-            help="Start a fresh session",
+            help=t_sidebar("sidebar_new_chat_help"),
             icon=":material/add_comment:",
             key="sidebar_new_chat_button",
         ):
@@ -1043,8 +1081,8 @@ def render_sidebar(
     # Debug checkbox right beneath chat assistant (only on main page when authenticated)
     debug_one = False
     if authenticated and show_debug:
-        debug_one = st.sidebar.checkbox("Debug", value=False, 
-                                       help="Shows final.model_dump() for the next assistant reply.")
+        debug_one = st.sidebar.checkbox(t_sidebar("sidebar_debug"), value=False, 
+                                       help=t_sidebar("sidebar_debug_help"))
         
         # Show session ID for debugging
         if "session_id" in st.session_state:
@@ -1058,20 +1096,20 @@ def render_sidebar(
     </style>
     """)
     if authenticated:
-        st.sidebar.success("Authenticated as admin.")
-        st.sidebar.page_link("pages/logs.py", label="Logs & Analytics", icon=":material/search_activity:")
-        st.sidebar.page_link("pages/scrape.py", label="Content Indexing", icon=":material/home_storage:")
-        st.sidebar.page_link("pages/vectorize.py", label="Vector Store", icon=":material/owl:")
-        st.sidebar.page_link("pages/admin.py", label="Settings", icon=":material/settings:")
+        st.sidebar.success(t_sidebar("sidebar_authenticated"))
+        st.sidebar.page_link("pages/logs.py", label=t_sidebar("sidebar_logs"), icon=":material/search_activity:")
+        st.sidebar.page_link("pages/scrape.py", label=t_sidebar("sidebar_scrape"), icon=":material/home_storage:")
+        st.sidebar.page_link("pages/vectorize.py", label=t_sidebar("sidebar_vector"), icon=":material/owl:")
+        st.sidebar.page_link("pages/admin.py", label=t_sidebar("sidebar_settings"), icon=":material/settings:")
         #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
         
-        st.sidebar.button("Logout", on_click=_perform_logout, icon=":material/logout:")
+        st.sidebar.button(t_sidebar("sidebar_logout"), on_click=_perform_logout, icon=":material/logout:")
         with st.sidebar.container(key="sidebar_bottom"):
-            st.caption("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
+            st.caption(t_sidebar("sidebar_source"))
     else:
         with st.sidebar.container(key="sidebar_bottom"):
-            st.page_link("pages/logs.py", label="Admin Login", icon=":material/key:")
-            st.caption("Source code on [GitHub](https://github.com/jmiba/ai-service-chatbot)")
+            st.page_link("pages/logs.py", label=t_sidebar("sidebar_admin_login"), icon=":material/key:")
+            st.caption(t_sidebar("sidebar_source"))
         
     
     return debug_one, save_chat_slot

@@ -1,0 +1,81 @@
+language_label: "Język"
+chatbot_title: "Asystent Biblioteki Viadrina"
+chat_input_placeholder: "Zadaj pytanie o bibliotekę w dowolnym języku ..."
+references: "Źródła"
+vector_store_missing: "Brakuje VECTOR_STORE_ID w sekretach Streamlit. Dodaj ją, aby uruchomić wyszukiwanie plików."
+dbis_mcp_disabled_base: "⚠️ DBIS MCP jest wyłączony w tej sesji:"
+dbis_mcp_reason_unauthorized: "serwer zwrócił 401/403 (sprawdź DBIS_MCP_AUTHORIZATION/DBIS_MCP_HEADERS)."
+dbis_mcp_reason_server_error: "błąd serwera ({status_code})."
+dbis_mcp_reason_unreachable: "serwer jest niedostępny."
+dbis_tools_temporarily_disabled: "⚠️ Narzędzia DBIS są tymczasowo wyłączone, bo nie udało się połączyć z serwerem MCP. Czat będzie działał bez DBIS."
+dbis_tools_auth_hint: "(Serwer zwrócił 401 Unauthorized—sprawdź dane logowania MCP.)"
+thinking: "Myślę…"
+rate_limited: "Przekraczamy limity. Spróbuj ponownie za chwilę."
+connection_error: "❌ Błąd połączenia z OpenAI: {error}"
+response_missing: "Tym razem nie udało się wygenerować odpowiedzi."
+api_key_required_title: "🔑 **Wymagany klucz API OpenAI**"
+api_key_required_body: |
+  Dodaj swój klucz API OpenAI w ustawieniach Streamlit Cloud:
+
+  1. Wejdź w ustawienia aplikacji w Streamlit Cloud
+  2. Dodaj ten secret:
+     ```
+     OPENAI_API_KEY = "your-openai-api-key-here"
+     ```
+  3. Pobierz klucz API z [OpenAI Platform](https://platform.openai.com/api-keys)
+  4. Wdróż aplikację ponownie
+
+  Aplikacja nie zadziała bez klucza API.
+db_config_title: "🔧 **Wymagana konfiguracja bazy danych**"
+db_config_body: |
+  Aby uzyskać pełną funkcjonalność, skonfiguruj bazę danych PostgreSQL:
+
+  1. Utwórz bazę PostgreSQL w chmurze
+     Darmowe opcje:
+     - [Neon.tech](https://neon.tech) - 500MB gratis, serverless PostgreSQL
+     - [Supabase](https://supabase.com) - 500MB gratis, funkcje realtime
+     - [ElephantSQL](https://elephantsql.com) - 20MB gratis („Tiny Turtle”)
+     - [Railway](https://railway.app) - PostgreSQL z darmowym planem
+  2. Dodaj dane dostępowe w ustawieniach Streamlit Cloud:
+     ```
+     [postgres]
+     host = "your-postgres-host"
+     port = "5432"
+     database = "your-database-name"
+     user = "your-username"
+     password = "your-password"
+     ```
+  3. Ponownie uruchom aplikację
+
+  Czat zadziała bez bazy, ale logowanie i funkcje administracyjne będą wyłączone.
+db_init_failed: "Inicjalizacja bazy danych nie powiodła się: {error}"
+db_limited_warning: "Aplikacja może działać w ograniczonym trybie bez dostępu do bazy."
+db_default_prompt_warning: "Używam domyślnego promptu z powodu problemów z bazą danych. Błąd: {error}"
+status_web_searching: "Szukam w sieci…"
+status_web_done: "Wyszukiwanie w sieci zakończone…"
+status_kb_searching: "Przeszukuję bazę wiedzy…"
+status_kb_done: "Przeszukiwanie bazy wiedzy zakończone…"
+status_generating: "Tworzę odpowiedź…"
+status_generated: "Generowanie odpowiedzi zakończone"
+status_tool_use: "Użycie narzędzia {name}"
+status_tool_use_prefix: "Użycie narzędzia"
+status_tool_use_start: "uruchamiam"
+status_tool_use_progress: "w toku"
+status_tool_use_done: "zakończone"
+status_tool_use_failed: "nie powiodło się"
+status_starting: "Startuję…"
+sidebar_chat: "Asystent czatu"
+sidebar_save_chat: "Zapisz czat"
+sidebar_save_chat_help: "Pobierz bieżącą rozmowę jako Markdown."
+sidebar_new_chat: "Nowy czat"
+sidebar_new_chat_help: "Rozpocznij nową sesję"
+sidebar_debug: "Debug"
+sidebar_debug_help: "Pokazuje final.model_dump() przy kolejnej odpowiedzi."
+sidebar_authenticated: "Zalogowano jako administrator."
+sidebar_logs: "Logi i analiza"
+sidebar_scrape: "Indeksowanie treści"
+sidebar_vector: "Magazyn wektorów"
+sidebar_settings: "Ustawienia"
+sidebar_logout: "Wyloguj"
+sidebar_admin_login: "Logowanie administratora"
+sidebar_source: "Kod źródłowy na [GitHub](https://github.com/jmiba/ai-service-chatbot)"

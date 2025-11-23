@@ -1,0 +1,81 @@
+language_label: "Sprache"
+chatbot_title: "Viadrina Bibliotheksassistent"
+chat_input_placeholder: "Stell mir bibliotheksbezogene Fragen in jeder Sprache ..."
+references: "Quellen"
+vector_store_missing: "VECTOR_STORE_ID fehlt in den Streamlit-Secrets. Bitte hinzufügen, um die Dateisuche zu nutzen."
+dbis_mcp_disabled_base: "⚠️ DBIS MCP ist für diese Sitzung deaktiviert:"
+dbis_mcp_reason_unauthorized: "Server antwortete mit 401/403 (DBIS_MCP_AUTHORIZATION/DBIS_MCP_HEADERS prüfen)."
+dbis_mcp_reason_server_error: "Serverfehler ({status_code})."
+dbis_mcp_reason_unreachable: "Server ist nicht erreichbar."
+dbis_tools_temporarily_disabled: "⚠️ DBIS-Tools sind vorübergehend deaktiviert, weil der MCP-Server nicht erreicht werden konnte. Der Chat läuft ohne DBIS weiter."
+dbis_tools_auth_hint: "(Server meldete 401 Unauthorized—bitte MCP-Zugangsdaten prüfen.)"
+thinking: "Denke nach…"
+rate_limited: "Wir werden gerade gedrosselt. Bitte versuche es gleich noch einmal."
+connection_error: "❌ OpenAI-Verbindungsfehler: {error}"
+response_missing: "Diesmal konnte ich keine Antwort erzeugen."
+api_key_required_title: "🔑 **OpenAI-API-Schlüssel erforderlich**"
+api_key_required_body: |
+  Bitte füge deinen OpenAI-API-Schlüssel in den Streamlit-Cloud-Einstellungen hinzu:
+
+  1. Gehe in den App-Einstellungen auf Streamlit Cloud
+  2. Füge dieses Secret hinzu:
+     ```
+     OPENAI_API_KEY = "your-openai-api-key-here"
+     ```
+  3. Hole dir einen API-Schlüssel auf der [OpenAI Platform](https://platform.openai.com/api-keys)
+  4. Deploy die App neu
+
+  Ohne API-Schlüssel funktioniert die App nicht.
+db_config_title: "🔧 **Datenbankkonfiguration erforderlich**"
+db_config_body: |
+  Für den vollen Funktionsumfang richte bitte eine PostgreSQL-Datenbank ein:
+
+  1. Richte eine Cloud-PostgreSQL-Datenbank ein
+     Kostenlose Optionen:
+     - [Neon.tech](https://neon.tech) - 500MB frei, serverloses PostgreSQL
+     - [Supabase](https://supabase.com) - 500MB frei, inkl. Realtime
+     - [ElephantSQL](https://elephantsql.com) - 20MB frei ("Tiny Turtle")
+     - [Railway](https://railway.app) - PostgreSQL mit Free-Tarif
+  2. Trage die Datenbank-Secrets in den Streamlit-Cloud-Einstellungen ein:
+     ```
+     [postgres]
+     host = "your-postgres-host"
+     port = "5432"
+     database = "your-database-name"
+     user = "your-username"
+     password = "your-password"
+     ```
+  3. Starte die App neu
+
+  Die Chat-Funktion läuft auch ohne DB, aber Logging und Admin-Funktionen sind deaktiviert.
+db_init_failed: "Datenbank-Initialisierung fehlgeschlagen: {error}"
+db_limited_warning: "Die App hat möglicherweise eingeschränkte Funktionen ohne Datenbankzugang."
+db_default_prompt_warning: "Verwende Standard-Prompt wegen Datenbankproblemen. Fehler: {error}"
+status_web_searching: "Suche im Web…"
+status_web_done: "Websuche abgeschlossen…"
+status_kb_searching: "Durchsuche die Wissensbasis…"
+status_kb_done: "Wissensbasis durchsucht…"
+status_generating: "Erzeuge Antwort…"
+status_generated: "Antwort fertiggestellt"
+status_tool_use: "Werkzeugausführung {name}"
+status_tool_use_prefix: "Werkzeugausführung"
+status_tool_use_start: "startet"
+status_tool_use_progress: "läuft"
+status_tool_use_done: "abgeschlossen"
+status_tool_use_failed: "fehlgeschlagen"
+status_starting: "Starte…"
+sidebar_chat: "Chat-Assistent"
+sidebar_save_chat: "Chat speichern"
+sidebar_save_chat_help: "Lade den aktuellen Chat als Markdown herunter."
+sidebar_new_chat: "Neuer Chat"
+sidebar_new_chat_help: "Eine neue Sitzung beginnen"
+sidebar_debug: "Debug"
+sidebar_debug_help: "Zeigt final.model_dump() bei der nächsten Antwort."
+sidebar_authenticated: "Als Admin angemeldet."
+sidebar_logs: "Logs & Analytics"
+sidebar_scrape: "Inhalts-Indexierung"
+sidebar_vector: "Vektorspeicher"
+sidebar_settings: "Einstellungen"
+sidebar_logout: "Abmelden"
+sidebar_admin_login: "Admin-Login"
+sidebar_source: "Quellcode auf [GitHub](https://github.com/jmiba/ai-service-chatbot)"
