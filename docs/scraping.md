@@ -2,12 +2,12 @@
 
 This summarizes the scraping stack after the recent refactor, focusing on how to run it, what state it keeps, and where to change things.
 
-## Components
+- `scrape/config.py`: shared prompt loader `load_summarize_prompts()` (reads `.streamlit/prompts.json`).
 - `scrape/settings.py`: `ScrapeSettings` (max depth, budget, filters, headers) and `build_headers(admin_email)`.
 - `scrape/state.py`: `CrawlerState` dataclass (visited sets, counters, per-recordset URLs, collected LLM results) with `reset()`.
 - `scrape/core.py`: BFS crawler + LLM summarization + DB write. Accepts `state` and `headers` so callers control dedupe scope and UA.
 - `scripts/cli_scrape.py`: CLI runner that loads secrets, builds headers, instantiates a per-run `CrawlerState`, runs configs with global dedupe, writes JSONL log to `logs/scrape-run.jsonl`.
-- `pages/scrape.py`: Streamlit UI; should call the CLI or the core with an explicit `CrawlerState` and settings.
+- `pages/scrape.py`: Streamlit UI; now uses the shared prompt loader. Should call the CLI or the core with an explicit `CrawlerState` and settings.
 
 ## Dedupe scope
 - Per run, global across all URL configs. The same `CrawlerState` is reused for the entire run, so a normalized URL is crawled at most once per run.
@@ -31,14 +31,13 @@ This summarizes the scraping stack after the recent refactor, focusing on how to
 - UI can pass a log callback or wire its own logger; core logging is lightweight and non-fatal.
 
 ## Secrets/config
-- Core no longer should read `st.secrets` directly. Callers (CLI/UI) should load secrets, build headers via `build_headers(admin_email)`, load prompts, and pass settings/state into `scrape()`.
-- Prompts are still in `.streamlit/prompts.json`; consider moving that load into a dedicated config helper.
+- Core shouldn’t read `st.secrets` directly. Callers (CLI/UI) should load secrets, build headers via `build_headers(admin_email)`, load prompts via `load_summarize_prompts()`, and pass settings/state into `scrape()`.
+- Prompts live in `.streamlit/prompts.json` under the `summarize_and_tag` object with `system`/`user` strings. Shared loader is in `scrape/config.py`.
 
 ## How to run
 - CLI: `python3 scripts/cli_scrape.py --dry-run --budget 5000 --mode all`
 - UI: use the Streamlit page; ensure it passes a fresh `CrawlerState` per run and settings built from UI inputs.
 
 ## Next simplifications (optional)
-- Move prompt loading out of `core.py` into `scrape/config.py`.
 - Split `core.py` into smaller modules (`normalize`, `fetch`, `extract`, `persist`, `logging`) and import them in a thin runner.
 - Standardize logging on `logging.Logger` with a JSONL handler instead of bespoke writer.
