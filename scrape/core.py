@@ -20,6 +20,8 @@ from scrape.state import CrawlerState
 from scrape.settings import build_headers, ScrapeSettings
 from scrape.config import load_summarize_prompts
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 PROMPT_LOAD_ERROR = None
 try:
     SUMMARIZE_SYSTEM_PROMPT, SUMMARIZE_USER_TEMPLATE = load_summarize_prompts()
