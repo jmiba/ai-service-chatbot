@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import json, re, html, os
+import yaml
 from urllib.parse import quote_plus
 import psycopg2
 from functools import lru_cache
@@ -42,6 +43,62 @@ def _headers_cache_fingerprint(h: dict | None) -> str:
 
 # Global OpenAI client placeholder (set later after loading API key)
 client: OpenAI | None = None
+
+BASE_DIR = Path(__file__).parent
+LOCALES_DIR = BASE_DIR / "locales"
+SUPPORTED_LANGUAGES = {
+    "en": "English",
+    "de": "Deutsch",
+    "pl": "Polski",
+}
+DEFAULT_LANGUAGE = "de"
+
+@st.cache_resource(show_spinner=False)
+def _load_translations() -> dict[str, dict[str, str]]:
+    translations: dict[str, dict[str, str]] = {}
+    for code in SUPPORTED_LANGUAGES:
+        try:
+            with (LOCALES_DIR / f"{code}.yaml").open("r", encoding="utf-8") as f:
+                translations[code] = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            translations[code] = {}
+    return translations
+
+TRANSLATIONS = _load_translations()
+
+def _init_language() -> str:
+    """Bootstrap language selection from query params or default."""
+    param_lang = st.query_params.get("lang")
+    if isinstance(param_lang, list):
+        param_lang = param_lang[0]
+
+    if not param_lang:
+        param_lang = DEFAULT_LANGUAGE
+
+    # Persist language in session (fallback to default if unsupported)
+    if "lang" not in st.session_state:
+        st.session_state["lang"] = param_lang if param_lang in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
+    elif param_lang in SUPPORTED_LANGUAGES and param_lang != st.session_state.get("lang"):
+        st.session_state["lang"] = param_lang
+
+    lang = st.session_state.get("lang", DEFAULT_LANGUAGE)
+    if lang not in SUPPORTED_LANGUAGES:
+        lang = DEFAULT_LANGUAGE
+        st.session_state["lang"] = lang
+    if st.query_params.get("lang") != lang:
+        st.query_params["lang"] = lang
+    return lang
+
+def t(key: str, **kwargs) -> str:
+    """Translate key using current language with fallback to English."""
+    lang = st.session_state.get("lang", DEFAULT_LANGUAGE)
+    text = TRANSLATIONS.get(lang, {}).get(key) or TRANSLATIONS.get(DEFAULT_LANGUAGE, {}).get(key, key)
+    if kwargs:
+        try:
+            text = text.format(**kwargs)
+        except Exception:
+            pass
+    return text
 
 def _mcp_preflight(url: str, headers: dict | None, authorization: str | None, timeout_s: float = 3.0) -> tuple[bool, str | None]:
     """Quick reachability/auth check for MCP server URL with caching.
@@ -120,6 +177,7 @@ from utils import (
 # -------------------------------------
 
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
+_init_language()
 
 
 DBIS_MCP_SERVER_LABEL = "dbis"
@@ -332,7 +390,6 @@ debug_one, save_chat_slot = render_sidebar(
     show_save_chat=True,
 )
 
-BASE_DIR = Path(__file__).parent
 PROMPT_CONFIG_PATH = BASE_DIR / ".streamlit" / "prompts.json"
 
 
@@ -976,25 +1033,37 @@ def human_event_label(event):
     name = (getattr(event, "name", None) or getattr(event, "tool", None) or "").lower()
     if "web_search" in et or "web_search" in name or "web_search" in str(getattr(event, "action", "")).lower():
         if "start" in et or et.endswith("_start") or ".start" in et:
-            return "Searching the web…"
+            return t("status_web_searching")
         if "complete" in et or et.endswith("_complete") or ".complete" in et:
-            return "Web search completed…"
-        return "Searching the web…"
+            return t("status_web_done")
+        return t("status_web_searching")
     if "file_search" in et or "file_search" in name or "file_search" in str(getattr(event, "queries", "")).lower():
         if "start" in et or et.endswith("_start") or ".start" in et:
-            return "Searching my knowledge base…"
+            return t("status_kb_searching")
         if "complete" in et or et.endswith("_complete") or ".complete" in et:
-            return "Knowledge base search completed…"
-        return "Searching my knowledge base…"
+            return t("status_kb_done")
+        return t("status_kb_searching")
     if "tool_call" in et or et.endswith("_call") or "tool" in et:
         short = et.split(".")[-1] if "." in et else et
-        return f"Tool use {short.replace('_', ' ')}"
+        phase_raw = short.replace("_", " ").lower().strip()
+        phase_label = None
+        if any(k in phase_raw for k in ("start", "begin")):
+            phase_label = t("status_tool_use_start")
+        elif any(k in phase_raw for k in ("progress", "progressing", "working", "running")):
+            phase_label = t("status_tool_use_progress")
+        elif any(k in phase_raw for k in ("complete", "done", "finish", "success")):
+            phase_label = t("status_tool_use_done")
+        elif any(k in phase_raw for k in ("fail", "error")):
+            phase_label = t("status_tool_use_failed")
+        if not phase_label:
+            phase_label = t("status_tool_use_progress")
+        return f"{t('status_tool_use_prefix')} {phase_label}".strip()
     if et.startswith("response.output_text"):
         if et.endswith("start"):
-            return "Generating response…"
+            return t("status_generating")
         if et.endswith("complete"):
-            return "Response generation finished"
-        return "Generating response…"
+            return t("status_generated")
+        return t("status_generating")
     return None
 
 # ---------- Helpers to robustly read final.output (dicts or objects) ----------
@@ -1083,7 +1152,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
       - logs to DB
     """
     if "VECTOR_STORE_ID" not in st.secrets:
-        st.error("Missing VECTOR_STORE_ID in Streamlit secrets. Please add it to run File Search.")
+        st.error(t("vector_store_missing"))
         st.stop()
 
     # Build tools with optional web_search based on settings
@@ -1165,13 +1234,14 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         ok, reason = _mcp_preflight(dbis_mcp_url, dbis_mcp_headers, dbis_mcp_auth)
         if not ok:
             st.session_state["dbis_mcp_disabled"] = True
-            warn = "⚠️ DBIS MCP is disabled for this session: "
+            warn_parts = [t("dbis_mcp_disabled_base")]
             if reason == "unauthorized":
-                warn += "server responded with 401/403 (check DBIS_MCP_AUTHORIZATION/DBIS_MCP_HEADERS)."
+                warn_parts.append(t("dbis_mcp_reason_unauthorized"))
             elif reason and reason.startswith("server-error"):
-                warn += f"server error ({reason.split('-')[-1]})."
+                warn_parts.append(t("dbis_mcp_reason_server_error", status_code=reason.split("-")[-1]))
             else:
-                warn += "server is unreachable."
+                warn_parts.append(t("dbis_mcp_reason_unreachable"))
+            warn = " ".join(warn_parts)
             try:
                 st.warning(warn)
             except Exception:
@@ -1342,7 +1412,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             with col_status:
                 status_placeholder = st.empty()
                 try:
-                    status_placeholder.markdown("_Starting…_")
+                    status_placeholder.markdown(f"_{t('status_starting')}_")
                 except Exception:
                     pass
         
@@ -1388,15 +1458,16 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     try:
                         label = human_event_label(event)
                         tool_labels = {
-                            "Tool use": True,
+                            t("status_tool_use_prefix"): True,
                         }
                         allowed_labels = {
-                            "Searching the web…",
-                            "Web search completed…",
-                            "Searching my knowledge base…",
-                            "Knowledge base search completed…",
-                            "Generating answer…",
-                            "Answer generation finished",
+                            t("status_web_searching"),
+                            t("status_web_done"),
+                            t("status_kb_searching"),
+                            t("status_kb_done"),
+                            t("status_generating"),
+                            t("status_generated"),
+                            t("status_tool_use_prefix"),
                         }
                         if label and (debug_one or label in allowed_labels or any(label.startswith(prefix) for prefix in tool_labels)):
                             try:
@@ -1451,12 +1522,9 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
             if is_mcp_tool_error:
                 st.session_state["dbis_mcp_disabled"] = True
-                warning_msg = (
-                    "⚠️ DBIS tools are temporarily disabled because the MCP server "
-                    "could not be reached. The chat will continue without DBIS access."
-                )
+                warning_msg = t("dbis_tools_temporarily_disabled")
                 if auth_error:
-                    warning_msg += " (Server responded with 401 Unauthorized—check MCP credentials.)"
+                    warning_msg += " " + t("dbis_tools_auth_hint")
                 try:
                     st.warning(warning_msg)
                 except Exception:
@@ -1483,7 +1551,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
             if isinstance(e, (BadRequestError, APIError)):
                 # Fallback: non-streaming request rendered inside same bubble
-                with st.spinner("Thinking…"):
+                with st.spinner(t("thinking")):
                     # Get current LLM configuration from database
                     if fallback_api_params is None:
                         llm_config = get_current_llm_config()
@@ -1504,10 +1572,10 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                     buf = _get_attr(final, "output_text", "") or ""
                     content_placeholder.markdown(buf, unsafe_allow_html=True)
             elif isinstance(e, RateLimitError):
-                st.error("We’re being rate-limited right now. Please try again in a moment.")
+                st.error(t("rate_limited"))
                 return
             else:
-                st.error(f"❌ OpenAI connection error: {e}")
+                st.error(t("connection_error", error=e))
                 return
 
         finally:
@@ -1524,7 +1592,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
         # --- Post-process final for citations & re-render ---
         if not final:
-            st.warning("I couldn’t generate a response this time.")
+            st.warning(t("response_missing"))
             return
 
         response_text = _get_attr(final, "output_text", "") or buf
@@ -1825,7 +1893,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         # Overwrite the streamed text in the SAME bubble with the enriched version
         content_placeholder.markdown(rendered, unsafe_allow_html=True)
         if sources_md:
-            with st.expander("References", icon=":material/info:", expanded=False):
+            with st.expander(t("references"), icon=":material/info:", expanded=False):
                 st.markdown(sources_md, unsafe_allow_html=True)
 
         # --- Optional debug dump of final (sidebar toggle) ---
@@ -2043,22 +2111,8 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 try:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])  # type: ignore[assignment]
 except KeyError:
-    st.error("🔑 **OpenAI API Key Required**")
-    st.info(
-        """
-        Please add your OpenAI API key to Streamlit Cloud settings:
-        
-        1. **Go to your app settings** in Streamlit Cloud
-        2. **Add this secret**:
-           ```
-           OPENAI_API_KEY = "your-openai-api-key-here"
-           ```
-        3. **Get an API key** from [OpenAI Platform](https://platform.openai.com/api-keys)
-        4. **Redeploy the app**
-        
-        The app cannot function without an OpenAI API key.
-        """
-    )
+    st.error(t("api_key_required_title"))
+    st.info(t("api_key_required_body"))
     st.stop()
 
 dbis_cmd = st.secrets.get(DBIS_MCP_ENV_KEY)
@@ -2121,31 +2175,8 @@ try:
         #print("✅ Database initialization completed successfully.")
     else:
         # Show database configuration instructions when no database is available
-        st.warning("🔧 **Database Configuration Needed**")
-        st.info(
-            """
-        To enable full functionality, please configure a PostgreSQL database:
-        
-        1. **Create a cloud PostgreSQL database**
-            Free Cloud PostgreSQL Options:
-            - [Neon.tech](https://neon.tech) - 500MB free, serverless PostgreSQL
-            - [Supabase](https://supabase.com) - 500MB free, includes real-time features
-            - [ElephantSQL](https://elephantsql.com) - 20MB free "Tiny Turtle" plan
-            - [Railway](https://railway.app) - PostgreSQL with free tier
-        2. **Add database secrets** in Streamlit Cloud settings:
-           ```
-           [postgres]
-           host = "your-postgres-host"
-           port = "5432"
-           database = "your-database-name"
-           user = "your-username"
-           password = "your-password"
-           ```
-        3. **Redeploy the app**
-        
-        The chat functionality will work without database, but logging and admin features will be disabled.
-        """
-        )
+        st.warning(t("db_config_title"))
+        st.info(t("db_config_body"))
         print("⚠️ Database not available. Continuing without database functionality.")
 except Exception as e:
     error_str = str(e)
@@ -2153,29 +2184,11 @@ except Exception as e:
     if ("localhost" in error_str or "127.0.0.1" in error_str or 
         "postgres" in error_str or "Missing PostgreSQL" in error_str or
         ("KeyError" in error_str and "postgres" in error_str.lower())):
-        st.warning("🔧 **Database Configuration Needed**")
-        st.info(
-            """
-        To enable full functionality, please configure a PostgreSQL database:
-        
-        1. **Create a cloud PostgreSQL database** (e.g., Neon.tech, Supabase, or ElephantSQL)
-        2. **Add database secrets** in Streamlit Cloud settings:
-           ```
-           [postgres]
-           host = "your-postgres-host"
-           port = "5432"
-           database = "your-database-name"
-           user = "your-username"
-           password = "your-password"
-           ```
-        3. **Redeploy the app**
-        
-        The chat functionality will work without database, but logging and admin features will be disabled.
-        """
-        )
+        st.warning(t("db_config_title"))
+        st.info(t("db_config_body"))
     else:
-        st.error(f"Database initialization failed: {e}")
-        st.warning("The app may have limited functionality without database access.")
+        st.error(t("db_init_failed", error=e))
+        st.warning(t("db_limited_warning"))
 
 berlin_time = datetime.now(ZoneInfo("Europe/Berlin"))
 formatted_time = berlin_time.strftime("%A, %Y-%m-%d %H:%M:%S %Z")
@@ -2198,7 +2211,7 @@ if database_available:
         current_prompt, _ = get_latest_prompt()
         CUSTOM_INSTRUCTIONS = _format_prompt(current_prompt, datetime=formatted_time, doc_count=doc_count)
     except Exception as e:
-        st.warning("Using default prompt due to database connection issues. Error: " + str(e))
+        st.warning(t("db_default_prompt_warning", error=str(e)))
         CUSTOM_INSTRUCTIONS = _format_prompt(DEFAULT_PROMPT, datetime=formatted_time)
 else:
     # Use default prompt when database is not available
@@ -2209,7 +2222,7 @@ col1, col2 = st.columns([3, 3])
 with col1:
     st.image(BASE_DIR / "assets/viadrina-ub-logo.png", width=300)
 with col2:
-       st.markdown('<div id="chatbot-title"><h1>Viadrina Library Assistant</h1></div>', unsafe_allow_html=True)
+    st.markdown(f'<div id="chatbot-title"><h1>{t("chatbot_title")}</h1></div>', unsafe_allow_html=True)
 st.markdown('<div id="special-hr"><hr></div>', unsafe_allow_html=True)
 
 # replay chat history
@@ -2231,13 +2244,13 @@ for msg in st.session_state.messages:
             with st.chat_message("assistant", avatar= AVATAR_ASSISTANT):
                 st.markdown(msg["rendered"], unsafe_allow_html=True)
                 if msg.get("sources"):
-                    with st.expander("References", icon=":material/info:", expanded=False):
+                    with st.expander(t("references"), icon=":material/info:", expanded=False):
                         st.markdown(msg["sources"], unsafe_allow_html=True)
         else:
             st.chat_message("assistant", avatar= AVATAR_ASSISTANT).markdown(msg["content"])
 
 # main input
-user_input = st.chat_input("Ask me library-related questions in any language ...")
+user_input = st.chat_input(t("chat_input_placeholder"))
 if user_input:
     st.chat_message("user", avatar= AVATAR_USER).markdown(user_input)
     st.session_state.messages.append({"role": "user", "content": user_input})
