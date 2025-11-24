@@ -6,6 +6,7 @@ services:
     volumes:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
+      - /home/chatbot/app/logs:/app/logs
     restart: unless-stopped
     ports:
       - "8501:8501"
@@ -21,6 +22,7 @@ services:
     volumes:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
+      - /home/chatbot/app/logs:/app/logs
     entrypoint: ["python", "scripts/cli_scrape.py"]
     command: ["--mode", "all"]
     environment:
