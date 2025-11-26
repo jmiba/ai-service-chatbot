@@ -1077,9 +1077,10 @@ def render_sidebar(
         ):
             st.session_state.pop(key, None)
     
-
     # Debug checkbox right beneath chat assistant (only on main page when authenticated)
     debug_one = False
+    # Disclaimer
+    st.sidebar.caption(t_sidebar("sidebar_disclaimer")) 
     if authenticated and show_debug:
         debug_one = st.sidebar.checkbox(t_sidebar("sidebar_debug"), value=False, 
                                        help=t_sidebar("sidebar_debug_help"))
