@@ -1191,12 +1191,12 @@ def render_sidebar(
         
         st.sidebar.button(t_sidebar("sidebar_logout"), on_click=_perform_logout, icon=":material/logout:")
         with st.sidebar.container(key="sidebar_bottom"):
-            version_prefix = f"v{version} | " if version else ""
+            version_prefix = f"v{version.strip()} | " if version else ""
             st.caption(f"{version_prefix}{t_sidebar('sidebar_source')}")
     else:
         with st.sidebar.container(key="sidebar_bottom"):
             st.page_link("pages/logs.py", label=t_sidebar("sidebar_admin_login"), icon=":material/key:")
-            version_prefix = f"v{version} | " if version else ""
+            version_prefix = f"v{version.strip()} | " if version else ""
             st.caption(f"{version_prefix}{t_sidebar('sidebar_source')}")
         
     
