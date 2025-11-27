@@ -1,7 +1,7 @@
 {
   "E00": {
     "label": "Question",
-    "description": "Information-seeking or help-requesting tone. Esample: 'When does the reading room open?",
+    "description": "Information-seeking or help-requesting tone. Example: 'When does the reading room open?",
     "sentiment": "wants to know"
   },
   "E01": {
