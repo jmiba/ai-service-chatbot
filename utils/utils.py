@@ -1106,6 +1106,7 @@ def render_sidebar(
     show_debug=False,
     show_new_chat=False,
     show_save_chat=False,
+    version=None,
 ):
     """
     Renders common sidebar elements.
@@ -1190,10 +1191,14 @@ def render_sidebar(
         
         st.sidebar.button(t_sidebar("sidebar_logout"), on_click=_perform_logout, icon=":material/logout:")
         with st.sidebar.container(key="sidebar_bottom"):
+            if version:
+                st.caption(f"v{version}")
             st.caption(t_sidebar("sidebar_source"))
     else:
         with st.sidebar.container(key="sidebar_bottom"):
             st.page_link("pages/logs.py", label=t_sidebar("sidebar_admin_login"), icon=":material/key:")
+            if version:
+                st.caption(f"v{version}")
             st.caption(t_sidebar("sidebar_source"))
         
     

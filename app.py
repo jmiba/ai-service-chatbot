@@ -200,6 +200,12 @@ from app_modules import (
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
 _init_language()
 
+# Read version from VERSION file (auto-tagged on commit)
+try:
+    __version__ = (BASE_DIR / "VERSION").read_text().strip()
+except FileNotFoundError:
+    __version__ = "dev"
+
 
 DBIS_MCP_SERVER_LABEL = "dbis"
 DBIS_MCP_ENV_KEY = f"OPENAI_MCP_SERVER_{DBIS_MCP_SERVER_LABEL.upper()}"
@@ -409,6 +415,7 @@ debug_one, save_chat_slot = render_sidebar(
     show_debug=True,
     show_new_chat=True,
     show_save_chat=True,
+    version=__version__,
 )
 
 PROMPT_CONFIG_PATH = BASE_DIR / ".streamlit" / "prompts.json"
