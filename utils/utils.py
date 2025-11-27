@@ -1191,15 +1191,13 @@ def render_sidebar(
         
         st.sidebar.button(t_sidebar("sidebar_logout"), on_click=_perform_logout, icon=":material/logout:")
         with st.sidebar.container(key="sidebar_bottom"):
-            if version:
-                st.caption(f"v{version}")
-            st.caption(t_sidebar("sidebar_source"))
+            version_prefix = f"v{version} | " if version else ""
+            st.caption(f"{version_prefix}{t_sidebar('sidebar_source')}")
     else:
         with st.sidebar.container(key="sidebar_bottom"):
             st.page_link("pages/logs.py", label=t_sidebar("sidebar_admin_login"), icon=":material/key:")
-            if version:
-                st.caption(f"v{version}")
-            st.caption(t_sidebar("sidebar_source"))
+            version_prefix = f"v{version} | " if version else ""
+            st.caption(f"{version_prefix}{t_sidebar('sidebar_source')}")
         
     
     return debug_one, save_chat_slot
