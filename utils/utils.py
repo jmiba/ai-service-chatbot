@@ -1108,6 +1108,12 @@ def render_sidebar(
     show_save_chat=False,
     version=None,
 ):
+    # Auto-load version if not provided
+    if version is None:
+        try:
+            version = (BASE_DIR / "VERSION").read_text().strip()
+        except FileNotFoundError:
+            version = None
     """
     Renders common sidebar elements.
     Args:
