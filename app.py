@@ -174,6 +174,27 @@ from utils import (
     format_request_type_legend,
 )
 
+# Import refactored modules (consolidates duplicate helper functions)
+from app_modules import (
+    get_attr as _get_attr,
+    safe_output_text as _safe_output_text,
+    humanize_debug_text as _humanize_debug_text,
+    extract_output_json as _extract_output_json,
+    extract_first_json_object as _extract_first_json_object,
+    get_usage_from_final as _get_usage_from_final,
+    coerce_text_part,
+    iter_content_items as _iter_content_items,
+    iter_content_parts as _iter_content_parts,
+    build_eval_response_format as _build_eval_response_format,
+    format_prompt as _format_prompt,
+    extract_citations_from_annotations_response_dict,
+    render_with_citations_by_index,
+    render_sources_list,
+    replace_filecite_markers_with_sup,
+    strip_markdown_links_preserve_md as _strip_markdown_links_preserve_md,
+    trim_separator_artifacts as _trim_separator_artifacts,
+)
+
 # -------------------------------------
 
 st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
@@ -2151,6 +2172,12 @@ def _ensure_db_initialized(default_prompt_value: str) -> bool:
 # Helper function to get current LLM configuration
 def get_current_llm_config():
     """Get current LLM settings from database with fallback to defaults"""
+    defaults = {
+        'model': st.secrets.get("MODEL", "gpt-4o-mini"),
+        'parallel_tool_calls': True,
+        'reasoning_effort': 'medium',
+        'text_verbosity': 'medium'
+    }
     try:
         settings = get_llm_settings()
         return {
@@ -2159,14 +2186,14 @@ def get_current_llm_config():
             'reasoning_effort': settings.get('reasoning_effort', 'medium'),
             'text_verbosity': settings.get('text_verbosity', 'medium')
         }
-    except Exception:
-        # Fallback to defaults if database not available
-        return {
-            'model': st.secrets.get("MODEL", "gpt-4o-mini"),
-            'parallel_tool_calls': True,
-            'reasoning_effort': 'medium',
-            'text_verbosity': 'medium'
-        }
+    except (psycopg2.Error, KeyError, TypeError) as e:
+        # Log specific database/config errors and use defaults
+        print(f"⚠️ Could not load LLM config from database: {type(e).__name__}: {e}")
+        return defaults
+    except Exception as e:
+        # Unexpected error - log but don't crash
+        print(f"⚠️ Unexpected error loading LLM config: {type(e).__name__}: {e}")
+        return defaults
 
 # Initialize database and tables
 database_available = False

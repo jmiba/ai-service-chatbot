@@ -3,19 +3,29 @@ FROM python:3.13-slim-bookworm
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y \
+    && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
-        software-properties-common \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONIOENCODING=UTF-8
+    PYTHONIOENCODING=UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1
 
-COPY . .
+# Copy requirements first for better layer caching
+COPY requirements.txt .
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
 
-RUN python -m pip install --upgrade pip \
-    && pip install -r requirements.txt
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash appuser
+
+# Copy application code
+COPY --chown=appuser:appuser . .
+
+# Switch to non-root user
+USER appuser
 
 EXPOSE 8501
 

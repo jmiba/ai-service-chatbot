@@ -1,4 +1,5 @@
 import psycopg2
+from psycopg2 import pool as pg_pool
 import streamlit as st
 import hashlib
 from pathlib import Path
@@ -6,7 +7,9 @@ import json
 import yaml
 from functools import lru_cache
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+import hmac
+import time
 import base64
 import re
 import html
@@ -34,6 +37,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 LOCALES_DIR = BASE_DIR / "locales"
 SUPPORTED_LANGUAGES = {"en", "de", "pl"}
 DEFAULT_LANGUAGE = "de"
+
+# Rate limiting for password authentication
+_AUTH_MAX_ATTEMPTS = 5  # Maximum failed attempts before lockout
+_AUTH_LOCKOUT_SECONDS = 300  # 5 minute lockout period
 
 @lru_cache(maxsize=1)
 def _load_translations() -> dict[str, dict[str, str]]:
@@ -462,20 +469,75 @@ def estimate_cost_usd(model: str, input_tokens: int = 0, output_tokens: int = 0)
     cost = (input_tokens / 1000.0) * p.get("input", 0.0) + (output_tokens / 1000.0) * p.get("output", 0.0)
     return round(cost, 6)
 
-# Function to get a connection to the Postgres database
+# Database connection pool for better performance
+_connection_pool = None
+_pool_lock = None
+
+def _get_pool_lock():
+    """Get or create the pool lock (thread-safe singleton)."""
+    global _pool_lock
+    if _pool_lock is None:
+        import threading
+        _pool_lock = threading.Lock()
+    return _pool_lock
+
+def _get_connection_pool():
+    """Get or create the database connection pool."""
+    global _connection_pool
+    if _connection_pool is None:
+        with _get_pool_lock():
+            # Double-check after acquiring lock
+            if _connection_pool is None:
+                try:
+                    _connection_pool = pg_pool.ThreadedConnectionPool(
+                        minconn=1,
+                        maxconn=10,
+                        host=st.secrets["postgres"]["host"],
+                        port=st.secrets["postgres"]["port"],
+                        user=st.secrets["postgres"]["user"],
+                        password=st.secrets["postgres"]["password"],
+                        dbname=st.secrets["postgres"]["database"]
+                    )
+                except KeyError as e:
+                    raise ConnectionError(f"Missing PostgreSQL configuration: {e}")
+                except psycopg2.OperationalError as e:
+                    raise ConnectionError(f"Cannot connect to PostgreSQL database: {e}")
+    return _connection_pool
+
 def get_connection():
+    """Get a connection from the pool. Remember to return it with return_connection()."""
     try:
-        return psycopg2.connect(
-            host=st.secrets["postgres"]["host"],
-            port=st.secrets["postgres"]["port"],
-            user=st.secrets["postgres"]["user"],
-            password=st.secrets["postgres"]["password"],
-            dbname=st.secrets["postgres"]["database"]
-        )
-    except KeyError as e:
-        raise ConnectionError(f"Missing PostgreSQL configuration: {e}")
-    except psycopg2.OperationalError as e:
-        raise ConnectionError(f"Cannot connect to PostgreSQL database: {e}")
+        pool = _get_connection_pool()
+        return pool.getconn()
+    except pg_pool.PoolError:
+        # Pool exhausted, create a direct connection as fallback
+        try:
+            return psycopg2.connect(
+                host=st.secrets["postgres"]["host"],
+                port=st.secrets["postgres"]["port"],
+                user=st.secrets["postgres"]["user"],
+                password=st.secrets["postgres"]["password"],
+                dbname=st.secrets["postgres"]["database"]
+            )
+        except KeyError as e:
+            raise ConnectionError(f"Missing PostgreSQL configuration: {e}")
+        except psycopg2.OperationalError as e:
+            raise ConnectionError(f"Cannot connect to PostgreSQL database: {e}")
+
+def return_connection(conn):
+    """Return a connection to the pool. Safe to call even with non-pooled connections."""
+    global _connection_pool
+    if _connection_pool is not None:
+        try:
+            _connection_pool.putconn(conn)
+            return
+        except Exception:
+            pass
+    # Fallback: just close if not from pool
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 def create_database_if_not_exists():
     """
@@ -1007,12 +1069,34 @@ def admin_authentication(return_to: str | None = None):
             st.markdown("---")
             st.caption("Fallback password login (for emergency use only)")
 
+    # Initialize rate limiting state
+    if "auth_attempts" not in st.session_state:
+        st.session_state.auth_attempts = 0
+        st.session_state.auth_lockout_until = 0
+
+    # Check if currently locked out
+    current_time = time.time()
+    if st.session_state.auth_lockout_until > current_time:
+        remaining = int(st.session_state.auth_lockout_until - current_time)
+        st.error(f"Too many failed attempts. Please wait {remaining} seconds.")
+        return False
+
     password = st.text_input("Admin Password", type="password")
-    if password == st.secrets.get("ADMIN_PASSWORD") and password:
-        st.session_state.authenticated = True
-        _safe_rerun()
-    elif password:
-        st.error("Incorrect password.")
+    if password:
+        expected_password = st.secrets.get("ADMIN_PASSWORD", "")
+        # Use timing-safe comparison to prevent timing attacks
+        if expected_password and hmac.compare_digest(password, expected_password):
+            st.session_state.authenticated = True
+            st.session_state.auth_attempts = 0  # Reset on success
+            _safe_rerun()
+        else:
+            st.session_state.auth_attempts += 1
+            if st.session_state.auth_attempts >= _AUTH_MAX_ATTEMPTS:
+                st.session_state.auth_lockout_until = current_time + _AUTH_LOCKOUT_SECONDS
+                st.error(f"Too many failed attempts. Locked out for {_AUTH_LOCKOUT_SECONDS // 60} minutes.")
+            else:
+                remaining_attempts = _AUTH_MAX_ATTEMPTS - st.session_state.auth_attempts
+                st.error(f"Incorrect password. {remaining_attempts} attempts remaining.")
     return False
 
 

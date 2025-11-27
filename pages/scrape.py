@@ -10,6 +10,7 @@ import uuid
 
 import pandas as pd
 import streamlit as st
+import html
 
 from scrape.core import BASE_DIR
 from scrape.config import load_summarize_prompts
@@ -97,15 +98,15 @@ def render_kb_entry_details(entry: tuple):
 
     meta_lines = []
     if recordset:
-        meta_lines.append(f"**Recordset:** {recordset}")
+        meta_lines.append(f"**Recordset:** {html.escape(str(recordset)) if recordset else '—'}")
     meta_lines.append(f"**Vector status:** {vector_status}")
     if vector_file_id:
-        meta_lines.append(f"**Vector file:** `{vector_file_id}`")
+        meta_lines.append(f"**Vector file:** `{html.escape(str(vector_file_id))}`")
     if crawl_date:
         meta_lines.append(f"**Last crawl:** {crawl_date}")
-    meta_lines.append(f"**Language:** {lang or 'unknown'}")
-    meta_lines.append(f"**Page type:** {page_type or '—'}")
-    meta_lines.append(f"**Tags:** {tags_str}")
+    meta_lines.append(f"**Language:** {html.escape(str(lang)) if lang else 'unknown'}")
+    meta_lines.append(f"**Page type:** {html.escape(str(page_type)) if page_type else '—'}")
+    meta_lines.append(f"**Tags:** {html.escape(tags_str)}")
     st.markdown("<br />".join(meta_lines), unsafe_allow_html=True)
 
     if url:

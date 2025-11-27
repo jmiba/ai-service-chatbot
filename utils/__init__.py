@@ -3,6 +3,7 @@
 # Import key functions or classes from submodules for convenient access
 
 from .utils import (
+    return_connection,
     get_connection,
     create_database_if_not_exists,
     create_log_table,
