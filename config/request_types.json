@@ -1,17 +1,17 @@
 {
   "E00": {
     "label": "Question",
-    "description": "Information-seeking or help-requesting tone. Example: 'When does the reading room open?",
+    "description": "User genuinely seeks information or help, with no implied request for change. Examples: 'When does the library open?', 'How do I borrow a book?'",
     "sentiment": "wants to know"
   },
   "E01": {
     "label": "Comment or complaint",
-    "description": "User shares feedback, praise, or complaints without asking for action.",
+    "description": "User shares feedback, praise, or complaints without asking for action or change. Examples: 'The reading room is too cold', 'The staff was very helpful'",
     "sentiment": "commenting/venting"
   },
   "E02": {
-    "label": "Suggestion(s)",
-    "description": "User proposes improvements or next steps; may be phrased as a question. Example: 'Could you not expand the opening hours?",
+    "label": "Suggestion",
+    "description": "User proposes improvements, expresses wishes for change, or requests that something be done differently—even when phrased as a question. Look for implicit 'I wish', 'you should', or 'why don't you'. Examples: 'Could you extend the opening hours?', 'Why not stay open on Sundays?', 'You should get more group study rooms'",
     "sentiment": "suggesting change"
   },
   "E03": {
