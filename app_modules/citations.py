@@ -11,7 +11,6 @@ from typing import Any, Callable
 from urllib.parse import quote_plus
 
 from .helpers import get_attr
-from utils import get_recordset_label
 
 
 # Regex patterns for citation processing
@@ -223,7 +222,7 @@ def extract_citations_from_annotations_response_dict(
             url = file_info.get("url")
             title = file_info.get("title")
             summary = file_info.get("summary")
-            source_config_id = file_info.get("source_config_id")
+            recordset = file_info.get("recordset")
             doc_id = file_info.get("doc_id")
             
             if not title:
@@ -238,7 +237,7 @@ def extract_citations_from_annotations_response_dict(
                 "url": url,
                 "title": clean_title,
                 "summary": summary,
-                "source_config_id": source_config_id,
+                "recordset": recordset,
                 "doc_id": doc_id,
             }
             placements.append((idx, i))
@@ -343,12 +342,23 @@ def render_sources_list(
         badge = f"[{c['number']}]"
         url = c.get("url")
 
-        # Get recordset label from source_config_id
-        source_config_id = c.get("source_config_id")
-        rs_text = get_recordset_label(source_config_id)
+        # Prepare recordset
+        rs = c.get("recordset")
+        if isinstance(rs, (dict, list, tuple)):
+            try:
+                rs_text = json.dumps(rs, ensure_ascii=False)
+            except Exception:
+                rs_text = str(rs)
+        else:
+            rs_text = str(rs) if rs is not None else ""
+        rs_text = rs_text.strip()
         rs_html = html.escape(rs_text) if rs_text else ""
 
-        is_internal_doc = source_config_id == 0 or (url and url.startswith("internal://"))
+        is_internal_doc = False
+        if rs_text:
+            is_internal_doc = rs_text.lower() == "internal documents"
+        if not is_internal_doc and url and url.startswith("internal://"):
+            is_internal_doc = True
 
         # Link rendering
         safe_title = html.escape(title)

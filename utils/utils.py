@@ -586,50 +586,7 @@ def create_database_if_not_exists():
 def create_knowledge_base_table():
     """Ensure the database schema is up to date."""
     run_migrations(get_connection)
-
-
-# ---------------------------------------------------------------------------
-# Recordset label cache
-# ---------------------------------------------------------------------------
-_config_labels_cache: dict[int, str] | None = None
-
-
-def get_config_labels() -> dict[int, str]:
-    """
-    Return a cached mapping of url_configs.id -> recordset label.
     
-    Use clear_config_labels_cache() after modifying url_configs to refresh.
-    """
-    global _config_labels_cache
-    if _config_labels_cache is not None:
-        return _config_labels_cache
-    
-    conn = get_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, recordset FROM url_configs")
-            _config_labels_cache = {row[0]: row[1] for row in cur.fetchall()}
-    finally:
-        conn.close()
-    
-    return _config_labels_cache or {}
-
-
-def clear_config_labels_cache() -> None:
-    """Clear the config labels cache so it reloads on next access."""
-    global _config_labels_cache
-    _config_labels_cache = None
-
-
-def get_recordset_label(source_config_id: int | None) -> str:
-    """Get the recordset label for a given source_config_id."""
-    if source_config_id is None:
-        return "Unknown"
-    if source_config_id == 0:
-        return "Internal Documents"
-    labels = get_config_labels()
-    return labels.get(source_config_id, f"Config {source_config_id}")
-
     
 # Function to get knowledge base entries
 def get_kb_entries(limit=None, *, include_markdown: bool = True):

@@ -48,10 +48,6 @@ from .utils import (
     show_blocking_overlay,
     hide_blocking_overlay,
     render_log_output,
-    # Recordset label cache
-    get_config_labels,
-    clear_config_labels_cache,
-    get_recordset_label,
 )
 
 from .cli_runner import CLIJob, CLIJobError, launch_cli_job
