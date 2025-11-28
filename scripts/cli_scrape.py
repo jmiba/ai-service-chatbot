@@ -326,7 +326,7 @@ def main():
                         conn,
                         dry_run=args.dry_run,
                         log_callback=log_cb,
-                        recordset_latest_urls=run_state.recordset_latest_urls,
+                        config_latest_urls=run_state.config_latest_urls,
                         verify_url_deleted=verify_url_deleted,
                     )
                 except Exception as e:

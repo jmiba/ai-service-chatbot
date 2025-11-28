@@ -21,9 +21,9 @@ class FakeCursor:
     def execute(self, sql, params=None):
         self.conn.executed.append((sql, params))
         params = params or ()
-        if "FROM documents WHERE recordset" in sql:
-            recordset = params[0]
-            self._result = list(self.conn.recordset_rows.get(recordset, []))
+        if "FROM documents d" in sql and "source_config_id" in sql:
+            config_id = params[0]
+            self._result = list(self.conn.config_rows.get(config_id, []))
         elif "UPDATE documents SET is_stale = FALSE" in sql:
             ids = list(params[0]) if params else []
             if "updated_at" in sql:
@@ -48,8 +48,8 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, recordset_rows):
-        self.recordset_rows = recordset_rows
+    def __init__(self, config_rows):
+        self.config_rows = config_rows
         self.executed = []
         self.updated_true_ids = []
         self.updated_false_ids = []
@@ -68,20 +68,23 @@ class FakeConnection:
 
 
 def test_update_stale_documents_handles_deleted_and_retained():
-    recordset_latest_urls = {
-        "rs": {
+    # Use source_config_id (int) as key instead of recordset name
+    config_latest_urls = {
+        1: {
             "https://example.com/kept",
         }
     }
 
-    doc_rows = {
-        "rs": [
+    # Rows keyed by source_config_id (int)
+    # Each row: (doc_id, recordset_from_join, url, title, crawl_date)
+    config_rows = {
+        1: [
             (1, "rs", "https://example.com/kept", "Kept", datetime.date(2024, 1, 1)),
             (2, "rs", "https://example.com/missing", "Missing", datetime.date(2024, 1, 2)),
             (3, "rs", "https://example.com/unlinked", "Unlinked", datetime.date(2024, 1, 3)),
         ]
     }
-    conn = FakeConnection(doc_rows)
+    conn = FakeConnection(config_rows)
 
     def fake_verify(url, log_callback=None):
         if url.endswith("missing"):
@@ -93,7 +96,7 @@ def test_update_stale_documents_handles_deleted_and_retained():
     stale_candidates = maintenance.update_stale_documents(
         conn,
         dry_run=False,
-        recordset_latest_urls=recordset_latest_urls,
+        config_latest_urls=config_latest_urls,
         verify_url_deleted=fake_verify,
     )
 

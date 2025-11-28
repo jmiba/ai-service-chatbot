@@ -27,7 +27,7 @@ def update_stale_documents(
     dry_run: bool = False,
     log_callback=None,
     *,
-    recordset_latest_urls: Mapping[str, Iterable[str]] | None = None,
+    config_latest_urls: Mapping[int, Iterable[str]] | None = None,
     verify_url_deleted: Callable[[str, Callable[[str], None] | None], tuple[bool, str]] | None = None,
 ):
     """Update `documents.is_stale` by confirming which pages disappeared during this crawl."""
@@ -54,9 +54,9 @@ def update_stale_documents(
         if log_callback:
             log_callback(message)
 
-    visited_source = recordset_latest_urls or {}
-    visited_by_recordset: dict[str, set[str]] = {
-        (rs_key or "").strip(): set(urls) for rs_key, urls in visited_source.items()
+    visited_source = config_latest_urls or {}
+    visited_by_config_id: dict[int, set[str]] = {
+        config_id: set(urls) for config_id, urls in visited_source.items()
     }
 
     stale_checks: list[dict] = []
@@ -64,10 +64,13 @@ def update_stale_documents(
 
     try:
         with conn.cursor() as cur:
-            for rs_key, urls in visited_by_recordset.items():
+            for config_id, urls in visited_by_config_id.items():
                 cur.execute(
-                    "SELECT id, recordset, url, title, crawl_date FROM documents WHERE recordset = %s",
-                    (rs_key,),
+                    """SELECT d.id, uc.recordset, d.url, d.title, d.crawl_date 
+                       FROM documents d
+                       LEFT JOIN url_configs uc ON d.source_config_id = uc.id
+                       WHERE d.source_config_id = %s""",
+                    (config_id,),
                 )
                 rows = cur.fetchall()
                 for doc_id, doc_recordset, doc_url, doc_title, doc_crawl in rows:

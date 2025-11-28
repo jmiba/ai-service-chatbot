@@ -43,7 +43,7 @@ _default_state = CrawlerState()
 visited_raw = _default_state.visited_raw
 visited_norm = _default_state.visited_norm
 frontier_seen = _default_state.frontier_seen
-recordset_latest_urls = _default_state.recordset_latest_urls
+config_latest_urls = _default_state.config_latest_urls
 
 
 def reset_scraper_state(state: CrawlerState | None = None):
@@ -868,8 +868,8 @@ def scrape(
                 state.frontier_seen.append(canon_norm)
                 norm_url = canon_norm
 
-        # Note: recordset_latest_urls is updated in save_document_to_db section
-        # after determining the effective recordset via URL prefix matching
+        # Note: config_latest_urls is updated in save_document_to_db section
+        # after determining the effective source_config_id via URL prefix matching
 
         # Content extraction
         main = extract_main_content(soup, current_depth)
@@ -1003,9 +1003,9 @@ def scrape(
                             no_upload=False,
                             source_config_id=effective_config_id,
                         )
-                        # Track URL under the effective recordset for stale detection
-                        effective_recordset_key = (effective_recordset or "").strip()
-                        state.recordset_latest_urls[effective_recordset_key].add(norm_url)
+                        # Track URL under the effective source_config_id for stale detection
+                        if effective_config_id is not None:
+                            state.config_latest_urls[effective_config_id].add(norm_url)
                         
                         if log_callback:
                             log_callback(f"{'  ' * current_depth}💾 Saved {norm_url} to database with recordset '{effective_recordset}'")
