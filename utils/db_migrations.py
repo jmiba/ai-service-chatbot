@@ -35,12 +35,22 @@ def _migration_1(conn: PGConnection) -> None:
             )
             """
         )
+        # Only create index if recordset column exists (may be renamed by migration 13)
         cur.execute(
             """
-            CREATE INDEX IF NOT EXISTS idx_documents_recordset
-            ON documents(recordset)
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'documents' AND column_name = 'recordset'
+            )
             """
         )
+        if cur.fetchone()[0]:
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_documents_recordset
+                ON documents(recordset)
+                """
+            )
 
 
 def _migration_2(conn: PGConnection) -> None:
