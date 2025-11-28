@@ -172,6 +172,7 @@ from utils import (
     create_knowledge_base_table,
     get_document_status_counts,
     format_request_type_legend,
+    get_recordset_label,
 )
 
 # Import refactored modules (consolidates duplicate helper functions)
@@ -578,7 +579,7 @@ def get_urls_and_titles_by_file_ids(conn, file_ids):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT vector_file_id, id, url, title, summary, recordset
+            SELECT vector_file_id, id, url, title, summary, source_config_id
             FROM documents
             WHERE vector_file_id = ANY(%s);
             """,
@@ -591,7 +592,7 @@ def get_urls_and_titles_by_file_ids(conn, file_ids):
                 "url": row[2],
                 "title": row[3],
                 "summary": row[4],
-                "recordset": row[5],
+                "source_config_id": row[5],
             }
             for row in rows
         }
@@ -806,7 +807,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
             url = file_info.get("url")
             title = file_info.get("title")
             summary = file_info.get("summary")
-            recordset = file_info.get("recordset")
+            source_config_id = file_info.get("source_config_id")
             doc_id = file_info.get("doc_id")
             if not title:
                 title = filename.rsplit(".", 1)[0]
@@ -819,7 +820,7 @@ def extract_citations_from_annotations_response_dict(text_part, client_unused=No
                 "url": url,
                 "title": clean_title,
                 "summary": summary,
-                "recordset": recordset,
+                "source_config_id": source_config_id,
                 "doc_id": doc_id,
             }
             placements.append((idx, i))
@@ -894,23 +895,12 @@ def render_sources_list(citation_map):
         badge = f"[{c['number']}]"
         url = c.get("url")
 
-        # Prepare recordset (plain, in front)
-        rs = c.get("recordset")
-        if isinstance(rs, (dict, list, tuple)):
-            try:
-                rs_text = json.dumps(rs, ensure_ascii=False)
-            except Exception:
-                rs_text = str(rs)
-        else:
-            rs_text = str(rs) if rs is not None else ""
-        rs_text = rs_text.strip()
+        # Get recordset label from source_config_id
+        source_config_id = c.get("source_config_id")
+        rs_text = get_recordset_label(source_config_id)
         rs_html = html.escape(rs_text) if rs_text else ""
 
-        is_internal_doc = False
-        if rs_text:
-            is_internal_doc = rs_text.lower() == "internal documents"
-        if not is_internal_doc and url and url.startswith("internal://"):
-            is_internal_doc = True
+        is_internal_doc = source_config_id == 0 or (url and url.startswith("internal://"))
 
         # Link rendering (keep url_with_tooltip behavior as-is unless internal document)
         safe_title = html.escape(title)
