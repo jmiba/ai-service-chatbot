@@ -32,11 +32,15 @@ Try it: https://viadrina.streamlit.app
 
 ## 📸  Screenshots
 
+### Main Chat Interface
+
+![Main chat interface](image-12.png)
+
 ### Logging and Analytics Dashboard
 
 ![Loging](image.png)
 
-![Session Analytics](image-1.png)
+![Session analytics](image-1.png)
 
 ![System performance metrics](image-2.png)
 
@@ -131,18 +135,26 @@ We ship a `docker-compose.yaml` that runs two core services (plus an optional wa
 - `cli-runner`: an on-demand helper container for heavy scraping/vectorization runs; invoke it with `docker compose run --rm --profile cli cli-runner --mode vectorize` (or `sync`/`all`/`cleanup`) so the job happens outside the UI process while still sharing secrets/state
 - `autoheal`: optional watchdog that restarts unhealthy containers
 
-1. Build the image (Docker or Podman both work):
+1. **Prepare host directories**: The container runs as a non-root user. Ensure the mounted directories exist and are writable:
+   ```bash
+   # As the user that will run the container (e.g., 'chatbot'):
+   mkdir -p /home/chatbot/app/.streamlit /home/chatbot/app/state /home/chatbot/app/logs
+   # If directories already exist but are owned by root:
+   sudo chown -R chatbot:chatbot /home/chatbot/app/state /home/chatbot/app/logs
+   ```
+
+2. Build the image (Docker or Podman both work):
    ```bash
    docker build -t chatbot .
    # or: podman build --format docker -t chatbot .
    ```
-2. Start everything:
+3. Start everything:
    ```bash
    docker compose up --build -d      # podman-compose up --build -d
    # or, if you wrapped compose in systemd: systemctl restart chatbot
    ```
 
-3. Run a one-off scraping/vectorization job in its own container (keeps Streamlit responsive even with large vector stores):
+4. Run a one-off scraping/vectorization job in its own container (keeps Streamlit responsive even with large vector stores):
    ```bash
    docker compose run --rm --profile cli cli-runner --mode all         # scrape + vectorize + orphan cleanup
    docker compose run --rm --profile cli cli-runner --mode vectorize   # vectorize only
