@@ -629,6 +629,33 @@ def path_matches_prefix(path: str, pattern: str) -> bool:
     return path == pattern or path.startswith(pattern)
 
 
+def find_best_matching_config(url: str, configs: list[dict]) -> dict | None:
+    """
+    Find the config whose URL is the longest prefix match for the given URL.
+    
+    Args:
+        url: The page URL to match
+        configs: List of config dicts with 'url', 'recordset', 'id' keys
+        
+    Returns:
+        The best matching config, or None if no match
+    """
+    if not configs:
+        return None
+    
+    best_match = None
+    best_length = -1
+    
+    for cfg in configs:
+        cfg_url = cfg.get("url", "")
+        if url.startswith(cfg_url) or url == cfg_url:
+            if len(cfg_url) > best_length:
+                best_length = len(cfg_url)
+                best_match = cfg
+    
+    return best_match
+
+
 def scrape(
     url,
     depth,
@@ -646,6 +673,7 @@ def scrape(
     *,
     state: CrawlerState | None = None,
     headers: dict | None = None,
+    all_configs: list[dict] | None = None,
 ):
     """
     Crawl starting at `url` using a queue-based BFS, with global per-run dedupe.
@@ -653,9 +681,14 @@ def scrape(
     respects canonical URLs, enforces path filters, and guards against non-HTML + runaway crawls.
 
     If dry_run=True: no LLM calls and no DB writes; collects 'frontier_seen' for UI display.
+    
+    Args:
+        all_configs: Optional list of all URL configs. If provided, each page's recordset
+                     will be dynamically assigned based on best URL prefix match.
     """
     state = state or _default_state
     headers = headers or HEADERS
+    all_configs = all_configs or []
 
     keep_query_keys = keep_query_keys or None
     recordset_key = (recordset or "").strip()
@@ -835,7 +868,8 @@ def scrape(
                 state.frontier_seen.append(canon_norm)
                 norm_url = canon_norm
 
-        state.recordset_latest_urls[recordset_key].add(norm_url)
+        # Note: recordset_latest_urls is updated in save_document_to_db section
+        # after determining the effective recordset via URL prefix matching
 
         # Content extraction
         main = extract_main_content(soup, current_depth)
@@ -942,6 +976,17 @@ def scrape(
                     crawl_date = datetime.now().strftime("%Y-%m-%d")
 
                     if conn:
+                        # Dynamically assign recordset based on best URL prefix match
+                        effective_recordset = recordset
+                        effective_config_id = source_config_id
+                        if all_configs:
+                            matched_config = find_best_matching_config(norm_url, all_configs)
+                            if matched_config:
+                                effective_recordset = matched_config.get("recordset", recordset)
+                                effective_config_id = matched_config.get("id", source_config_id)
+                                if effective_recordset != recordset and log_callback:
+                                    log_callback(f"{'  ' * current_depth}🔄 Recordset reassigned: '{recordset}' → '{effective_recordset}'")
+                        
                         save_document_to_db(
                             conn,
                             norm_url,
@@ -953,13 +998,17 @@ def scrape(
                             tags,
                             markdown,
                             current_hash,
-                            recordset,
+                            effective_recordset,
                             page_type,
                             no_upload=False,
-                            source_config_id=source_config_id,
+                            source_config_id=effective_config_id,
                         )
+                        # Track URL under the effective recordset for stale detection
+                        effective_recordset_key = (effective_recordset or "").strip()
+                        state.recordset_latest_urls[effective_recordset_key].add(norm_url)
+                        
                         if log_callback:
-                            log_callback(f"{'  ' * current_depth}💾 Saved {norm_url} to database with recordset '{recordset}'")
+                            log_callback(f"{'  ' * current_depth}💾 Saved {norm_url} to database with recordset '{effective_recordset}'")
                         state.processed_pages_count += 1
                         _progress()
                 except Exception as e:

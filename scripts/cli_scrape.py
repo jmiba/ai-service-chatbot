@@ -311,6 +311,7 @@ def main():
                         log_callback=log_cb,
                         state=run_state,
                         headers=scraper_mod.HEADERS,
+                        all_configs=run_configs,
                     )
                 except Exception as e:
                     print(f"[ERROR] Error scraping {url}: {e}")
