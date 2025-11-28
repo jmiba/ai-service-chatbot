@@ -99,7 +99,13 @@ pip install -r requirements.txt
 ```
 
 ### Configure secrets
-Create `.streamlit/secrets.toml`:
+Copy the example secrets file and fill in your values:
+
+```bash
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml
+```
+
+Edit `.streamlit/secrets.toml`:
 
 ```toml
 OPENAI_API_KEY = "your-openai-api-key"
