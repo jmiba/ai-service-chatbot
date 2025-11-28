@@ -47,7 +47,7 @@ ICON_PATH = BASE_DIR / "assets" / "home_storage.png"
 # -----------------------------
 # Auth / sidebar
 # -----------------------------
-authenticated = admin_authentication(return_to="/pages/scrape")
+authenticated = admin_authentication(return_to="pages/scrape.py")
 render_sidebar(authenticated)
 
 def ensure_url_config_ids(configs: list[dict]) -> None:

@@ -965,8 +965,13 @@ def admin_authentication(return_to: str | None = None):
     Uses st.login(), st.logout(), and st.user for authentication when [auth] is configured
     in secrets.toml. Falls back to password authentication if OIDC is not configured or
     if allow_password_fallback is enabled.
+    
+    Args:
+        return_to: Page to redirect to after login. If None, defaults to "pages/logs.py".
+                   Admin pages should pass their own path to stay on the same page after login.
     """
     auth_ready = is_auth_configured()
+    default_admin_page = "pages/logs.py"
     
     # Check if user is already authenticated via Streamlit's native auth
     # st.user.is_logged_in only exists when [auth] is configured in secrets.toml
@@ -977,6 +982,11 @@ def admin_authentication(return_to: str | None = None):
             st.session_state["admin_email"] = email
             if hasattr(st.user, 'name') and st.user.name:
                 st.session_state["admin_name"] = st.user.name
+            
+            # Redirect to target page after SSO login if we came from a non-admin page
+            target = st.session_state.pop("_auth_redirect_to", None)
+            if target:
+                st.switch_page(target)
             return True
         else:
             st.error("Your account is not authorized for admin access.")
@@ -1010,7 +1020,12 @@ def admin_authentication(return_to: str | None = None):
         # Use Streamlit's native OIDC login
         provider = get_provider_name()
         
+        # Store redirect target before login (use return_to or default to logs.py)
+        redirect_target = return_to if return_to else default_admin_page
+        
         if st.button("Continue with SSO", type="primary"):
+            # Store where to go after login
+            st.session_state["_auth_redirect_to"] = redirect_target
             if provider:
                 st.login(provider)
             else:

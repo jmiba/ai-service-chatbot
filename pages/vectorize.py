@@ -475,7 +475,7 @@ def _load_vector_details(vector_store_id: str, *, force: bool = False) -> dict[s
     return details
 
 if HAS_STREAMLIT_CONTEXT:
-    authenticated = admin_authentication(return_to="/pages/vectorize")
+    authenticated = admin_authentication(return_to="pages/vectorize.py")
     render_sidebar(authenticated)
 
     def read_last_export_timestamp():
