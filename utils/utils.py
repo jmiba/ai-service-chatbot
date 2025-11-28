@@ -1262,6 +1262,8 @@ def save_url_configs(url_configs):
             with conn.cursor() as cursor:
                 cursor.execute("SELECT id, recordset FROM url_configs")
                 existing_records = {row[0]: (row[1] or "").strip() for row in cursor.fetchall()}
+                # Reverse lookup: recordset -> id (for recovering missing IDs)
+                recordset_to_id = {rs: cfg_id for cfg_id, rs in existing_records.items()}
 
                 normalized_configs = []
                 for idx, config in enumerate(url_configs):
@@ -1303,6 +1305,14 @@ def save_url_configs(url_configs):
                 for sort_order, entry in enumerate(normalized_configs):
                     cfg = entry["ref"]
                     cfg_id = cfg.get("id")
+                    
+                    # If id is missing but we can find it by recordset, recover it
+                    if not cfg_id:
+                        recovered_id = recordset_to_id.get(entry["recordset"])
+                        if recovered_id:
+                            cfg_id = recovered_id
+                            cfg["id"] = recovered_id  # Fix the session state too
+                    
                     params = (
                         entry["url"],
                         entry["recordset"],
