@@ -376,6 +376,31 @@ def _migration_12(conn: PGConnection) -> None:
         )
 
 
+def _migration_13(conn: PGConnection) -> None:
+    """Rename deprecated documents.recordset column - now derived via JOIN to url_configs."""
+    with conn.cursor() as cur:
+        # Check if old column exists and new one doesn't
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'documents' AND column_name = 'recordset'
+            )
+            """
+        )
+        old_exists = cur.fetchone()[0]
+        
+        if old_exists:
+            cur.execute(
+                """
+                ALTER TABLE documents
+                RENAME COLUMN recordset TO _recordset_deprecated
+                """
+            )
+            # Drop the old index (will recreate if needed with new name)
+            cur.execute("DROP INDEX IF EXISTS idx_documents_recordset")
+
+
 MIGRATIONS: Dict[int, MigrationFunc] = {
     1: _migration_1,
     2: _migration_2,
@@ -389,6 +414,7 @@ MIGRATIONS: Dict[int, MigrationFunc] = {
     10: _migration_10,
     11: _migration_11,
     12: _migration_12,
+    13: _migration_13,
 }
 
 
