@@ -7,6 +7,7 @@ services:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
       - /home/chatbot/app/logs:/app/logs
+      - /home/chatbot/app/exported_markdown:/app/exported_markdown
     restart: unless-stopped
     ports:
       - "8501:8501"
@@ -23,6 +24,7 @@ services:
       - /home/chatbot/app/.streamlit:/app/.streamlit
       - /home/chatbot/app/state:/app/state
       - /home/chatbot/app/logs:/app/logs
+      - /home/chatbot/app/exported_markdown:/app/exported_markdown
     entrypoint: ["python", "scripts/cli_scrape.py"]
     command: ["--mode", "all"]
     environment:
