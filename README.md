@@ -246,7 +246,7 @@ During a chat turn the UI displays “Tool use…” whenever the model actually
   server_metadata_url = "https://idp.example.com/.well-known/openid-configuration"
   
   # Optional: restrict admin access to specific emails
-  allowed_admin_emails = ["librarian@example.com", "it@example.com"]
+  allowlist = ["librarian@example.com", "it@example.com"]
   # Optional: enable password fallback for emergencies
   allow_password_fallback = false
   ```
@@ -255,7 +255,7 @@ During a chat turn the UI displays “Tool use…” whenever the model actually
   [auth]
   redirect_uri = "https://your-app.example.com/oauth2callback"
   cookie_secret = "your-random-secret-string"
-  allowed_admin_emails = ["librarian@example.com"]
+  allowlist = ["librarian@example.com"]
   
   [auth.microsoft]
   client_id = "your-client-id"
@@ -263,7 +263,7 @@ During a chat turn the UI displays “Tool use…” whenever the model actually
   server_metadata_url = "https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration"
   ```
 - Streamlit handles the OAuth2 flow with PKCE automatically. User info is available via `st.user.email`, `st.user.name`, etc.
-- Only users whose email appears in `allowed_admin_emails` gain admin access; omit the list to allow any authenticated user.
+- Only users whose email appears in `allowlist` gain admin access; omit the list to allow any authenticated user.
 - **Note**: Requires `streamlit[auth]` (includes `authlib>=1.3.2`). The identity cookie expires after 30 days.
 
 ### Web Search & Tools (Admin → Settings)
