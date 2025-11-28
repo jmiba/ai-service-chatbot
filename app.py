@@ -1960,7 +1960,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
 
     # --- Structured evaluation follow-up (background, cheaper model) ---
     def _run_eval_and_log_bg(user_input, cleaned, citation_map, session_id, main_latency_ms, base_usage,
-                             eval_model, main_model, evaluation_system_prompt, evaluation_response_format, conversation_history):
+                             eval_model, main_model, evaluation_system_prompt, evaluation_response_format, conversation_history, allowed_topics_list):
         """Run evaluation with a cheaper model in background, then log interaction."""
         # Defaults in case eval fails
         e_in = e_out = e_total = e_reason = 0
@@ -1968,6 +1968,9 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
         request_type_code = None
         request_classification = "other"
         evaluation_notes = ""
+        
+        # Build set for fast lookup
+        allowed_set = set(allowed_topics_list) if allowed_topics_list else set()
 
         try:
             request_kwargs = {
@@ -2048,7 +2051,11 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             req_class = payload.get("request_classification", "other")
             if not isinstance(req_class, str) or not req_class.strip():
                 req_class = "other"
-            request_classification = req_class.strip()
+            req_class = req_class.strip()
+            # Validate against allowed topics; fall back to "other" if not in list
+            if allowed_set and req_class not in allowed_set:
+                req_class = "other"
+            request_classification = req_class
             eval_notes = payload.get("evaluation_notes", "")
             evaluation_notes = eval_notes if isinstance(eval_notes, str) else ""
         except Exception as e:
@@ -2139,7 +2146,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
     _start_thread(
         _run_eval_and_log_bg,
         name="_run_eval_and_log_bg",
-        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage, eval_model_val, main_model_val, eval_sys_prompt, eval_response_format, evaluation_history),
+        args=(user_input, cleaned, citation_map, st.session_state.session_id, locals().get('main_latency_ms'), base_usage, eval_model_val, main_model_val, eval_sys_prompt, eval_response_format, evaluation_history, allowed_topics),
     )
 
     # NOTE: Logging happens in the background after evaluation. The UI has already been updated above.
