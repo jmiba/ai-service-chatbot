@@ -578,9 +578,16 @@ def get_urls_and_titles_by_file_ids(conn, file_ids):
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT vector_file_id, id, url, title, summary, recordset
-            FROM documents
-            WHERE vector_file_id = ANY(%s);
+            SELECT 
+                d.vector_file_id, 
+                d.id, 
+                d.url, 
+                d.title, 
+                d.summary, 
+                COALESCE(uc.recordset, 'Unknown') AS recordset
+            FROM documents d
+            LEFT JOIN url_configs uc ON d.source_config_id = uc.id
+            WHERE d.vector_file_id = ANY(%s);
             """,
             (file_ids,)
         )
