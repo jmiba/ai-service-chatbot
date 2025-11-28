@@ -68,7 +68,7 @@ Try it: https://viadrina.streamlit.app
 
 ## 🆕 What’s New (recent changes)
 
-- Switched the admin login flow to OpenID Connect (authorization code + PKCE) with email allowlists instead of the old SAML integration
+- Switched the admin login flow to use Streamlit's native OIDC support (`st.login()`, `st.logout()`, `st.user`) with email allowlists
 - Streamlit now launches scraping/vectorization runs via the CLI helper so heavy OpenAI work happens out-of-process while the UI stays responsive
 - Web search filters, MCP tools, and request classifications remain editable from the admin pages
 - Web search settings moved to Admin → Filters:
@@ -230,26 +230,35 @@ During a chat turn the UI displays “Tool use…” whenever the model actually
 
 ### Admin Login (OpenID Connect)
 - By default the admin pages accept a single password stored in `ADMIN_PASSWORD`.
-- To enable multi-user SSO, add an `[oidc]` block to `.streamlit/secrets.toml` with your provider details:
+- To enable multi-user SSO, add an `[auth]` block to `.streamlit/secrets.toml` with your provider details. This uses Streamlit's native OIDC support (`st.login()`, `st.logout()`, `st.user`):
   ```toml
-  [oidc]
+  [auth]
+  redirect_uri = "https://your-app.example.com/oauth2callback"  # must match value registered with IdP
+  cookie_secret = "your-random-secret-string"                   # generate a strong random secret
   client_id = "your-client-id"
-  client_secret = "your-client-secret"           # optional for public clients
-  redirect_uri = "https://your-app.example.com/" # must match the value registered with the IdP
-  authorization_endpoint = "https://idp.example.com/oauth2/v1/authorize"
-  token_endpoint = "https://idp.example.com/oauth2/v1/token"
-  userinfo_endpoint = "https://idp.example.com/oauth2/v1/userinfo"
-  scopes = ["openid", "profile", "email"]       # optional; defaults to these three
+  client_secret = "your-client-secret"
+  server_metadata_url = "https://idp.example.com/.well-known/openid-configuration"
+  
+  # Optional: restrict admin access to specific emails
   allowed_admin_emails = ["librarian@example.com", "it@example.com"]
-  allow_password_fallback = false                 # set true only if you want the old password as backup
-  # Optional extras:
-  # issuer = "https://idp.example.com/"
-  # discovery_url = "https://idp.example.com/.well-known/openid-configuration"
-  # authorize_params = { prompt = "login" }
-  # token_auth_method = "client_secret_basic"     # defaults to client_secret_post
+  # Optional: enable password fallback for emergencies
+  allow_password_fallback = false
   ```
-- The app performs the OAuth2 authorization-code flow with PKCE entirely inside Streamlit, storing the resulting user claims in `st.session_state`. Only users whose email appears in `allowed_admin_emails` gain admin access; omit the list to allow any authenticated user.
-- No additional dependencies beyond `httpx` are required. Make sure the redirect URI you configure in your IdP matches the Streamlit URL (including HTTPS) that hosts the admin pages.
+- For **named providers** (e.g., if you want to label the button "Google" or "Microsoft"):
+  ```toml
+  [auth]
+  redirect_uri = "https://your-app.example.com/oauth2callback"
+  cookie_secret = "your-random-secret-string"
+  allowed_admin_emails = ["librarian@example.com"]
+  
+  [auth.microsoft]
+  client_id = "your-client-id"
+  client_secret = "your-client-secret"
+  server_metadata_url = "https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration"
+  ```
+- Streamlit handles the OAuth2 flow with PKCE automatically. User info is available via `st.user.email`, `st.user.name`, etc.
+- Only users whose email appears in `allowed_admin_emails` gain admin access; omit the list to allow any authenticated user.
+- **Note**: Requires `streamlit[auth]` (includes `authlib>=1.3.2`). The identity cookie expires after 30 days.
 
 ### Web Search & Tools (Admin → Settings)
 - Allowed Domains (optional)

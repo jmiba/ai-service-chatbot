@@ -355,14 +355,9 @@ def render_save_chat_button(slot, messages: list[dict] | None = None) -> None:
 from .db_migrations import run_migrations
 from .oidc import (
     allow_password_fallback,
-    build_oidc_login_url,
-    exchange_code_for_tokens,
-    fetch_userinfo,
-    generate_pkce_pair,
-    get_default_next_path,
-    get_oidc_allowlist,
-    get_redirect_uri,
-    is_oidc_configured,
+    get_auth_allowlist,
+    get_provider_name,
+    is_auth_configured,
 )
 
 BASE_DIR = Path(__file__).parent.parent
@@ -956,7 +951,7 @@ def _safe_rerun() -> None:
 
 
 def _oidc_user_allowed(email: str) -> bool:
-    allowlist = get_oidc_allowlist()
+    allowlist = get_auth_allowlist()
     if not allowlist:
         return True
     candidate = email.strip().lower()
@@ -965,14 +960,38 @@ def _oidc_user_allowed(email: str) -> bool:
 
 def admin_authentication(return_to: str | None = None):
     """
-    Authenticate admin users via OpenID Connect (when configured) or fallback password.
+    Authenticate admin users via Streamlit native OIDC (when configured) or fallback password.
+    
+    Uses st.login(), st.logout(), and st.user for authentication when [auth] is configured
+    in secrets.toml. Falls back to password authentication if OIDC is not configured or
+    if allow_password_fallback is enabled.
     """
+    auth_ready = is_auth_configured()
+    
+    # Check if user is already authenticated via Streamlit's native auth
+    # st.user.is_logged_in only exists when [auth] is configured in secrets.toml
+    if auth_ready and getattr(st.user, 'is_logged_in', False):
+        email = getattr(st.user, 'email', '') or ''
+        if _oidc_user_allowed(email):
+            st.session_state.authenticated = True
+            st.session_state["admin_email"] = email
+            if hasattr(st.user, 'name') and st.user.name:
+                st.session_state["admin_name"] = st.user.name
+            return True
+        else:
+            st.error("Your account is not authorized for admin access.")
+            if st.button("Log out", type="secondary"):
+                st.logout()
+            return False
+
+    # Legacy session state check (for password auth)
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
     if st.session_state.authenticated:
         return True
 
+    # Show login header
     if ICON_PATH.exists():
         encoded_icon = base64.b64encode(ICON_PATH.read_bytes()).decode("utf-8")
         st.markdown(
@@ -987,87 +1006,22 @@ def admin_authentication(return_to: str | None = None):
     else:
         st.header("Admin Login")
 
-    oidc_ready = is_oidc_configured()
-    qp = _query_params_to_dict()
-
-    if oidc_ready and not st.session_state.authenticated:
-        error = qp.get("error")
-        if error:
-            description = qp.get("error_description") or "Authentication failed."
-            st.error(f"OIDC error: {error} — {description}")
-            _remove_query_params(["error", "error_description", "state", "code"])
-
-        code = qp.get("code")
-        state_param = qp.get("state")
-        expected_state = st.session_state.get("oidc_state")
-        code_verifier = st.session_state.get("oidc_code_verifier")
-
-        if code and state_param and expected_state and code_verifier:
-            if state_param != expected_state:
-                st.error("Login session mismatch. Please try again.")
+    if auth_ready:
+        # Use Streamlit's native OIDC login
+        provider = get_provider_name()
+        
+        if st.button("Continue with SSO", type="primary"):
+            if provider:
+                st.login(provider)
             else:
-                try:
-                    token_payload = exchange_code_for_tokens(
-                        code,
-                        code_verifier,
-                        redirect_uri=get_redirect_uri(),
-                    )
-                    access_token = token_payload.get("access_token")
-                    if not access_token:
-                        raise RuntimeError("OIDC token response did not include an access token.")
-                    userinfo = fetch_userinfo(access_token)
-                except Exception as exc:
-                    st.error(f"Authentication failed: {exc}")
-                else:
-                    email = (userinfo.get("email") or userinfo.get("preferred_username") or "").strip()
-                    if not email:
-                        st.error("OIDC provider did not return an email address.")
-                    elif not _oidc_user_allowed(email):
-                        st.error("Your account is not authorized for admin access.")
-                    else:
-                        st.session_state.authenticated = True
-                        st.session_state["admin_email"] = email or st.secrets.get("ADMIN_EMAIL")
-                        if userinfo.get("name"):
-                            st.session_state["admin_name"] = userinfo.get("name")
-                        st.session_state["oidc_claims"] = userinfo
-                        _remove_query_params(["code", "state", "session_state"])
-                        st.session_state.pop("oidc_state", None)
-                        st.session_state.pop("oidc_code_verifier", None)
-                        st.session_state.pop("oidc_code_challenge", None)
-                        _safe_rerun()
-                        return True
+                st.login()
+        st.caption("Use your institutional credentials to access the admin tools.")
 
-            _remove_query_params(["code", "state"])
-            st.session_state.pop("oidc_state", None)
-            st.session_state.pop("oidc_code_verifier", None)
-            st.session_state.pop("oidc_code_challenge", None)
+        if not allow_password_fallback():
+            return False
 
-        if not st.session_state.authenticated:
-            if "oidc_state" not in st.session_state:
-                st.session_state["oidc_state"] = uuid.uuid4().hex
-                verifier, challenge = generate_pkce_pair()
-                st.session_state["oidc_code_verifier"] = verifier
-                st.session_state["oidc_code_challenge"] = challenge
-            elif "oidc_code_challenge" not in st.session_state or "oidc_code_verifier" not in st.session_state:
-                verifier, challenge = generate_pkce_pair()
-                st.session_state["oidc_code_verifier"] = verifier
-                st.session_state["oidc_code_challenge"] = challenge
-
-            login_url = build_oidc_login_url(
-                st.session_state["oidc_state"],
-                st.session_state["oidc_code_challenge"],
-            )
-            try:
-                st.link_button("Continue with SSO", login_url, type="primary")
-            except AttributeError:
-                st.markdown(f"[Continue with SSO]({login_url})")
-            st.caption("Use your institutional credentials to access the admin tools.")
-
-            if not allow_password_fallback():
-                return False
-
-            st.markdown("---")
-            st.caption("Fallback password login (for emergency use only)")
+        st.markdown("---")
+        st.caption("Fallback password login (for emergency use only)")
 
     # Initialize rate limiting state
     if "auth_attempts" not in st.session_state:
@@ -1157,12 +1111,12 @@ def render_sidebar(
             st.rerun()
 
     def _perform_logout():
+        # If user logged in via Streamlit's native OIDC, use st.logout()
+        if getattr(st.user, 'is_logged_in', False):
+            st.logout()
+        # Also clear legacy session state
         st.session_state.authenticated = False
         for key in (
-            "oidc_state",
-            "oidc_code_verifier",
-            "oidc_code_challenge",
-            "oidc_claims",
             "admin_name",
             "admin_email",
         ):
