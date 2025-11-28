@@ -546,9 +546,11 @@ def main():
             st.error(f"Failed to initialize URL configurations table: {e}")
 
         # Initialize URL configs in session state from database
-        if "url_configs" not in st.session_state:
+        # Always reload after order changes to ensure consistency
+        if "url_configs" not in st.session_state or st.session_state.get("_reload_url_configs"):
             try:
                 st.session_state.url_configs = load_url_configs()
+                st.session_state._reload_url_configs = False
                 if not st.session_state.url_configs:
                     # If no configs in DB, start with empty list
                     st.session_state.url_configs = []
@@ -641,6 +643,7 @@ def main():
                         st.session_state.url_configs.insert(0, config_entry)
                         try:
                             save_url_configs(st.session_state.url_configs)
+                            st.session_state._reload_url_configs = True
                             st.success(f"Configuration {i+1} moved to beginning!", icon=":material/check_circle:")
                         except Exception as e:
                             st.error(f"Failed to save configuration order: {e}")
@@ -660,6 +663,7 @@ def main():
                         )
                         try:
                             save_url_configs(st.session_state.url_configs)
+                            st.session_state._reload_url_configs = True
                             st.success(f"Configuration {i+1} moved up!", icon=":material/check_circle:")
                         except Exception as e:
                             st.error(f"Failed to save configuration order: {e}")
@@ -679,6 +683,7 @@ def main():
                         )
                         try:
                             save_url_configs(st.session_state.url_configs)
+                            st.session_state._reload_url_configs = True
                             st.success(f"Configuration {i+1} moved down!", icon=":material/check_circle:")
                         except Exception as e:
                             st.error(f"Failed to save configuration order: {e}")
@@ -696,6 +701,7 @@ def main():
                         st.session_state.url_configs.append(config_entry)
                         try:
                             save_url_configs(st.session_state.url_configs)
+                            st.session_state._reload_url_configs = True
                             st.success(f"Configuration {i+1} moved to end!", icon=":material/check_circle:")
                         except Exception as e:
                             st.error(f"Failed to save configuration order: {e}")
