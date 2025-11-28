@@ -878,9 +878,12 @@ if HAS_STREAMLIT_CONTEXT:
                 hide_blocking_overlay(overlay)
 
         vector_details = st.session_state.get("vector_details")
-        if not vector_details:
-            persisted_details = read_vector_store_details()
-            if persisted_details:
+        persisted_details = read_vector_store_details()
+        # Always prefer fresher disk data over stale session state
+        if persisted_details:
+            persisted_loaded_at = _coerce_datetime(persisted_details.get("loaded_at"))
+            session_loaded_at = _coerce_datetime(vector_details.get("loaded_at")) if vector_details else None
+            if not vector_details or (persisted_loaded_at and (not session_loaded_at or persisted_loaded_at > session_loaded_at)):
                 st.session_state["vector_details"] = persisted_details
                 vector_details = persisted_details
 
