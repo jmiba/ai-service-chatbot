@@ -63,7 +63,7 @@ else:
     _script_ctx = None
 
 HAS_STREAMLIT_CONTEXT = _script_ctx is not None
-SNAPSHOT_MAX_AGE_MINUTES = 24 * 60
+SNAPSHOT_MAX_AGE_MINUTES = 48 * 60  # 48 hours - tolerate missed scheduled runs
 
 
 def _coerce_datetime(value: Any) -> datetime.datetime | None:

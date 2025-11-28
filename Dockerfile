@@ -18,14 +18,8 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash appuser
-
 # Copy application code
-COPY --chown=appuser:appuser . .
-
-# Switch to non-root user
-USER appuser
+COPY . .
 
 EXPOSE 8501
 
