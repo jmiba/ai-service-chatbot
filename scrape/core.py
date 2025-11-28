@@ -760,9 +760,30 @@ def scrape(
             _log_event("skip_non_html", normalized_url=norm_url, depth=current_depth, content_type=ctype)
             continue
 
+        # Check for cross-domain redirects - still process the page but don't follow links
+        original_host = urlparse(norm_url).netloc
         effective_url = response.url
         effective_norm = normalize_url(effective_url, "", keep_query=keep_query_keys)
-        if effective_norm != norm_url:
+        effective_host = urlparse(effective_norm).netloc
+        is_cross_domain_redirect = (effective_host != original_host)
+        
+        if is_cross_domain_redirect:
+            if log_callback:
+                log_callback(f"{'  ' * current_depth}🔀 Cross-domain redirect: {norm_url} → {effective_norm} (will save but not follow links)")
+            _log_event("cross_domain_redirect", normalized_url=norm_url, redirect_to=effective_norm, 
+                      original_host=original_host, redirect_host=effective_host, depth=current_depth,
+                      recordset=recordset_key)
+            # Update norm_url to the redirected URL for saving, but remember we crossed domains
+            if effective_norm in state.visited_norm:
+                if log_callback:
+                    log_callback(f"{'  ' * current_depth}↩️ Cross-domain redirect target already visited: {effective_norm}")
+                _log_event("skip_cross_domain_redirect_seen", normalized_url=effective_norm, from_url=norm_url, depth=current_depth)
+                continue
+            state.visited_norm.discard(norm_url)
+            state.visited_norm.add(effective_norm)
+            state.frontier_seen.append(effective_norm)
+            norm_url = effective_norm
+        elif effective_norm != norm_url:
             if effective_norm in state.visited_norm:
                 if log_callback:
                     log_callback(f"{'  ' * current_depth}↩️ Redirect target already visited: {effective_norm}")
@@ -791,11 +812,19 @@ def scrape(
         if log_callback:
             log_callback(f"{'  ' * current_depth}🕷️ Scraping: {norm_url}")
 
-        # Respect canonical if present
+        # Respect canonical if present (but not cross-domain)
+        current_host = urlparse(norm_url).netloc
         canon = get_canonical_url(soup, norm_url)
         if canon:
             canon_norm = normalize_url(canon, "", keep_query=keep_query_keys)
-            if canon_norm != norm_url:
+            canon_host = urlparse(canon_norm).netloc
+            if canon_host != current_host:
+                if log_callback:
+                    log_callback(f"{'  ' * current_depth}🚫 Ignoring cross-domain canonical: {canon_norm}")
+                _log_event("skip_cross_domain_canonical", normalized_url=norm_url, canonical=canon_norm,
+                          current_host=current_host, canonical_host=canon_host, depth=current_depth)
+                # Continue processing with original URL, don't skip
+            elif canon_norm != norm_url:
                 if canon_norm in state.visited_norm:
                     if log_callback:
                         log_callback(f"{'  ' * current_depth}🔗 Canonical already visited: {canon_norm}")
@@ -940,7 +969,13 @@ def scrape(
                     _log_event("llm_exception", normalized_url=norm_url, depth=current_depth, error=str(e)[:200])
                     continue
 
-        # Link discovery (dedup + filters)
+        # Link discovery (dedup + filters) - skip if cross-domain redirect
+        if is_cross_domain_redirect:
+            if log_callback:
+                log_callback(f"{'  ' * current_depth}🚫 Skipping link discovery (cross-domain redirect page)")
+            _log_event("skip_link_discovery_cross_domain", normalized_url=norm_url, depth=current_depth, recordset=recordset_key)
+            continue
+            
         base_host = urlparse(norm_url).netloc
         links_found = 0
         link_base_url = effective_url
