@@ -374,16 +374,28 @@ def _migration_12(conn: PGConnection) -> None:
                 WHERE sort_order = 0
                 """
             )
+        
+        # Check which column name exists (recordset or _recordset_deprecated)
         cur.execute(
             """
-            UPDATE documents AS d
-            SET source_config_id = uc.id
-            FROM url_configs AS uc
-            WHERE d.source_config_id IS NULL
-              AND COALESCE(d.recordset, '') <> ''
-              AND d.recordset = uc.recordset
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'documents' AND column_name IN ('recordset', '_recordset_deprecated')
+            LIMIT 1
             """
         )
+        row = cur.fetchone()
+        if row:
+            col_name = row[0]
+            cur.execute(
+                f"""
+                UPDATE documents AS d
+                SET source_config_id = uc.id
+                FROM url_configs AS uc
+                WHERE d.source_config_id IS NULL
+                  AND COALESCE(d.{col_name}, '') <> ''
+                  AND d.{col_name} = uc.recordset
+                """
+            )
 
 
 def _migration_13(conn: PGConnection) -> None:
