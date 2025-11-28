@@ -336,19 +336,34 @@ def _migration_12(conn: PGConnection) -> None:
             ON documents(source_config_id)
             """
         )
+        # Check if sort_order column already exists
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'url_configs' AND column_name = 'sort_order'
+            )
+            """
+        )
+        sort_order_exists = cur.fetchone()[0]
+        
         cur.execute(
             """
             ALTER TABLE url_configs
             ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0
             """
         )
-        cur.execute(
-            """
-            UPDATE url_configs
-            SET sort_order = id
-            WHERE sort_order = 0
-            """
-        )
+        
+        # Only initialize sort_order from id if we just added the column
+        # (i.e., all rows have sort_order = 0 because it's a fresh column)
+        if not sort_order_exists:
+            cur.execute(
+                """
+                UPDATE url_configs
+                SET sort_order = id
+                WHERE sort_order = 0
+                """
+            )
         cur.execute(
             """
             UPDATE documents AS d

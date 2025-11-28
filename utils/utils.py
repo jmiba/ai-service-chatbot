@@ -1256,11 +1256,6 @@ def _normalize_path_list(values):
 
 def save_url_configs(url_configs):
     """Upsert URL configurations while keeping per-recordset ownership stable."""
-    import sys
-    
-    def debug(msg):
-        print(f"[SAVE_URL_CONFIGS] {msg}", file=sys.stderr, flush=True)
-    
     conn = get_connection()
     try:
         with conn:
@@ -1268,13 +1263,8 @@ def save_url_configs(url_configs):
                 cursor.execute("SELECT id, recordset, sort_order FROM url_configs")
                 rows = cursor.fetchall()
                 existing_records = {row[0]: (row[1] or "").strip() for row in rows}
-                existing_sort_orders = {row[0]: row[2] for row in rows}
                 # Reverse lookup: recordset -> id (for recovering missing IDs)
                 recordset_to_id = {rs: cfg_id for cfg_id, rs in existing_records.items()}
-                
-                debug(f"existing records: {existing_records}")
-                debug(f"existing sort_orders: {existing_sort_orders}")
-                debug(f"incoming configs count: {len(url_configs)}")
 
                 normalized_configs = []
                 for idx, config in enumerate(url_configs):
@@ -1317,17 +1307,12 @@ def save_url_configs(url_configs):
                     cfg = entry["ref"]
                     cfg_id = cfg.get("id")
                     
-                    debug(f"Processing config {sort_order}: recordset={entry['recordset']}, cfg_id={cfg_id}")
-                    
                     # If id is missing but we can find it by recordset, recover it
                     if not cfg_id:
                         recovered_id = recordset_to_id.get(entry["recordset"])
                         if recovered_id:
                             cfg_id = recovered_id
                             cfg["id"] = recovered_id  # Fix the session state too
-                            debug(f"  Recovered ID {recovered_id} from recordset lookup")
-                        else:
-                            debug(f"  WARNING: No ID found for recordset {entry['recordset']}")
                     
                     params = (
                         entry["url"],
@@ -1337,8 +1322,6 @@ def save_url_configs(url_configs):
                         entry["include_lang_prefixes"],
                         sort_order,
                     )
-                    
-                    debug(f"  Will set sort_order={sort_order} for cfg_id={cfg_id}")
 
                     if cfg_id:
                         previous_recordset = existing_records.get(cfg_id)
@@ -1356,7 +1339,6 @@ def save_url_configs(url_configs):
                             """,
                             (*params, cfg_id),
                         )
-                        debug(f"  UPDATE executed for id={cfg_id}")
                         kept_ids.add(cfg_id)
                         if previous_recordset is not None and previous_recordset != entry["recordset"]:
                             cursor.execute(
