@@ -599,25 +599,26 @@ def get_kb_entries(limit=None, *, include_markdown: bool = True):
     """
     conn = get_connection()
     cursor = conn.cursor()
-    markdown_column = "markdown_content" if include_markdown else "NULL::text AS markdown_content"
+    markdown_column = "d.markdown_content" if include_markdown else "NULL::text AS markdown_content"
     base_query = f"""
         SELECT
-            id,
-            url,
-            title,
-            safe_title,
-            crawl_date,
-            lang,
-            summary,
-            tags,
+            d.id,
+            d.url,
+            d.title,
+            d.safe_title,
+            d.crawl_date,
+            d.lang,
+            d.summary,
+            d.tags,
             {markdown_column},
-            recordset,
-            vector_file_id,
-            page_type,
-            no_upload,
-            is_stale
-        FROM documents
-        ORDER BY updated_at DESC
+            COALESCE(uc.recordset, d.recordset) AS recordset,
+            d.vector_file_id,
+            d.page_type,
+            d.no_upload,
+            d.is_stale
+        FROM documents d
+        LEFT JOIN url_configs uc ON d.source_config_id = uc.id
+        ORDER BY d.updated_at DESC
     """
     try:
         if limit is not None:
@@ -638,27 +639,28 @@ def get_kb_entry_by_id(entry_id: int, *, include_markdown: bool = True):
     """Fetch a single knowledge base entry with the same tuple layout as get_kb_entries."""
     conn = get_connection()
     cursor = conn.cursor()
-    markdown_column = "markdown_content" if include_markdown else "NULL::text AS markdown_content"
+    markdown_column = "d.markdown_content" if include_markdown else "NULL::text AS markdown_content"
     try:
         cursor.execute(
             f"""
             SELECT
-                id,
-                url,
-                title,
-                safe_title,
-                crawl_date,
-                lang,
-                summary,
-                tags,
+                d.id,
+                d.url,
+                d.title,
+                d.safe_title,
+                d.crawl_date,
+                d.lang,
+                d.summary,
+                d.tags,
                 {markdown_column},
-                recordset,
-                vector_file_id,
-                page_type,
-                no_upload,
-                is_stale
-            FROM documents
-            WHERE id = %s
+                COALESCE(uc.recordset, d.recordset) AS recordset,
+                d.vector_file_id,
+                d.page_type,
+                d.no_upload,
+                d.is_stale
+            FROM documents d
+            LEFT JOIN url_configs uc ON d.source_config_id = uc.id
+            WHERE d.id = %s
             LIMIT 1
             """,
             (entry_id,),
@@ -1324,7 +1326,6 @@ def save_url_configs(url_configs):
                     )
 
                     if cfg_id:
-                        previous_recordset = existing_records.get(cfg_id)
                         cursor.execute(
                             """
                             UPDATE url_configs
@@ -1340,15 +1341,7 @@ def save_url_configs(url_configs):
                             (*params, cfg_id),
                         )
                         kept_ids.add(cfg_id)
-                        if previous_recordset is not None and previous_recordset != entry["recordset"]:
-                            cursor.execute(
-                                """
-                                UPDATE documents
-                                SET recordset = %s
-                                WHERE source_config_id = %s
-                                """,
-                                (entry["recordset"], cfg_id),
-                            )
+                        # NOTE: No longer syncing documents.recordset - use JOIN to url_configs instead
                     else:
                         cursor.execute(
                             """

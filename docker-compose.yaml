@@ -30,11 +30,6 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
 
-  # NOTE: autoheal requires Docker socket access to restart unhealthy containers.
-  # This grants elevated privileges. Consider these alternatives for production:
-  # 1. Use Docker Swarm or Kubernetes with built-in health management
-  # 2. Use an external monitoring tool (Uptime Kuma, Prometheus + alerting)
-  # 3. Accept the risk if running on a dedicated host with trusted images only
   autoheal:
     image: willfarrell/autoheal
     container_name: autoheal
@@ -43,6 +38,6 @@ services:
       - AUTOHEAL_CONTAINER_LABEL=autoheal
       - AUTOHEAL_INTERVAL=30
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only for slightly reduced risk
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - chatbot

@@ -208,6 +208,8 @@ def save_document_to_db(
     source_config_id=None,
 ):
     # NOTE: 'url' is assumed to be the normalized URL.
+    # NOTE: 'recordset' parameter kept for backwards compat/logging but no longer written to DB.
+    #       Use source_config_id and JOIN to url_configs for recordset label.
     markdown_hash = compute_sha256(markdown_content)
     tags = normalize_tags_for_storage(tags)
     with conn.cursor() as cur:
@@ -215,12 +217,12 @@ def save_document_to_db(
             """
             INSERT INTO documents (
                 url, title, safe_title, crawl_date, lang, summary, tags,
-                markdown_content, markdown_hash, recordset, vector_file_id, old_file_id,
+                markdown_content, markdown_hash, vector_file_id, old_file_id,
                 updated_at, page_type, no_upload, is_stale, source_config_id
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
                 NOW(), %s, %s, FALSE, %s
             )
             ON CONFLICT (url) DO UPDATE SET
@@ -232,7 +234,6 @@ def save_document_to_db(
                 tags = EXCLUDED.tags,
                 markdown_content = EXCLUDED.markdown_content,
                 markdown_hash = EXCLUDED.markdown_hash,
-                recordset = EXCLUDED.recordset,
                 vector_file_id = EXCLUDED.vector_file_id,
                 old_file_id = documents.vector_file_id,
                 updated_at = NOW(),
@@ -251,7 +252,6 @@ def save_document_to_db(
                 tags,
                 markdown_content,
                 markdown_hash,
-                recordset,
                 vector_file_id,
                 None,
                 page_type,
