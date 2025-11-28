@@ -197,7 +197,7 @@ from app_modules import (
 
 # -------------------------------------
 
-st.set_page_config(page_title="Viadrina Library Assistant", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Viadrina Library Assistant", page_icon="assets/favicon-euv.ico", layout="wide", initial_sidebar_state="collapsed")
 _init_language()
 
 # Read version from VERSION file (auto-tagged on commit)
