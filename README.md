@@ -2,7 +2,7 @@
 
 [![DOI](https://zenodo.org/badge/1004557824.svg)](https://doi.org/10.5281/zenodo.17742547)
 
-An AI-powered Streamlit app using OpenAI Responses API. It answers domain-specific questions with Retrieval-Augmented Generation (RAG), web search, mcp support, and rich citations. Includes an admin UI for settings, prompt versioning, tools, analytics, and scraping/vectorization workflows.
+An AI-powered Streamlit app using the OpenAI Responses API. It answers domain-specific questions with Retrieval-Augmented Generation (RAG), web search, MCP support, and rich citations. Includes an admin UI for settings, prompt versioning, tools, analytics, and scraping/vectorization workflows.
 
 It can index any set of websites or internal documents to build a knowledge base for RAG.
 
