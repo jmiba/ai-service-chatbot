@@ -532,23 +532,27 @@ if HAS_STREAMLIT_CONTEXT:
         # Quick explanation with performance info
         with st.expander("How this works", icon=":material/info:", expanded=False):
             st.markdown("""
-            **What is this?** A housekeeping console for the knowledge base. It watches what the scheduled scraper already collects, mirrors the documents into OpenAI’s vector store, and gives you buttons to tidy things up when needed.
-        
-            **Simple story:**
-            1. 📅 Every 12 hours the scraper/CLI job runs automatically: it crawls the configured sites, updates the database, and then syncs any changes to the vector store.
-            2. 🧾 After each run the job saves two snapshots—quick stats and detailed file listings—so when you open this page you immediately see the latest state without extra API calls.
-            3. 🧹 You only press “Reload all vector store details” when you changed things outside the normal run (manual DB edits, emergency cleanups, etc.).
-        
-            **What the file states mean:**
-            - **New** → scraped but never uploaded yet; will go up on the next run.
-            - **Updated** → already re-uploaded, but the old file is still around until you clean it.
-            - **Excluded** → documents flagged “don’t upload”; their vector files should be removed.
-            - **Orphaned** → files left in the vector store even though no DB row points to them anymore (safe to delete once reviewed).
-        
-            **Why it stays fast:**
-            - We reuse cached vector-store listings for five minutes to avoid rate limits.
-            - Uploads, deletions and metadata lookups happen in batches so long runs stay manageable.
-            - The CLI writes the persisted detail file the UI reads, so most visits require zero manual refreshes.
+**What is this?**  
+A housekeeping console for the knowledge base. It monitors what the scheduled scraper collects, syncs documents to OpenAI's vector store, and provides tools for cleanup and maintenance.
+
+**How it works:**
+1. 📅 **Automatic sync** — The scraper runs at scheduled times (configured on the Scraper page). It crawls configured sites, updates the database, and syncs changes to the vector store.
+2. 🧾 **Cached snapshots** — After each run, the job saves status snapshots so this page loads instantly without extra API calls.
+3. 🧹 **Manual refresh** — Only press "Reload all vector store details" when you've made changes outside the normal run (manual DB edits, emergency cleanups, etc.).
+
+**File states:**
+
+| State | Meaning |
+|-------|---------|
+| **New** | Scraped but not yet uploaded — will sync on next run |
+| **Updated** | Re-uploaded, but old file still exists — cleanup recommended |
+| **Excluded** | Flagged "don't upload" — vector files should be removed |
+| **Orphaned** | Files in vector store with no matching DB entry — safe to delete |
+
+**Performance notes:**
+- Vector store listings are cached for 5 minutes to avoid API rate limits
+- Uploads and deletions run in batches for efficiency
+- The CLI writes persisted snapshots that the UI reads — most visits need zero manual refreshes
             """)
     
         st.markdown("---")
