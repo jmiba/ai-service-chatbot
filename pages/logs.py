@@ -703,7 +703,7 @@ if authenticated:
                             .mark_arc(innerRadius=60)
                             .encode(
                                 theta=alt.Theta(field="count", type="quantitative"),
-                                color=alt.Color(field="topic", type="nominal", legend=alt.Legend(title="Topic")),
+                                color=alt.Color(field="topic", type="nominal", legend=alt.Legend(title="Topic"), scale=alt.Scale(scheme='category20')),
                                 tooltip=[
                                     alt.Tooltip("topic:N", title="Topic"),
                                     alt.Tooltip("count:Q", title="Count"),
@@ -792,7 +792,7 @@ if authenticated:
                             .mark_arc(innerRadius=60)
                             .encode(
                                 theta=alt.Theta(field="count", type="quantitative"),
-                                color=alt.Color(field="label_with_code", type="nominal", legend=alt.Legend(title="Request type")),
+                                color=alt.Color(field="label_with_code", type="nominal", legend=alt.Legend(title="Request type"), scale=alt.Scale(scheme='category20')),
                                 tooltip=[
                                     alt.Tooltip("label_with_code:N", title="Status"),
                                     alt.Tooltip("count:Q", title="Interactions"),
