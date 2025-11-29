@@ -391,11 +391,14 @@ if authenticated:
                 )
 
                 selection_enabled = True
+                # Calculate height based on number of rows (approx 35px per row + 60px header/padding)
+                table_height = min(len(session_df), st.session_state["logs_session_page_size"]) * 35 + 60
                 try:
                     table_event = st.dataframe(
                         session_df,
                         hide_index=True,
                         width='stretch',
+                        height=table_height,
                         selection_mode="single-row",
                         on_select="rerun",
                         key="logs_session_table",
@@ -406,6 +409,7 @@ if authenticated:
                         session_df,
                         hide_index=True,
                         width='stretch',
+                        height=table_height,
                         key="logs_session_table",
                     )
 
@@ -540,12 +544,15 @@ if authenticated:
                 )
 
             table_df = pd.DataFrame(table_rows)
+            # Calculate height based on number of rows (approx 35px per row + 60px header/padding)
+            table_height = min(len(table_df), st.session_state["logs_page_size"]) * 35 + 60
             selection_enabled = True
             try:
                 table_event = st.dataframe(
                     table_df,
                     hide_index=True,
                     width='stretch',
+                    height=table_height,
                     selection_mode="single-row",
                     on_select="rerun",
                     key="logs_table",
@@ -556,6 +563,7 @@ if authenticated:
                     table_df,
                     hide_index=True,
                     width='stretch',
+                    height=table_height,
                     key="logs_table",
                 )
 
