@@ -698,9 +698,9 @@ if authenticated:
                     if df_topics.empty:
                         st.info("No topic data available yet.")
                     else:
-                        pie = (
+                        ring = (
                             alt.Chart(df_topics)
-                            .mark_arc()
+                            .mark_arc(innerRadius=60)
                             .encode(
                                 theta=alt.Theta(field="count", type="quantitative"),
                                 color=alt.Color(field="topic", type="nominal", legend=alt.Legend(title="Topic")),
@@ -711,7 +711,7 @@ if authenticated:
                             )
                             .properties(height=320)
                         )
-                        st.altair_chart(pie)
+                        st.altair_chart(ring)
                 except Exception as exc:
                     st.warning("Falling back to table view due to a charting error.")
                     try:
@@ -787,9 +787,9 @@ if authenticated:
                     try:
                         import altair as alt
 
-                        pie_errors = (
+                        ring_errors = (
                             alt.Chart(df_errors)
-                            .mark_arc()
+                            .mark_arc(innerRadius=60)
                             .encode(
                                 theta=alt.Theta(field="count", type="quantitative"),
                                 color=alt.Color(field="label_with_code", type="nominal", legend=alt.Legend(title="Request type")),
@@ -800,7 +800,7 @@ if authenticated:
                             )
                             .properties(height=320)
                         )
-                        st.altair_chart(pie_errors)
+                        st.altair_chart(ring_errors)
                     except Exception as exc:
                         st.warning("Could not render request type chart; showing table instead.")
                         try:
