@@ -989,6 +989,9 @@ def admin_authentication(return_to: str | None = None):
             target = st.session_state.pop("_auth_redirect_to", None)
             if target:
                 st.switch_page(target)
+            # If no explicit target but we're on the main chat page, go to default admin page
+            elif return_to is None:
+                st.switch_page(default_admin_page)
             return True
         else:
             st.error("Your account is not authorized for admin access.")

@@ -173,6 +173,7 @@ from utils import (
     get_document_status_counts,
     format_request_type_legend,
 )
+from utils.oidc import is_auth_configured, get_auth_allowlist
 
 # Import refactored modules (consolidates duplicate helper functions)
 from app_modules import (
@@ -198,6 +199,25 @@ from app_modules import (
 # -------------------------------------
 
 st.set_page_config(page_title="Viadrina Library Assistant", page_icon="assets/favicon-euv.ico", layout="wide", initial_sidebar_state="collapsed")
+
+# Handle OIDC callback: if user just logged in via SSO, redirect to admin page
+if is_auth_configured() and getattr(st.user, 'is_logged_in', False):
+    email = getattr(st.user, 'email', '') or ''
+    allowlist = get_auth_allowlist()
+    if email and email.strip().lower() in allowlist:
+        # User is authenticated via SSO - redirect to stored target or default admin page
+        redirect_target = st.session_state.pop("_auth_redirect_to", None)
+        if redirect_target:
+            st.switch_page(redirect_target)
+        # If no stored target, this is a fresh SSO return - go to logs page
+        elif not st.session_state.get("_sso_redirect_done"):
+            st.session_state["_sso_redirect_done"] = True
+            st.session_state.authenticated = True
+            st.session_state["admin_email"] = email
+            if hasattr(st.user, 'name') and st.user.name:
+                st.session_state["admin_name"] = st.user.name
+            st.switch_page("pages/logs.py")
+
 _init_language()
 
 # Read version from VERSION file (auto-tagged on commit)
