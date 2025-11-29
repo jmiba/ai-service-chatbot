@@ -1647,6 +1647,8 @@ def main():
                         )
 
                     table_df = pd.DataFrame(table_rows)
+                    # Calculate height based on number of rows (approx 35px per row + 60px header/padding)
+                    table_height = min(len(table_df), st.session_state["kb_page_size"]) * 35 + 60
 
                     current_ids = [entry[0] for entry in page_entries]
                     stored_id = st.session_state.get("kb_selected_id")
@@ -1665,6 +1667,7 @@ def main():
                             table_df,
                             hide_index=True,
                             width='stretch',
+                            height=table_height,
                             selection_mode="single-row",
                             on_select="rerun",
                             key="kb_table",
@@ -1675,6 +1678,7 @@ def main():
                             table_df,
                             hide_index=True,
                             width='stretch',
+                            height=table_height,
                             key="kb_table",
                         )
 
