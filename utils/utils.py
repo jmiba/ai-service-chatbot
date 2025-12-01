@@ -758,9 +758,11 @@ def get_document_by_identifier(*, doc_id: int | None = None, file_id: str | None
         if doc_id is not None:
             cursor.execute(
                 """
-                SELECT id, title, url, summary, tags, markdown_content, recordset, updated_at
-                FROM documents
-                WHERE id = %s
+                SELECT d.id, d.title, d.url, d.summary, d.tags, d.markdown_content,
+                       COALESCE(uc.recordset, d._recordset_deprecated) AS recordset, d.updated_at
+                FROM documents d
+                LEFT JOIN url_configs uc ON d.source_config_id = uc.id
+                WHERE d.id = %s
                 LIMIT 1
                 """,
                 (doc_id,),
@@ -768,9 +770,11 @@ def get_document_by_identifier(*, doc_id: int | None = None, file_id: str | None
         else:
             cursor.execute(
                 """
-                SELECT id, title, url, summary, tags, markdown_content, recordset, updated_at
-                FROM documents
-                WHERE vector_file_id = %s OR old_file_id = %s
+                SELECT d.id, d.title, d.url, d.summary, d.tags, d.markdown_content,
+                       COALESCE(uc.recordset, d._recordset_deprecated) AS recordset, d.updated_at
+                FROM documents d
+                LEFT JOIN url_configs uc ON d.source_config_id = uc.id
+                WHERE d.vector_file_id = %s OR d.old_file_id = %s
                 LIMIT 1
                 """,
                 (file_id, file_id),

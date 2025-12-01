@@ -12,7 +12,7 @@ import pandas as pd
 import streamlit as st
 import html
 
-from scrape.core import BASE_DIR
+from scrape.core import BASE_DIR, summarize_and_tag_tooluse, save_document_to_db
 from scrape.config import load_summarize_prompts
 from utils import (
     get_connection,
@@ -494,6 +494,11 @@ def main():
                         conn = None
                         try:
                             conn = get_connection()
+                            # Look up the source_config_id for "internal://" (Internal documents)
+                            with conn.cursor() as cur:
+                                cur.execute("SELECT id FROM url_configs WHERE url = 'internal://'")
+                                row = cur.fetchone()
+                                internal_config_id = row[0] if row else None
                             save_document_to_db(
                                 conn,
                                 normalized_manual_url,
@@ -508,7 +513,7 @@ def main():
                                 "Internal documents",
                                 manual_page_type,
                                 manual_no_upload,
-                                source_config_id=None,
+                                source_config_id=internal_config_id,
                             )
                         except Exception as exc:
                             st.session_state["manual_form_submitting"] = False
@@ -1354,8 +1359,8 @@ def main():
             """Mirror the shared normalization used for storage."""
             return normalize_tags_for_storage(raw)
 
-        recordsets = sorted(set(entry[9] for entry in entries))
-        page_types = sorted(set(entry[11] for entry in entries))
+        recordsets = sorted(set(entry[9] for entry in entries if entry[9] is not None))
+        page_types = sorted(set(entry[11] for entry in entries if entry[11] is not None))
         st.session_state.setdefault("kb_tag_filter", [])
         filters_should_expand = bool(st.session_state.get("kb_tag_filter"))
 

@@ -423,6 +423,20 @@ def _migration_13(conn: PGConnection) -> None:
             cur.execute("DROP INDEX IF EXISTS idx_documents_recordset")
 
 
+def _migration_14(conn: PGConnection) -> None:
+    """Create url_configs entry for Internal documents if it doesn't exist."""
+    with conn.cursor() as cur:
+        # Check if the internal:// config already exists
+        cur.execute("SELECT id FROM url_configs WHERE url = 'internal://'")
+        if cur.fetchone() is None:
+            cur.execute(
+                """
+                INSERT INTO url_configs (url, recordset, depth, exclude_paths, include_lang_prefixes, sort_order)
+                VALUES ('internal://', 'Internal documents', 0, ARRAY[]::TEXT[], ARRAY[]::TEXT[], -1)
+                """
+            )
+
+
 MIGRATIONS: Dict[int, MigrationFunc] = {
     1: _migration_1,
     2: _migration_2,
@@ -437,6 +451,7 @@ MIGRATIONS: Dict[int, MigrationFunc] = {
     11: _migration_11,
     12: _migration_12,
     13: _migration_13,
+    14: _migration_14,
 }
 
 
