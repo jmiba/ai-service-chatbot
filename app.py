@@ -3,6 +3,8 @@ from openai import OpenAI, APIConnectionError, BadRequestError, RateLimitError, 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
+import base64
+import io
 import json, re, html, os
 import yaml
 from urllib.parse import quote_plus
@@ -99,6 +101,42 @@ def t(key: str, **kwargs) -> str:
         except Exception:
             pass
     return text
+
+@st.cache_data(show_spinner=False)
+def _image_to_data_url(path: Path, max_width: int | None = None, max_height: int | None = None) -> str:
+    """Return a base64 data URL for use in inline CSS backgrounds; optionally downscale if Pillow is available."""
+    try:
+        data = path.read_bytes()
+        mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+
+        # Optional downscale to reduce payload; only runs when Pillow is installed
+        if max_width or max_height:
+            try:
+                from PIL import Image  # type: ignore
+
+                img = Image.open(path)
+                img_format = "PNG" if path.suffix.lower() == ".png" else "JPEG"
+                width, height = img.size
+                target_w = max_width or width
+                target_h = max_height or height
+                ratio = min(target_w / width, target_h / height)
+
+                if ratio < 1.0:
+                    new_size = (max(1, int(width * ratio)), max(1, int(height * ratio)))
+                    img = img.resize(new_size, Image.LANCZOS)
+                    buf = io.BytesIO()
+                    img.save(buf, format=img_format)
+                    data = buf.getvalue()
+                    mime = "image/png" if img_format == "PNG" else "image/jpeg"
+            except ImportError:
+                pass
+            except Exception:
+                pass
+
+        encoded = base64.b64encode(data).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+    except Exception:
+        return ""
 
 def _mcp_preflight(url: str, headers: dict | None, authorization: str | None, timeout_s: float = 3.0) -> tuple[bool, str | None]:
     """Quick reachability/auth check for MCP server URL with caching.
@@ -200,23 +238,15 @@ from app_modules import (
 
 st.set_page_config(page_title="Viadrina Library Assistant", page_icon="assets/favicon-euv.ico", layout="wide", initial_sidebar_state="collapsed")
 
-# Handle OIDC callback: if user just logged in via SSO, redirect to admin page
+# Handle OIDC: if user is logged in via SSO, set session state for admin access
 if is_auth_configured() and getattr(st.user, 'is_logged_in', False):
     email = getattr(st.user, 'email', '') or ''
     allowlist = get_auth_allowlist()
     if email and email.strip().lower() in allowlist:
-        # User is authenticated via SSO - redirect to stored target or default admin page
-        redirect_target = st.session_state.pop("_auth_redirect_to", None)
-        if redirect_target:
-            st.switch_page(redirect_target)
-        # If no stored target, this is a fresh SSO return - go to logs page
-        elif not st.session_state.get("_sso_redirect_done"):
-            st.session_state["_sso_redirect_done"] = True
-            st.session_state.authenticated = True
-            st.session_state["admin_email"] = email
-            if hasattr(st.user, 'name') and st.user.name:
-                st.session_state["admin_name"] = st.user.name
-            st.switch_page("pages/logs.py")
+        st.session_state.authenticated = True
+        st.session_state["admin_email"] = email
+        if hasattr(st.user, 'name') and st.user.name:
+            st.session_state["admin_name"] = st.user.name
 
 _init_language()
 
@@ -2289,11 +2319,24 @@ else:
     CUSTOM_INSTRUCTIONS = _format_prompt(DEFAULT_PROMPT, datetime=formatted_time)
 
 # Main frame
-col1, col2 = st.columns([3, 3])
-with col1:
-    st.image(BASE_DIR / "assets/viadrina-ub-logo.png", width=300)
-with col2:
-    st.markdown(f'<div id="chatbot-title"><h1>{t("chatbot_title")}</h1></div>', unsafe_allow_html=True)
+
+hero_bg = _image_to_data_url(BASE_DIR / "assets/viadrina-ub-logo.png", max_width=300)
+
+# Set dynamic hero background image (static styles are in css/styles.css)
+st.markdown(
+    f"<style>.hero {{ background-image: url('{hero_bg}'); }}</style>",
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    f"""
+    <div class="hero">
+        <h1>{t("chatbot_title")}</h1>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.markdown('<div id="special-hr"><hr></div>', unsafe_allow_html=True)
 
 # replay chat history

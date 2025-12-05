@@ -74,7 +74,7 @@ def _load_available_models_cached():
 
 
 # --- Authentication ---
-authenticated = admin_authentication(return_to="pages/admin.py")
+authenticated = admin_authentication()
 render_sidebar(authenticated)
 
 # --- Admin content ---

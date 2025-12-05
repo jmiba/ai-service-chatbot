@@ -47,7 +47,7 @@ ICON_PATH = BASE_DIR / "assets" / "home_storage.png"
 # -----------------------------
 # Auth / sidebar
 # -----------------------------
-authenticated = admin_authentication(return_to="pages/scrape.py")
+authenticated = admin_authentication()
 render_sidebar(authenticated)
 
 def ensure_url_config_ids(configs: list[dict]) -> None:
@@ -420,7 +420,6 @@ def main():
             manual_markdown = st.text_area("Markdown Content", height=260, key="manual_markdown")
             manual_crawl_date = st.date_input(
                 "Crawl date",
-                value=st.session_state["manual_crawl_date"],
                 key="manual_crawl_date"
             )
             options_page_type = ["text", "links", "other"]

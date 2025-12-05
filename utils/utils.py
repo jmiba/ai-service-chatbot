@@ -964,20 +964,26 @@ def _oidc_user_allowed(email: str) -> bool:
     return bool(candidate and candidate in allowlist)
 
 
-def admin_authentication(return_to: str | None = None):
+def _perform_logout():
+    """Clear authentication state for both OIDC and legacy password auth."""
+    # If user logged in via Streamlit's native OIDC, use st.logout()
+    if getattr(st.user, 'is_logged_in', False):
+        st.logout()
+    # Also clear legacy session state
+    st.session_state.authenticated = False
+    for key in ("admin_name", "admin_email"):
+        st.session_state.pop(key, None)
+
+
+def admin_authentication():
     """
     Authenticate admin users via Streamlit native OIDC (when configured) or fallback password.
     
     Uses st.login(), st.logout(), and st.user for authentication when [auth] is configured
     in secrets.toml. Falls back to password authentication if OIDC is not configured or
     if allow_password_fallback is enabled.
-    
-    Args:
-        return_to: Page to redirect to after login. If None, defaults to "pages/logs.py".
-                   Admin pages should pass their own path to stay on the same page after login.
     """
     auth_ready = is_auth_configured()
-    default_admin_page = "pages/logs.py"
     
     # Check if user is already authenticated via Streamlit's native auth
     # st.user.is_logged_in only exists when [auth] is configured in secrets.toml
@@ -988,14 +994,6 @@ def admin_authentication(return_to: str | None = None):
             st.session_state["admin_email"] = email
             if hasattr(st.user, 'name') and st.user.name:
                 st.session_state["admin_name"] = st.user.name
-            
-            # Redirect to target page after SSO login if we came from a non-admin page
-            target = st.session_state.pop("_auth_redirect_to", None)
-            if target:
-                st.switch_page(target)
-            # If no explicit target but we're on the main chat page, go to default admin page
-            elif return_to is None:
-                st.switch_page(default_admin_page)
             return True
         else:
             st.error("Your account is not authorized for admin access.")
@@ -1029,12 +1027,7 @@ def admin_authentication(return_to: str | None = None):
         # Use Streamlit's native OIDC login
         provider = get_provider_name()
         
-        # Store redirect target before login (use return_to or default to logs.py)
-        redirect_target = return_to if return_to else default_admin_page
-        
         if st.button("Continue with SSO", type="primary"):
-            # Store where to go after login
-            st.session_state["_auth_redirect_to"] = redirect_target
             if provider:
                 st.login(provider)
             else:
@@ -1134,18 +1127,6 @@ def render_sidebar(
             st.session_state.session_id = str(uuid.uuid4())
             st.rerun()
 
-    def _perform_logout():
-        # If user logged in via Streamlit's native OIDC, use st.logout()
-        if getattr(st.user, 'is_logged_in', False):
-            st.logout()
-        # Also clear legacy session state
-        st.session_state.authenticated = False
-        for key in (
-            "admin_name",
-            "admin_email",
-        ):
-            st.session_state.pop(key, None)
-    
     # Debug checkbox right beneath chat assistant (only on main page when authenticated)
     debug_one = False
     # Disclaimer
@@ -1157,14 +1138,7 @@ def render_sidebar(
         # Show session ID for debugging
         if "session_id" in st.session_state:
             st.sidebar.caption(f"Session ID: `{st.session_state.session_id[:8]}...`")
-    st.html("""
-    <style>
-        .st-key-sidebar_bottom {
-            position: absolute;
-            bottom: 10px;
-        }
-    </style>
-    """)
+
     if authenticated:
         st.sidebar.success(t_sidebar("sidebar_authenticated"))
         st.sidebar.page_link("pages/logs.py", label=t_sidebar("sidebar_logs"), icon=":material/search_activity:")
@@ -1172,16 +1146,24 @@ def render_sidebar(
         st.sidebar.page_link("pages/vectorize.py", label=t_sidebar("sidebar_vector"), icon=":material/owl:")
         st.sidebar.page_link("pages/admin.py", label=t_sidebar("sidebar_settings"), icon=":material/settings:")
         #st.sidebar.page_link("pages/manage_users.py", label="👥 Manage Users")
-        
-        st.sidebar.button(t_sidebar("sidebar_logout"), on_click=_perform_logout, icon=":material/logout:")
-        with st.sidebar.container(key="sidebar_bottom"):
-            version_prefix = f"v{version.strip()} | " if version else ""
-            st.caption(f"{version_prefix}{t_sidebar('sidebar_source')}")
-    else:
-        with st.sidebar.container(key="sidebar_bottom"):
-            st.page_link("pages/logs.py", label=t_sidebar("sidebar_admin_login"), icon=":material/key:")
-            version_prefix = f"v{version.strip()} | " if version else ""
-            st.caption(f"{version_prefix}{t_sidebar('sidebar_source')}")
+
+    with st.sidebar.container(key="sidebar_bottom"):
+        # Login/logout toggle button
+        if authenticated:
+            st.button(t_sidebar("sidebar_logout"), on_click=_perform_logout, icon=":material/logout:", key="sidebar_auth_toggle")
+        else:
+            # Show SSO login button if OIDC is configured, otherwise link to password login
+            if is_auth_configured():
+                provider = get_provider_name()
+                if st.button(t_sidebar("sidebar_admin_login"), icon=":material/key:", key="sidebar_auth_toggle"):
+                    if provider:
+                        st.login(provider)
+                    else:
+                        st.login()
+            else:
+                st.page_link("pages/logs.py", label=t_sidebar("sidebar_admin_login"), icon=":material/key:")
+        version_prefix = f"v{version.strip()} | " if version else ""
+        st.caption(f"{version_prefix}{t_sidebar('sidebar_source')}")
         
     
     return debug_one, save_chat_slot
