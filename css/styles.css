@@ -44,50 +44,61 @@
 /* Hero section */
 .hero {
     position: relative;
-    padding: 2rem 1.5rem 0 0;
+    padding: 3.5rem 1.25rem 0 0;
     margin-top: -6rem;
+    background-image: var(--hero-background);
     background-repeat: no-repeat;
     background-size: auto auto;
-    background-position: 1.5rem center;
+    background-position: 1.5rem 85%;
+    border-bottom: 1px solid lightgrey;
 }
 
 .hero h1 {
-    margin-top: 60px;
+    margin: 60px 0 -20px 0;
     font-size: clamp(26px, 3vw, 36px);
     font-weight: 100;
     text-align: right;
+    white-space: nowrap;
 }
 @media (max-width: 1300px) {
     .hero {
-        padding: 4rem 1.25rem 0 calc(110px + 2rem);
+        padding: 2.5rem 1.25rem 0 calc(110px + 2rem);
         background-size: 200px auto;
     }
     .hero h1 {
-        margin-top: 0;
-        text-align: right;
         font-size: clamp(22px, 6vw, 30px);
     }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1140px) {
     .hero {
-        padding: 1.25rem 1rem 0 calc(110px + 2rem);
-        background-size: 100px auto;
+        padding: 2.5rem 1.25rem 0 calc(110px + 2rem);
+        background-size: 200px auto;
+    }
+    .hero h1 {font-size: clamp(18px, 6vw, 24px);
+        
+    }
+}
+
+@media (max-width: 1050px) {
+    .hero {
+        padding: 2rem 1rem 0 calc(80px + 2rem);
+        background-image: var(--hero-background-small);
+        background-size: 70px auto;
     }
     .hero h1 {
-        margin-top: 0;
-        text-align: left;
-        font-size: clamp(22px, 6vw, 30px);
+        font-size: clamp(16px, 6vw, 22px);
     }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 400px) {
     .hero {
         padding: 1rem 1rem 0 1rem;
-        background-image: none !important;
+        background-image: none;
     }
     .hero h1 {
-        text-align: left;
+        font-size: clamp(14px, 6vw, 20px);
+        text-align: center;
     }
 }
 

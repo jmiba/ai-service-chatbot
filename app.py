@@ -236,7 +236,7 @@ from app_modules import (
 
 # -------------------------------------
 
-st.set_page_config(page_title="Viadrina Library Assistant", page_icon="assets/favicon-euv.ico", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Viadrina Library Assistant", page_icon="assets/favicon-euv.ico", layout="wide", initial_sidebar_state="expanded")
 
 # Handle OIDC: if user is logged in via SSO, set session state for admin access
 if is_auth_configured() and getattr(st.user, 'is_logged_in', False):
@@ -2321,10 +2321,18 @@ else:
 # Main frame
 
 hero_bg = _image_to_data_url(BASE_DIR / "assets/viadrina-ub-logo.png", max_width=300)
+hero_bg_small = _image_to_data_url(BASE_DIR / "assets/viadrina-siegel.png", max_width=70)
 
 # Set dynamic hero background image (static styles are in css/styles.css)
 st.markdown(
-    f"<style>.hero {{ background-image: url('{hero_bg}'); }}</style>",
+    f"""
+    <style>
+    :root {{
+        --hero-background: url('{hero_bg}');
+        --hero-background-small: url('{hero_bg_small}');
+    }}
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 
@@ -2337,7 +2345,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown('<div id="special-hr"><hr></div>', unsafe_allow_html=True)
 
 # replay chat history
 if "messages" not in st.session_state:
