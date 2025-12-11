@@ -2320,8 +2320,8 @@ else:
 
 # Main frame
 
-hero_bg = _image_to_data_url(BASE_DIR / "assets/viadrina-ub-logo.png", max_width=300)
-hero_bg_small = _image_to_data_url(BASE_DIR / "assets/viadrina-siegel.png", max_width=70)
+hero_bg = _image_to_data_url(BASE_DIR / "assets/logo.png", max_width=300)
+hero_bg_small = _image_to_data_url(BASE_DIR / "assets/logo_small.png", max_width=70)
 
 # Set dynamic hero background image (static styles are in css/styles.css)
 st.markdown(
