@@ -34,13 +34,6 @@
     display: block;
 }
 
-#special-hr hr {
-  margin-top: -20px !important;
-  border: 0;
-  height: 1px;
-  background: linear-gradient(90deg, rgba(0,0,0,0.08), rgba(0,0,0,0.25), rgba(0,0,0,0.08));
-}
-
 /* Hero section */
 .hero {
     position: relative;
@@ -93,10 +86,33 @@
 
 @media (max-width: 400px) {
     .hero {
+        position: relative;
         padding: 1rem 1rem 0 1rem;
+        margin-top: -7rem;
         background-image: none;
+        overflow: hidden;
+        z-index: 0;
+    }
+
+    .hero::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-image: var(--hero-background-small);
+        background-repeat: no-repeat;
+        background-size: 50px auto;
+        background-position: 0.5rem 95%;
+        filter: grayscale(50%);
+        opacity: var(--hero-opacity, 0.2);
+        z-index: 0;
     }
     .hero h1 {
+        position: relative;
+        margin: 60px 0 -10px 1rem ;
+        z-index: 1;
         font-size: clamp(14px, 6vw, 20px);
         text-align: center;
     }
