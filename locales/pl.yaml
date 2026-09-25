@@ -12,6 +12,7 @@ dbis_tools_auth_hint: "(Serwer zwrócił 401 Unauthorized—sprawdź dane logowa
 thinking: "Myślę…"
 rate_limited: "Przekraczamy limity. Spróbuj ponownie za chwilę."
 connection_error: "❌ Błąd połączenia z OpenAI: {error}"
+api_error: "❌ Błąd API OpenAI: {error}"
 response_missing: "Tym razem nie udało się wygenerować odpowiedzi."
 api_key_required_title: "🔑 **Wymagany klucz API OpenAI**"
 api_key_required_body: |

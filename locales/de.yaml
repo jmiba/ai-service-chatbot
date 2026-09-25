@@ -12,6 +12,7 @@ dbis_tools_auth_hint: "(Server meldete 401 Unauthorized—bitte MCP-Zugangsdaten
 thinking: "Denke nach…"
 rate_limited: "Wir werden gerade gedrosselt. Bitte versuche es gleich noch einmal."
 connection_error: "❌ OpenAI-Verbindungsfehler: {error}"
+api_error: "❌ OpenAI-API-Fehler: {error}"
 response_missing: "Diesmal konnte ich keine Antwort erzeugen."
 api_key_required_title: "🔑 **OpenAI-API-Schlüssel erforderlich**"
 api_key_required_body: |

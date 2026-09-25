@@ -1,5 +1,5 @@
 import streamlit as st
-from openai import OpenAI, APIConnectionError, BadRequestError, RateLimitError, APIError
+from openai import OpenAI, APIConnectionError, RateLimitError, APIError
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -14,6 +14,8 @@ import uuid
 import threading
 import httpx
 from typing import Any, Sequence
+
+from utils.openai_errors import OpenAIErrorAction, classify_openai_error
 
 # Try to import Streamlit's script run context helper (safe fallback if unavailable)
 try:
@@ -1596,7 +1598,7 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
             t_end = datetime.now()
             main_latency_ms = int((t_end - t_start).total_seconds() * 1000)
 
-        except (BadRequestError, APIConnectionError, RateLimitError, APIError) as e:
+        except APIError as e:
             status_code = getattr(getattr(e, "response", None), "status_code", None)
             error_text = getattr(e, "message", "") or str(e)
             mcp_tool_present = any(tool.get("type") == "mcp" for tool in tool_cfg)
@@ -1606,65 +1608,81 @@ def handle_stream_and_render(user_input, system_instructions, client, retrieval_
                 and "Error retrieving tool list" in error_text
                 and mcp_tool_present
             )
-            fallback_api_params = None
-
-            if is_mcp_tool_error:
-                st.session_state["dbis_mcp_disabled"] = True
-                warning_msg = t("dbis_tools_temporarily_disabled")
-                if auth_error:
-                    warning_msg += " " + t("dbis_tools_auth_hint")
-                try:
-                    st.warning(warning_msg)
-                except Exception:
-                    print(warning_msg, flush=True)
-                tool_cfg = [tool for tool in tool_cfg if tool.get("type") != "mcp"]
-                # Prepare fallback params without MCP tools so the non-streaming retry succeeds
-                llm_config = get_current_llm_config()
-                fallback_api_params = {
-                    'model': llm_config['model'],
-                    'input': conversation_input,
-                    'tools': tool_cfg,
-                    'parallel_tool_calls': llm_config['parallel_tool_calls']
-                }
-                if supports_reasoning_effort(llm_config['model']):
-                    fallback_api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
-                fallback_api_params['text'] = {'verbosity': llm_config['text_verbosity']}
-
+            error_action = classify_openai_error(
+                e,
+                is_mcp_tool_error=is_mcp_tool_error,
+            )
             print(f"❌ OpenAI API error during streaming: {e}", flush=True)
+            if isinstance(e, APIConnectionError) and e.__cause__ is not None:
+                cause = e.__cause__
+                print(
+                    f"❌ OpenAI connection failure cause: {type(cause).__name__}: {cause}",
+                    flush=True,
+                )
             # Ensure spinner is closed before fallback/error
             try:
                 spinner_ctx.__exit__(None, None, None)
             except Exception:
                 pass
 
-            if isinstance(e, (BadRequestError, APIError)):
-                # Fallback: non-streaming request rendered inside same bubble
-                with st.spinner(t("thinking")):
-                    # Get current LLM configuration from database
-                    if fallback_api_params is None:
-                        llm_config = get_current_llm_config()
-                        # Build API parameters conditionally based on model support
-                        fallback_api_params = {
-                            'model': llm_config['model'],
-                            'input': conversation_input,
-                            'tools': tool_cfg,
-                            'parallel_tool_calls': llm_config['parallel_tool_calls']
-                        }
-                        if supports_reasoning_effort(llm_config['model']):
-                            fallback_api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
-                        fallback_api_params['text'] = {'verbosity': llm_config['text_verbosity']}
+            if error_action is OpenAIErrorAction.CONNECTION:
+                st.error(t("connection_error", error=e))
+                return
+            if error_action is OpenAIErrorAction.RATE_LIMIT:
+                st.error(t("rate_limited"))
+                return
+            if error_action is OpenAIErrorAction.API_ERROR:
+                st.error(t("api_error", error=e))
+                return
+
+            st.session_state["dbis_mcp_disabled"] = True
+            warning_msg = t("dbis_tools_temporarily_disabled")
+            if auth_error:
+                warning_msg += " " + t("dbis_tools_auth_hint")
+            try:
+                st.warning(warning_msg)
+            except Exception:
+                print(warning_msg, flush=True)
+            tool_cfg = [tool for tool in tool_cfg if tool.get("type") != "mcp"]
+
+            # This retry changes the request by removing the unavailable MCP tool.
+            llm_config = get_current_llm_config()
+            fallback_api_params = {
+                'model': llm_config['model'],
+                'input': conversation_input,
+                'tools': tool_cfg,
+                'parallel_tool_calls': llm_config['parallel_tool_calls']
+            }
+            if supports_reasoning_effort(llm_config['model']):
+                fallback_api_params['reasoning'] = {'effort': llm_config['reasoning_effort']}
+            fallback_api_params['text'] = {'verbosity': llm_config['text_verbosity']}
+
+            with st.spinner(t("thinking")):
+                try:
                     t_start = datetime.now()
                     final = client.responses.create(timeout=60, **fallback_api_params)
                     t_end = datetime.now()
                     main_latency_ms = int((t_end - t_start).total_seconds() * 1000)
                     buf = _get_attr(final, "output_text", "") or ""
                     content_placeholder.markdown(buf, unsafe_allow_html=True)
-            elif isinstance(e, RateLimitError):
-                st.error(t("rate_limited"))
-                return
-            else:
-                st.error(t("connection_error", error=e))
-                return
+                except APIConnectionError as retry_error:
+                    print(f"❌ OpenAI MCP fallback connection error: {retry_error}", flush=True)
+                    if retry_error.__cause__ is not None:
+                        cause = retry_error.__cause__
+                        print(
+                            f"❌ OpenAI MCP fallback connection failure cause: "
+                            f"{type(cause).__name__}: {cause}",
+                            flush=True,
+                        )
+                    st.error(t("connection_error", error=retry_error))
+                    return
+                except RateLimitError:
+                    st.error(t("rate_limited"))
+                    return
+                except APIError as retry_error:
+                    print(f"❌ OpenAI MCP fallback API error: {retry_error}", flush=True)
+                    st.error(t("api_error", error=retry_error))
+                    return
 
         finally:
             # If no event arrived, ensure spinner is closed

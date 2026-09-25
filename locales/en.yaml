@@ -12,6 +12,7 @@ dbis_tools_auth_hint: "(Server responded with 401 Unauthorized—check MCP crede
 thinking: "Thinking…"
 rate_limited: "We’re being rate-limited right now. Please try again in a moment."
 connection_error: "❌ OpenAI connection error: {error}"
+api_error: "❌ OpenAI API error: {error}"
 response_missing: "I couldn’t generate a response this time."
 api_key_required_title: "🔑 **OpenAI API Key Required**"
 api_key_required_body: |
